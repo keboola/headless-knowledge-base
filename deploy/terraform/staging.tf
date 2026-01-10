@@ -370,6 +370,13 @@ resource "google_secret_manager_secret_iam_member" "slack_bot_staging_anthropic_
   member    = "serviceAccount:${google_service_account.slack_bot_staging.email}"
 }
 
+# Grant Vertex AI permissions to staging bot for embeddings
+resource "google_project_iam_member" "slack_bot_staging_vertex_ai" {
+  project = var.project_id
+  role    = "roles/aiplatform.user"
+  member  = "serviceAccount:${google_service_account.slack_bot_staging.email}"
+}
+
 # -----------------------------------------------------------------------------
 # Outputs
 # -----------------------------------------------------------------------------

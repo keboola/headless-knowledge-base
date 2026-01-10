@@ -37,6 +37,7 @@ env/
 .env
 .env.local
 .env.e2e
+.env.e2e.staging
 *.json
 !package.json
 !tsconfig.json
