@@ -81,12 +81,12 @@ resource "google_cloud_run_v2_service" "slack_bot" {
 
       env {
         name  = "LLM_PROVIDER"
-        value = "vertex-claude"
+        value = "gemini"
       }
 
       env {
-        name  = "VERTEX_AI_CLAUDE_MODEL"
-        value = "claude-3-5-sonnet-v2@20241022"
+        name  = "GEMINI_MODEL_ID"
+        value = "gemini-2.0-flash"
       }
 
       env {
