@@ -1,0 +1,14 @@
+# =============================================================================
+# Terraform Variables - Copy to terraform.tfvars and customize
+# =============================================================================
+
+# GCP Project Configuration
+project_id = "ai-knowledge-base-42"
+region     = "us-central1"
+zone       = "us-central1-a"
+
+# Environment
+environment = "prod"
+
+# Confluence Configuration
+confluence_base_url = "https://your-company.atlassian.net/wiki"

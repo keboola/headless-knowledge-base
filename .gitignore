@@ -1,0 +1,86 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment and secrets
+.env
+.env.local
+.env.e2e
+*.json
+!package.json
+!tsconfig.json
+
+# GCP credentials
+*-*.json
+ai-knowledge-base-*.json
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+data/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.log
+e2e_test_report_*.txt
+
+# Misc
+*.bak
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+=1.0.0
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+terraform.tfvars
+.terraform.lock.hcl
+
+# Claude settings (local)
+.claude/

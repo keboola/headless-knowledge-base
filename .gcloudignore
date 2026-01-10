@@ -1,0 +1,42 @@
+# Ignore virtual environments
+venv/
+.venv/
+env/
+
+# Ignore git
+.git/
+.gitignore
+
+# Ignore cache and compiled files
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Ignore IDE settings
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Ignore local data
+data/
+*.db
+*.sqlite
+
+# Ignore test files for build
+tests/
+
+# Ignore documentation
+docs/
+
+# Ignore other non-essential files
+*.md
+!deploy/**/*.md
+.env*
+*.json
+!package*.json
+plan/
+.claude/

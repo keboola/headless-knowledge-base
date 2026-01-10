@@ -1,0 +1,146 @@
+services:
+  knowledge-base:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - REDIS_URL=redis://redis:6379/0
+      - LLM_PROVIDER=${LLM_PROVIDER:-claude}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-3-5-haiku-20241022}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_LLM_MODEL=${OLLAMA_LLM_MODEL:-llama3.1:8b}
+    depends_on:
+      chromadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src:ro
+      - ./data:/app/data
+      - ./knowledge_base.db:/app/knowledge_base.db
+    networks:
+      - backend
+    restart: unless-stopped
+
+  slack-bot:
+    build: .
+    command: ["python", "-m", "knowledge_base.slack.bot"]
+    environment:
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - REDIS_URL=redis://redis:6379/0
+      - LLM_PROVIDER=${LLM_PROVIDER:-claude}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-3-5-haiku-20241022}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_LLM_MODEL=${OLLAMA_LLM_MODEL:-llama3.1:8b}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN}
+    depends_on:
+      chromadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src:ro
+      - ./data:/app/data
+      - ./knowledge_base.db:/app/knowledge_base.db
+    networks:
+      - backend
+    restart: unless-stopped
+
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - ANONYMIZED_TELEMETRY=false
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - backend
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles:
+      - ollama  # Only start with: docker compose --profile ollama up
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # Health check on Ollama API
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    # Custom entrypoint to pre-pull model on startup
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        # Start Ollama server in background
+        ollama serve &
+
+        # Wait for API to be ready
+        echo "Waiting for Ollama API..."
+        until curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do
+          echo "Ollama not ready yet, waiting..."
+          sleep 2
+        done
+        echo "Ollama API is ready!"
+
+        # Pre-pull the model (won't re-download if already exists)
+        echo "Ensuring model llama3.1:8b is available..."
+        ollama pull llama3.1:8b
+        echo "Model ready!"
+
+        # Keep container running by waiting on the background process
+        wait
+    # Resource limits for 8b model (CPU-only)
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 10G
+        reservations:
+          cpus: "2"
+          memory: 6G
+    networks:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  chroma_data:
+  redis_data:
+  ollama_data:
+
+networks:
+  backend:
+    driver: bridge
