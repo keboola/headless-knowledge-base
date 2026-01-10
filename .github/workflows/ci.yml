@@ -72,13 +72,25 @@ jobs:
     needs: deploy-staging
     runs-on: ubuntu-latest
     env:
+      # Slack configuration
       SLACK_BOT_TOKEN: ${{ secrets.STAGING_SLACK_BOT_TOKEN }}
       SLACK_USER_TOKEN: ${{ secrets.STAGING_SLACK_USER_TOKEN }}
       E2E_TEST_CHANNEL_ID: ${{ secrets.STAGING_TEST_CHANNEL_ID }}
       E2E_BOT_USER_ID: ${{ secrets.STAGING_BOT_USER_ID }}
-      CHROMADB_HOST: ${{ secrets.STAGING_CHROMADB_URL }}
+      # ChromaDB configuration (note: uses CHROMA_HOST not CHROMADB_HOST)
+      CHROMA_HOST: chromadb-staging-4aosg235qq-uc.a.run.app
+      CHROMA_PORT: "443"
+      CHROMA_USE_SSL: "True"
+      CHROMA_TOKEN: ${{ secrets.STAGING_CHROMADB_TOKEN }}
+      # Vertex AI for embeddings
+      EMBEDDING_PROVIDER: vertex-ai
+      VERTEX_AI_PROJECT: ai-knowledge-base-42
+      VERTEX_AI_LOCATION: us-central1
     steps:
       - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
