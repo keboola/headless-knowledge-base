@@ -12,6 +12,7 @@ from cryptography.fernet import Fernet
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from knowledge_base.config import settings
 from knowledge_base.db.models import UserConfluenceLink
 
 if TYPE_CHECKING:
@@ -33,6 +34,10 @@ def _get_encryption_key() -> bytes:
 
     # Derive from SECRET_KEY
     secret = os.environ.get("SECRET_KEY", "default-dev-secret-key")
+
+    if not settings.DEBUG and secret == "default-dev-secret-key":
+        logger.warning("SECURITY WARNING: Using default SECRET_KEY in non-debug mode!")
+
     # Use SHA256 to get consistent 32-byte key
     derived = hashlib.sha256(secret.encode()).digest()
     return base64.urlsafe_b64encode(derived)

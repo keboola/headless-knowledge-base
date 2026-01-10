@@ -1,6 +1,7 @@
 """FastAPI application entry point."""
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from knowledge_base.api.health import router as health_router
 from knowledge_base.api.search import router as search_router
@@ -10,6 +11,15 @@ app = FastAPI(
     title=settings.APP_NAME,
     description="AI-powered knowledge base with semantic search and RAG capabilities",
     version="0.1.0",
+)
+
+# CORS Configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for now, restrict in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Include routers

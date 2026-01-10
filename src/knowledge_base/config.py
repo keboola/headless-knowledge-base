@@ -1,7 +1,9 @@
 """Configuration management using pydantic-settings."""
 
+import logging
 import os
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -115,6 +117,15 @@ class Settings(BaseSettings):
         if not self.CONFLUENCE_SPACE_KEYS:
             return []
         return [s.strip() for s in self.CONFLUENCE_SPACE_KEYS.split(",") if s.strip()]
+
+    @model_validator(mode="after")
+    def check_security_settings(self) -> "Settings":
+        """Validate security settings."""
+        if not self.DEBUG and self.ADMIN_PASSWORD == "changeme":
+            logging.warning(
+                "SECURITY WARNING: ADMIN_PASSWORD is set to default 'changeme' in non-debug mode!"
+            )
+        return self
 
 
 settings = Settings()

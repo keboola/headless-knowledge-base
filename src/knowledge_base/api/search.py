@@ -4,7 +4,7 @@ import logging
 import time
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from knowledge_base.api.schemas import SearchRequest, SearchResponse, SearchResultItem
 from knowledge_base.config import settings
@@ -14,6 +14,29 @@ from knowledge_base.vectorstore import VectorRetriever
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["search"])
+
+
+# Simple in-memory rate limiter
+_request_timestamps: dict[str, list[float]] = {}
+RATE_LIMIT_WINDOW = 60  # seconds
+RATE_LIMIT_MAX = 60     # requests per window
+
+def _check_rate_limit(client_ip: str) -> None:
+    now = time.time()
+    if client_ip not in _request_timestamps:
+        _request_timestamps[client_ip] = []
+    
+    # Keep only timestamps within the window
+    _request_timestamps[client_ip] = [
+        t for t in _request_timestamps[client_ip] 
+        if now - t < RATE_LIMIT_WINDOW
+    ]
+    
+    if len(_request_timestamps[client_ip]) >= RATE_LIMIT_MAX:
+        logger.warning(f"Rate limit exceeded for IP: {client_ip}")
+        raise HTTPException(status_code=429, detail="Too many requests")
+        
+    _request_timestamps[client_ip].append(now)
 
 
 def _apply_filters(
@@ -92,7 +115,7 @@ def _to_result_item(result: Any, include_content: bool = True) -> SearchResultIt
 
 
 @router.post("/search", response_model=SearchResponse)
-async def search(request: SearchRequest) -> SearchResponse:
+async def search(request: SearchRequest, raw_request: Request) -> SearchResponse:
     """Search the knowledge base.
 
     Supports three search methods:
@@ -102,6 +125,10 @@ async def search(request: SearchRequest) -> SearchResponse:
 
     Filters can be applied to narrow results by space, document type, topics, or date.
     """
+    # Rate limit check
+    client_ip = raw_request.client.host if raw_request.client else "unknown"
+    _check_rate_limit(client_ip)
+
     start_time = time.time()
 
     try:
@@ -175,9 +202,14 @@ async def search(request: SearchRequest) -> SearchResponse:
         raise
     except Exception as e:
         logger.error(f"Search failed: {e}", exc_info=True)
+        # Sanitize error message in production
+        detail = "Internal server error"
+        if settings.DEBUG:
+            detail = f"Search failed: {str(e)}"
+            
         raise HTTPException(
             status_code=500,
-            detail=f"Search failed: {str(e)}",
+            detail=detail,
         )
 
 
