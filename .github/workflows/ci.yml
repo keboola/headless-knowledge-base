@@ -1,0 +1,110 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PROJECT_ID: ai-knowledge-base-42
+  REGION: us-central1
+
+jobs:
+  # ============================================
+  # Stage 1: Unit Tests (runs on every PR/push)
+  # ============================================
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -e .[dev]
+      - name: Run unit tests
+        run: pytest tests/ --ignore=tests/e2e --ignore=tests/integration -v
+
+  # ============================================
+  # Stage 2: Build Docker Images
+  # ============================================
+  build:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Configure Docker
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+      - name: Build and push images
+        run: |
+          TAG="${{ github.sha }}"
+          docker build -f deploy/docker/Dockerfile.slack -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/slack-bot:$TAG .
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/slack-bot:$TAG
+
+  # ============================================
+  # Stage 3: Deploy to Staging
+  # ============================================
+  deploy-staging:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Deploy to staging
+        run: |
+          gcloud run deploy slack-bot-staging \
+            --image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/slack-bot:${{ github.sha }} \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }}
+
+  # ============================================
+  # Stage 4: E2E Tests against Staging
+  # ============================================
+  e2e-tests-staging:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    env:
+      SLACK_BOT_TOKEN: ${{ secrets.STAGING_SLACK_BOT_TOKEN }}
+      SLACK_USER_TOKEN: ${{ secrets.STAGING_SLACK_USER_TOKEN }}
+      E2E_TEST_CHANNEL_ID: ${{ secrets.STAGING_TEST_CHANNEL_ID }}
+      E2E_BOT_USER_ID: ${{ secrets.STAGING_BOT_USER_ID }}
+      CHROMADB_HOST: ${{ secrets.STAGING_CHROMADB_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -e .[dev]
+      - name: Wait for staging to be ready
+        run: sleep 30
+      - name: Run E2E tests against staging
+        run: pytest tests/e2e/test_knowledge_creation_live.py -v -m e2e
+
+  # ============================================
+  # Stage 5: Deploy to Production (main only)
+  # ============================================
+  deploy-production:
+    needs: e2e-tests-staging
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Deploy to production
+        run: |
+          gcloud run deploy slack-bot \
+            --image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/slack-bot:${{ github.sha }} \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }}

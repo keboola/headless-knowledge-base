@@ -33,3 +33,27 @@ variable "confluence_space_keys" {
   type        = string
   default     = ""
 }
+
+# -----------------------------------------------------------------------------
+# Staging Environment Variables
+# -----------------------------------------------------------------------------
+variable "chromadb_token_staging" {
+  description = "ChromaDB authentication token for staging"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "slack_bot_token_staging" {
+  description = "Slack bot token for staging app"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "slack_signing_secret_staging" {
+  description = "Slack signing secret for staging app"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
