@@ -30,6 +30,7 @@ dependencies = [
     "rank-bm25>=0.2.2",
     "pypdf>=3.17.0",
     "anthropic[vertex]>=0.40.0",
+    "cryptography>=42.0.0",
 ]
 
 [project.optional-dependencies]
