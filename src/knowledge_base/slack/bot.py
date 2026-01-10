@@ -518,6 +518,32 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
     # Remove bot mention from text
     text = re.sub(r"<@[A-Z0-9]+>", "", text).strip()
 
+    # Check for /create-knowledge command in text (fallback for when slash command isn't configured)
+    if text.startswith("/create-knowledge"):
+        # Extract the content after the command
+        content = re.sub(r"^/create-knowledge\s*", "", text).strip()
+        # Handle duplicate command prefix (user typed it twice)
+        content = re.sub(r"^/create-knowledge\s*", "", content).strip()
+
+        if content:
+            # Process as knowledge creation
+            from knowledge_base.slack.quick_knowledge import handle_create_knowledge
+            # Build a fake command object
+            fake_command = {
+                "text": content,
+                "user_id": user_id,
+                "user_name": user_id,  # Will be looked up
+                "channel_id": channel,
+            }
+            # Create a no-op ack function
+            async def noop_ack():
+                pass
+            await handle_create_knowledge(noop_ack, fake_command, client)
+            return
+        else:
+            await say("Please provide the information you want to save. Usage: `/create-knowledge <fact>`", thread_ts=thread_ts)
+            return
+
     # Helper to handle both sync and async say/client calls
     async def async_call(func, *args, **kwargs):
         result = func(*args, **kwargs)
