@@ -27,9 +27,9 @@ jobs:
         run: pytest tests/ --ignore=tests/e2e --ignore=tests/integration -v
 
   # ============================================
-  # Stage 2: Build Docker Images (slack-bot + jobs)
+  # Stage 2a: Build slack-bot Docker Image
   # ============================================
-  build:
+  build-slack-bot:
     needs: unit-tests
     runs-on: ubuntu-latest
     steps:
@@ -46,6 +46,30 @@ jobs:
         run: |
           docker build -f deploy/docker/Dockerfile.slack -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/slack-bot:$TAG .
           docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/slack-bot:$TAG
+
+  # ============================================
+  # Stage 2b: Build jobs Docker Image
+  # ============================================
+  build-jobs:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free up disk space
+        run: |
+          # Remove unnecessary tools to free up ~20GB
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo apt-get clean
+          df -h
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Configure Docker
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
       - name: Build and push jobs image
         env:
           TAG: ${{ github.sha }}
@@ -57,7 +81,7 @@ jobs:
   # Stage 3: Deploy to Staging
   # ============================================
   deploy-staging:
-    needs: build
+    needs: [build-slack-bot, build-jobs]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
