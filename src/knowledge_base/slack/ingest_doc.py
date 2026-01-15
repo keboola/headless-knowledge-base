@@ -374,7 +374,7 @@ class DocumentIngester:
             await session.commit()
 
         # Chunk the content
-        raw_chunks = self.chunker.chunk_markdown(content, title)
+        raw_chunks = self.chunker.chunk(content, page_id, title)
 
         if not raw_chunks:
             # Single chunk for small content
