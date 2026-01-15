@@ -144,8 +144,8 @@ jobs:
       - name: Wait for staging to be ready
         run: sleep 30
       - name: Run ALL E2E tests against staging
-        run: pytest tests/e2e/ -v -m e2e --tb=short
-        continue-on-error: false
+        run: pip install pytest-timeout && pytest tests/e2e/ -v -m e2e --tb=short --timeout=300
+        timeout-minutes: 30
 
   # ============================================
   # Stage 5: Auto-merge PR on success (PRs only)
