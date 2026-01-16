@@ -168,15 +168,17 @@ class TestKnowledgeCreation:
             mock_idx.return_value.index_single_chunk = AsyncMock()
 
             await handle_create_knowledge(ack, command, mock_client)
+            # Wait for background task to complete
+            await asyncio.sleep(0.1)
 
             # Verify chunk was created (via mock)
             mock_idx.return_value.index_single_chunk.assert_called_once()
             call_args = mock_idx.return_value.index_single_chunk.call_args
             chunk_data = call_args[0][0]
 
-        assert chunk_data.content == fact, "Chunk content doesn't match"
-        assert chunk_data.page_title == "Quick Fact by john.doe"
-        assert chunk_data.quality_score == 100.0, "Initial quality score should be 100.0"
+            assert chunk_data.content == fact, "Chunk content doesn't match"
+            assert chunk_data.page_title == "Quick Fact by john.doe"
+            assert chunk_data.quality_score == 100.0, "Initial quality score should be 100.0"
 
     @pytest.mark.asyncio
     async def test_admin_contact_info_creation(self, db_session, e2e_config):
@@ -206,13 +208,15 @@ class TestKnowledgeCreation:
             mock_idx.return_value.index_single_chunk = AsyncMock()
 
             await handle_create_knowledge(ack, command, mock_client)
+            # Wait for background task to complete
+            await asyncio.sleep(0.1)
 
             # Verify chunk was created (via mock)
             mock_idx.return_value.index_single_chunk.assert_called_once()
             call_args = mock_idx.return_value.index_single_chunk.call_args
             chunk_data = call_args[0][0]
 
-        assert chunk_data.content == admin_fact
+            assert chunk_data.content == admin_fact
 
     @pytest.mark.asyncio
     async def test_access_request_info_creation(self, db_session, e2e_config):
@@ -242,13 +246,15 @@ class TestKnowledgeCreation:
             mock_idx.return_value.index_single_chunk = AsyncMock()
 
             await handle_create_knowledge(ack, command, mock_client)
+            # Wait for background task to complete
+            await asyncio.sleep(0.1)
 
             # Verify chunk was created (via mock)
             mock_idx.return_value.index_single_chunk.assert_called_once()
             call_args = mock_idx.return_value.index_single_chunk.call_args
             chunk_data = call_args[0][0]
 
-        assert chunk_data.content == access_fact
+            assert chunk_data.content == access_fact
 
 
 # =============================================================================
@@ -290,6 +296,8 @@ class TestFeedbackLoop:
             mock_idx.return_value.index_single_chunk = AsyncMock()
 
             await handle_create_knowledge(ack, command, mock_client)
+            # Wait for background task to complete
+            await asyncio.sleep(0.1)
 
             # Get chunk_id from mock
             call_args = mock_idx.return_value.index_single_chunk.call_args
@@ -347,6 +355,8 @@ class TestFeedbackLoop:
             mock_idx.return_value.index_single_chunk = AsyncMock()
 
             await handle_create_knowledge(ack, command, mock_client)
+            # Wait for background task to complete
+            await asyncio.sleep(0.1)
 
             # Get chunk_id from mock
             call_args = mock_idx.return_value.index_single_chunk.call_args
@@ -411,6 +421,8 @@ class TestFeedbackLoop:
             mock_idx.return_value.index_single_chunk = AsyncMock()
 
             await handle_create_knowledge(ack, command, mock_client)
+            # Wait for background task to complete
+            await asyncio.sleep(0.1)
 
             # Get chunk_id from mock
             call_args = mock_idx.return_value.index_single_chunk.call_args
@@ -663,6 +675,8 @@ class TestQualityRanking:
             mock_idx.return_value.index_single_chunk = AsyncMock()
 
             await handle_create_knowledge(ack, command, mock_client)
+            # Wait for background task to complete
+            await asyncio.sleep(0.1)
 
             # Get chunk_id from mock
             call_args = mock_idx.return_value.index_single_chunk.call_args
@@ -721,6 +735,8 @@ class TestQualityRanking:
             mock_idx.return_value.index_single_chunk = AsyncMock()
 
             await handle_create_knowledge(ack, command, mock_client)
+            # Wait for background task to complete
+            await asyncio.sleep(0.1)
 
             # Get chunk_id from mock
             call_args = mock_idx.return_value.index_single_chunk.call_args
@@ -819,13 +835,15 @@ class TestRealisticUserJourneys:
                 {"text": new_fact, "user_id": "U_NEWBIE", "user_name": "new.hire", "channel_id": e2e_config["channel_id"]},
                 mock_client
             )
+            # Wait for background task to complete
+            await asyncio.sleep(0.1)
 
             # Verify knowledge was created via mock
             mock_idx.return_value.index_single_chunk.assert_called_once()
             call_args = mock_idx.return_value.index_single_chunk.call_args
             chunk_data = call_args[0][0]
 
-        assert chunk_data.content == new_fact
+            assert chunk_data.content == new_fact
 
     @pytest.mark.asyncio
     async def test_knowledge_improvement_cycle(self, db_session, e2e_config):
@@ -859,6 +877,8 @@ class TestRealisticUserJourneys:
                 {"text": old_fact, "user_id": "U_ORIGINAL", "user_name": "original", "channel_id": "C1"},
                 mock_client
             )
+            # Wait for background task to complete
+            await asyncio.sleep(0.1)
 
             # Get old chunk ID from mock
             call_args = mock_idx.return_value.index_single_chunk.call_args
@@ -920,14 +940,16 @@ class TestRealisticUserJourneys:
                 {"text": new_fact, "user_id": "U_UPDATER", "user_name": "updater", "channel_id": "C1"},
                 mock_client
             )
+            # Wait for background task to complete
+            await asyncio.sleep(0.1)
 
             # Get new chunk data from mock
             call_args = mock_idx.return_value.index_single_chunk.call_args
             new_chunk_data = call_args[0][0]
 
-        # New content starts fresh with score 100
-        assert new_chunk_data.quality_score == 100.0
-        assert new_chunk_data.quality_score > old_quality_score
+            # New content starts fresh with score 100
+            assert new_chunk_data.quality_score == 100.0
+            assert new_chunk_data.quality_score > old_quality_score
 
 
 # =============================================================================
@@ -1300,6 +1322,8 @@ class TestKnowledgeAdminEscalation:
             mock_idx.return_value.index_single_chunk = AsyncMock()
 
             await handle_create_knowledge(ack, command, mock_client)
+            # Wait for background task to complete
+            await asyncio.sleep(0.1)
 
             # Get chunk_id from mock
             call_args = mock_idx.return_value.index_single_chunk.call_args
@@ -1444,6 +1468,8 @@ class TestKnowledgeAdminEscalation:
             mock_idx.return_value.index_single_chunk = AsyncMock()
 
             await handle_create_knowledge(ack, command, mock_client)
+            # Wait for background task to complete
+            await asyncio.sleep(0.1)
 
             # Get chunk_id from mock
             call_args = mock_idx.return_value.index_single_chunk.call_args

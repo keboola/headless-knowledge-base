@@ -286,7 +286,7 @@ class ConfluenceDownloader:
 
         # Chunk the markdown content
         chunker = MarkdownChunker()
-        chunks = chunker.chunk_markdown(markdown_content, content.title)
+        chunks = chunker.chunk(markdown_content, content.id, content.title)
 
         if not chunks:
             return 0

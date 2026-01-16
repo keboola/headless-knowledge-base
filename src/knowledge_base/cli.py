@@ -420,7 +420,7 @@ async def _index(space: str | None, reindex: bool, verbose: bool) -> None:
                     continue
 
                 markdown_content = md_path.read_text(encoding="utf-8")
-                chunks = chunker.chunk_markdown(markdown_content, page.title)
+                chunks = chunker.chunk(markdown_content, page.page_id, page.title)
 
                 if not chunks:
                     continue
