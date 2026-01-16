@@ -78,10 +78,21 @@ jobs:
           docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/jobs:$TAG
 
   # ============================================
+  # Stage 2c: Build Gate (for branch protection)
+  # ============================================
+  build:
+    # Gate job that passes when all build jobs complete
+    # This allows branch protection to require just "build" instead of listing each build job
+    needs: [build-slack-bot, build-jobs]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "All build jobs completed successfully"
+
+  # ============================================
   # Stage 3: Deploy to Staging
   # ============================================
   deploy-staging:
-    needs: [build-slack-bot, build-jobs]
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
