@@ -59,9 +59,12 @@ async def test_complete_feedback_lifecycle(slack_client, db_session, e2e_config)
 
         await handle_create_knowledge(ack, command, mock_client)
 
-    # 2. Verify in ChromaDB (source of truth) - chunks are no longer stored in SQLite
-    # The test now verifies the indexer was called correctly
-    mock_indexer.index_single_chunk.assert_called_once()
+        # Wait for background task to complete (handle_create_knowledge uses asyncio.create_task)
+        await asyncio.sleep(0.1)
+
+        # 2. Verify in ChromaDB (source of truth) - chunks are no longer stored in SQLite
+        # The test now verifies the indexer was called correctly
+        mock_indexer.index_single_chunk.assert_called_once()
 
     # Get chunk_id from the call args
     call_args = mock_indexer.index_single_chunk.call_args
@@ -160,6 +163,9 @@ async def test_feedback_on_multiple_chunks(slack_client, db_session, e2e_config)
             mock_client = MagicMock()
             mock_client.chat_postEphemeral = AsyncMock()
             await handle_create_knowledge(ack, {"text": text, "user_id": "U1", "channel_id": "C1"}, mock_client)
+
+            # Wait for background task to complete
+            await asyncio.sleep(0.1)
 
             # Get chunk_id from the mock call
             call_args = mock_indexer.index_single_chunk.call_args

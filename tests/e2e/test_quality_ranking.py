@@ -81,6 +81,8 @@ class TestQualityBasedSearchRanking:
                 "channel_id": e2e_config["channel_id"]
             }
             await handle_create_knowledge(ack, command_high, mock_client)
+            # Wait for background task to complete
+            await asyncio.sleep(0.1)
 
             # Get high chunk ID from mock
             call_args = mock_indexer.index_single_chunk.call_args
@@ -97,6 +99,8 @@ class TestQualityBasedSearchRanking:
                 "channel_id": e2e_config["channel_id"]
             }
             await handle_create_knowledge(ack, command_low, mock_client)
+            # Wait for background task to complete
+            await asyncio.sleep(0.1)
 
             # Get low chunk ID from mock
             call_args = mock_indexer.index_single_chunk.call_args
@@ -206,6 +210,8 @@ class TestQualityBasedSearchRanking:
                 "channel_id": e2e_config["channel_id"]
             }
             await handle_create_knowledge(ack, command, mock_client)
+            # Wait for background task to complete
+            await asyncio.sleep(0.1)
 
             # Get chunk ID from mock
             call_args = mock_indexer.index_single_chunk.call_args
@@ -314,6 +320,8 @@ class TestQualityBasedSearchRanking:
                     "channel_id": e2e_config["channel_id"]
                 }
                 await handle_create_knowledge(ack, command, mock_client)
+                # Wait for background task to complete
+                await asyncio.sleep(0.1)
 
                 # Get chunk ID from mock
                 call_args = mock_indexer.index_single_chunk.call_args
