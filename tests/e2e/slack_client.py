@@ -1,10 +1,15 @@
 """Slack Client helper for E2E tests."""
 
 import asyncio
+import hashlib
+import hmac
+import json
 import logging
+import os
 import time
 from typing import Any, List, Optional
 
+import httpx
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
@@ -379,3 +384,231 @@ class SlackTestClient:
     def get_current_timestamp(self) -> str:
         """Get current time as Slack timestamp string for filtering."""
         return str(time.time())
+
+    def _find_button_in_message(
+        self, message: dict, action_id_prefix: str
+    ) -> Optional[dict]:
+        """Find a button element in a message by action_id prefix.
+
+        Args:
+            message: Slack message dict with blocks
+            action_id_prefix: Prefix to match (e.g., "feedback_helpful")
+
+        Returns:
+            Button element dict if found, None otherwise
+        """
+        for block in message.get("blocks", []):
+            if block.get("type") == "actions":
+                for element in block.get("elements", []):
+                    action_id = element.get("action_id", "")
+                    if action_id.startswith(action_id_prefix):
+                        return element
+        return None
+
+    def _sign_slack_request(self, body: str, timestamp: str) -> str:
+        """Sign a request body using Slack signing secret.
+
+        Args:
+            body: Request body as string
+            timestamp: Unix timestamp as string
+
+        Returns:
+            Signature in format "v0=<hex>"
+        """
+        signing_secret = os.environ.get("SLACK_SIGNING_SECRET", "")
+        if not signing_secret:
+            raise ValueError("SLACK_SIGNING_SECRET not set")
+
+        sig_basestring = f"v0:{timestamp}:{body}"
+        signature = hmac.new(
+            signing_secret.encode(),
+            sig_basestring.encode(),
+            hashlib.sha256
+        ).hexdigest()
+        return f"v0={signature}"
+
+    async def click_button(
+        self,
+        message: dict,
+        action_id_prefix: str,
+        user_id: Optional[str] = None
+    ) -> bool:
+        """Click a button in a message by posting to the staging bot endpoint.
+
+        This simulates what Slack does when a user clicks a button:
+        it sends a signed POST request to the bot's /slack/events endpoint.
+
+        Args:
+            message: The message dict containing the button
+            action_id_prefix: e.g., "feedback_helpful" to find "feedback_helpful_123.456"
+            user_id: User ID to simulate (defaults to test user)
+
+        Returns:
+            True if click succeeded, False otherwise
+
+        Requires:
+            - SLACK_SIGNING_SECRET env var
+            - STAGING_BOT_URL env var (or defaults to staging URL)
+        """
+        # Find the button
+        button = self._find_button_in_message(message, action_id_prefix)
+        if not button:
+            logger.error(f"Button with prefix '{action_id_prefix}' not found in message")
+            return False
+
+        action_id = button.get("action_id", "")
+        logger.info(f"Clicking button with action_id: {action_id}")
+
+        # Build the action payload (simulating what Slack sends)
+        timestamp = str(int(time.time()))
+        payload = {
+            "type": "block_actions",
+            "user": {
+                "id": user_id or "U_E2E_TEST_USER",
+                "username": "e2e_test_user",
+                "name": "E2E Test User",
+            },
+            "channel": {
+                "id": self.channel_id,
+                "name": "e2e-test-channel",
+            },
+            "message": message,
+            "actions": [
+                {
+                    "action_id": action_id,
+                    "block_id": button.get("block_id", ""),
+                    "type": "button",
+                    "action_ts": timestamp,
+                }
+            ],
+            "trigger_id": f"{timestamp}.{self.channel_id}",
+            "response_url": "https://hooks.slack.com/actions/FAKE/FAKE/FAKE",
+        }
+
+        body = f"payload={json.dumps(payload)}"
+
+        # Sign the request
+        try:
+            signature = self._sign_slack_request(body, timestamp)
+        except ValueError as e:
+            logger.error(f"Cannot sign request: {e}")
+            return False
+
+        # Get staging bot URL
+        staging_url = os.environ.get(
+            "STAGING_BOT_URL",
+            "https://slack-bot-staging-4aosg235qq-uc.a.run.app"
+        )
+        endpoint = f"{staging_url}/slack/events"
+
+        # POST to the staging endpoint
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Slack-Request-Timestamp": timestamp,
+            "X-Slack-Signature": signature,
+        }
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    endpoint,
+                    content=body,
+                    headers=headers,
+                    timeout=30.0
+                )
+
+            if response.status_code == 200:
+                logger.info(f"Button click succeeded: {response.status_code}")
+                return True
+            else:
+                logger.error(
+                    f"Button click failed: {response.status_code} - {response.text}"
+                )
+                return False
+
+        except Exception as e:
+            logger.error(f"Button click request failed: {e}")
+            return False
+
+    async def wait_for_message_with_buttons(
+        self,
+        thread_ts: str,
+        action_id_contains: str,
+        timeout: int = 30
+    ) -> Optional[dict]:
+        """Wait for a message in a thread that contains specific buttons.
+
+        Args:
+            thread_ts: Thread timestamp to search in
+            action_id_contains: Substring to look for in button action_ids
+            timeout: Max seconds to wait
+
+        Returns:
+            Message dict if found, None if timeout
+        """
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            try:
+                # Get thread messages
+                history = self.bot_client.conversations_replies(
+                    channel=self.channel_id,
+                    ts=thread_ts
+                )
+
+                for msg in history.get("messages", []):
+                    if self.message_has_button(msg, action_id_contains):
+                        return msg
+
+            except SlackApiError as e:
+                logger.warning(f"Error getting thread: {e}")
+
+            await asyncio.sleep(1)
+
+        return None
+
+    async def wait_for_message_update(
+        self,
+        message_ts: str,
+        contains: str,
+        timeout: int = 30
+    ) -> Optional[dict]:
+        """Wait for a message to be updated to contain specific text.
+
+        Args:
+            message_ts: Timestamp of the message to watch
+            contains: Text the updated message should contain
+            timeout: Max seconds to wait
+
+        Returns:
+            Updated message dict if found, None if timeout
+        """
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            try:
+                # Get the specific message
+                history = self.bot_client.conversations_history(
+                    channel=self.channel_id,
+                    latest=message_ts,
+                    oldest=message_ts,
+                    inclusive=True,
+                    limit=1
+                )
+
+                messages = history.get("messages", [])
+                if messages:
+                    msg = messages[0]
+                    text = msg.get("text", "")
+                    blocks_text = self._extract_text_from_blocks(msg.get("blocks", []))
+                    full_text = f"{text} {blocks_text}"
+
+                    if contains.lower() in full_text.lower():
+                        return msg
+
+            except SlackApiError as e:
+                logger.warning(f"Error checking message update: {e}")
+
+            await asyncio.sleep(1)
+
+        return None

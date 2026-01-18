@@ -42,6 +42,9 @@ async def test_create_and_retrieve_knowledge(slack_client, db_session, e2e_confi
     # This will index to the REMOTE ChromaDB
     await handle_create_knowledge(ack, command, mock_client)
     
+    # Wait for background indexing to complete (it's async in handle_create_knowledge)
+    await asyncio.sleep(10)
+    
     # 2. Ask Bot via real Slack
     question = f"What is the secret code for project E2E-{unique_id}?"
     user_msg_ts = await slack_client.send_message(f"<@{e2e_config['bot_user_id']}> {question}")
@@ -57,7 +60,7 @@ async def test_feedback_improves_score(slack_client, db_session, e2e_config):
     Scenario 2: Verify knowledge retrieval
     """
     unique_id = uuid.uuid4().hex[:8]
-    fact_text = f"Feedback test fact {unique_id}"
+    fact_text = f"The feedback test value for {unique_id} is SUCCESS-{unique_id}."
     
     # Create fact
     ack = AsyncMock()
@@ -71,17 +74,20 @@ async def test_feedback_improves_score(slack_client, db_session, e2e_config):
     }
     await handle_create_knowledge(ack, command, mock_client)
     
+    # Wait for indexing
+    await asyncio.sleep(10)
+    
     # Verification: Ask bot and check if it knows it
-    user_msg_ts = await slack_client.send_message(f"<@{e2e_config['bot_user_id']}> tell me about {unique_id}")
+    user_msg_ts = await slack_client.send_message(f"<@{e2e_config['bot_user_id']}> what is the feedback test value for {unique_id}?")
     reply = await slack_client.wait_for_bot_reply(parent_ts=user_msg_ts, timeout=60)
     assert reply is not None
-    assert unique_id in reply["text"]
+    assert f"SUCCESS-{unique_id}" in reply["text"]
 
 @pytest.mark.asyncio
 async def test_negative_feedback_demotes(slack_client, db_session, e2e_config):
     """Scenario 3: Verify knowledge retrieval"""
     unique_id = uuid.uuid4().hex[:8]
-    fact_text = f"Negative feedback test {unique_id}"
+    fact_text = f"The negative feedback test key for {unique_id} is SECRET-{unique_id}."
     
     ack = AsyncMock()
     mock_client = MagicMock()
@@ -89,10 +95,13 @@ async def test_negative_feedback_demotes(slack_client, db_session, e2e_config):
     command = {"text": fact_text, "user_id": e2e_config["bot_user_id"], "user_name": "e2e_bot", "channel_id": e2e_config["channel_id"]}
     await handle_create_knowledge(ack, command, mock_client)
     
-    user_msg_ts = await slack_client.send_message(f"<@{e2e_config['bot_user_id']}> find {unique_id}")
+    # Wait for indexing
+    await asyncio.sleep(10)
+    
+    user_msg_ts = await slack_client.send_message(f"<@{e2e_config['bot_user_id']}> what is the negative feedback test key for {unique_id}?")
     reply = await slack_client.wait_for_bot_reply(parent_ts=user_msg_ts, timeout=60)
     assert reply is not None
-    assert unique_id in reply["text"]
+    assert f"SECRET-{unique_id}" in reply["text"]
 
 @pytest.mark.asyncio
 async def test_behavioral_signals(slack_client, db_session, e2e_config):

@@ -680,7 +680,7 @@ async def _handle_feedback_action(body: dict, client: WebClient) -> None:
     chunk_ids = pending_feedback.get(message_ts, [])
 
     if not chunk_ids:
-        client.chat_postEphemeral(
+        await client.chat_postEphemeral(
             channel=channel,
             user=user_id,
             text="Thanks for your feedback! (Note: Could not find associated chunks)",
@@ -706,7 +706,7 @@ async def _handle_feedback_action(body: dict, client: WebClient) -> None:
                 reporter_id=user_id,
             )
 
-            client.views_open(
+            await client.views_open(
                 trigger_id=trigger_id,
                 view=modal_view,
             )
@@ -720,7 +720,7 @@ async def _handle_feedback_action(body: dict, client: WebClient) -> None:
 
     # Direct submission for 'helpful' feedback (or modal fallback)
     try:
-        user_info = client.users_info(user=user_id)
+        user_info = await client.users_info(user=user_id)
         username = user_info["user"]["name"]
     except Exception:
         username = user_id
@@ -760,7 +760,7 @@ async def _handle_feedback_action(body: dict, client: WebClient) -> None:
 
     # Remove buttons and show thank you
     try:
-        client.chat_update(
+        await client.chat_update(
             channel=channel,
             ts=body["message"]["ts"],
             blocks=[
@@ -807,7 +807,7 @@ async def _handle_reaction_event(event: dict, client: WebClient) -> None:
 
         # Get bot's user ID to ignore self-reactions
         try:
-            auth_response = client.auth_test()
+            auth_response = await client.auth_test()
             bot_user_id = auth_response.get("user_id", "")
         except Exception:
             bot_user_id = ""
