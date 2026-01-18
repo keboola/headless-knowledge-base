@@ -195,6 +195,14 @@ def create_async_app() -> AsyncApp:
     except Exception as e:
         logger.warning(f"Failed to register admin escalation handlers: {e}")
 
+    # Register feedback modal handlers (for negative feedback detail capture)
+    try:
+        from knowledge_base.slack.feedback_modals import register_feedback_modal_handlers
+        register_feedback_modal_handlers(app)
+        logger.info("Feedback modal handlers registered")
+    except Exception as e:
+        logger.warning(f"Failed to register feedback modal handlers: {e}")
+
     # Register Q&A handlers
     _register_qa_handlers(app)
 
