@@ -45,7 +45,10 @@ async def notify_content_owner(
     channel_id: str,
     message_ts: str,
 ) -> bool:
-    """Notify content owner about feedback. Falls back to admin channel.
+    """Notify admin channel about feedback, and optionally DM the content owner.
+
+    ALWAYS sends to #knowledge-admins channel for visibility.
+    Additionally sends DM to content owner if they can be identified.
 
     Args:
         client: Slack WebClient
@@ -58,7 +61,7 @@ async def notify_content_owner(
         message_ts: Original message timestamp
 
     Returns:
-        True if owner was notified, False if fell back to admin channel
+        True if owner was also notified via DM, False if only admin channel
     """
     # 1. Get owner email from chunk's governance metadata
     owner_email = await get_owner_email_for_chunks(chunk_ids)
@@ -66,12 +69,13 @@ async def notify_content_owner(
     # 2. Get additional context
     context = await _get_feedback_context(message_ts, chunk_ids)
 
+    owner_notified = False
+
+    # 3. If owner exists, try to DM them as well
     if owner_email:
-        # 3. Lookup Slack user by email
         owner_slack_id = await lookup_slack_user_by_email(client, owner_email)
 
         if owner_slack_id:
-            # 4. Send DM to owner
             success = await send_owner_dm(
                 client=client,
                 owner_slack_id=owner_slack_id,
@@ -85,10 +89,10 @@ async def notify_content_owner(
             )
             if success:
                 logger.info(f"Notified owner {owner_email} ({owner_slack_id}) about {feedback_type} feedback")
-                return True
+                owner_notified = True
 
-    # 5. Fallback: send to admin channel
-    logger.info(f"Falling back to admin channel for {feedback_type} feedback (no owner or lookup failed)")
+    # 4. ALWAYS send to admin channel for visibility
+    logger.info(f"Sending {feedback_type} feedback to admin channel")
     await send_to_admin_channel(
         client=client,
         feedback_type=feedback_type,
@@ -99,8 +103,10 @@ async def notify_content_owner(
         message_ts=message_ts,
         context=context,
         owner_email=owner_email,
+        owner_notified=owner_notified,
     )
-    return False
+
+    return owner_notified
 
 
 async def get_owner_email_for_chunks(chunk_ids: list[str]) -> str | None:
@@ -219,6 +225,7 @@ async def send_to_admin_channel(
     message_ts: str,
     context: dict[str, Any],
     owner_email: str | None = None,
+    owner_notified: bool = False,
 ) -> bool:
     """Send feedback notification to admin channel.
 
@@ -232,6 +239,7 @@ async def send_to_admin_channel(
         message_ts: Original message timestamp
         context: Additional context
         owner_email: Owner email if known (for context)
+        owner_notified: Whether owner was also notified via DM
 
     Returns:
         True if message was sent successfully
@@ -250,6 +258,7 @@ async def send_to_admin_channel(
         message_ts=message_ts,
         context=context,
         owner_email=owner_email,
+        owner_notified=owner_notified,
     )
 
     try:
@@ -396,10 +405,11 @@ def build_admin_notification_blocks(
     message_ts: str,
     context: dict[str, Any],
     owner_email: str | None = None,
+    owner_notified: bool = False,
 ) -> list[dict]:
     """Build notification blocks for admin channel.
 
-    Similar to owner notification but includes reason for escalation.
+    All negative feedback is sent here for admin visibility.
     """
     feedback_emoji = {
         "incorrect": ":x:",
@@ -408,18 +418,20 @@ def build_admin_notification_blocks(
     }
     emoji = feedback_emoji.get(feedback_type, ":warning:")
 
-    # Explain why it went to admin channel
-    if owner_email:
-        escalation_reason = f"Owner ({owner_email}) could not be found in Slack"
+    # Show owner status
+    if owner_notified and owner_email:
+        owner_status = f"Owner ({owner_email}) also notified via DM"
+    elif owner_email:
+        owner_status = f"Owner ({owner_email}) could not be reached in Slack"
     else:
-        escalation_reason = "No owner assigned to this content"
+        owner_status = "No owner assigned to this content"
 
     blocks = [
         {
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"{emoji} Knowledge Feedback (No Owner)",
+                "text": f"{emoji} Knowledge Feedback: {feedback_type.title()}",
                 "emoji": True,
             },
         },
@@ -428,7 +440,7 @@ def build_admin_notification_blocks(
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": f"_Escalated to admins: {escalation_reason}_",
+                    "text": f"_{owner_status}_",
                 }
             ],
         },
