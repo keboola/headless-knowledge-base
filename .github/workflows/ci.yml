@@ -132,6 +132,7 @@ jobs:
       E2E_TEST_CHANNEL_ID: ${{ secrets.E2E_STAGING_TEST_CHANNEL_ID }}
       E2E_BOT_USER_ID: ${{ secrets.E2E_STAGING_BOT_USER_ID }}
       E2E_ADMIN_CHANNEL: ${{ secrets.E2E_STAGING_ADMIN_CHANNEL_ID }}
+      KNOWLEDGE_ADMIN_CHANNEL: ${{ secrets.E2E_STAGING_ADMIN_CHANNEL_ID }}
       STAGING_BOT_URL: https://slack-bot-staging-4aosg235qq-uc.a.run.app
       # ChromaDB configuration
       CHROMA_HOST: chromadb-staging-4aosg235qq-uc.a.run.app

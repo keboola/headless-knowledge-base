@@ -497,16 +497,24 @@ async def _auto_notify_admins(
 
 
 async def _get_admin_channel(client: WebClient) -> str | None:
-    """Find the admin channel ID."""
+    """Find the admin channel ID.
+
+    Supports both channel names (e.g., "#knowledge-admins") and
+    channel IDs (e.g., "C0A6WU7EFMY").
+    """
     # Remove # if present
-    channel_name = ADMIN_CHANNEL.lstrip("#")
+    channel_value = ADMIN_CHANNEL.lstrip("#")
+
+    # If it looks like a channel ID (starts with C), use it directly
+    if channel_value.startswith("C"):
+        return channel_value
 
     try:
         # Try to find channel by name
         result = client.conversations_list(types="public_channel,private_channel")
 
         for channel in result.get("channels", []):
-            if channel.get("name") == channel_name:
+            if channel.get("name") == channel_value:
                 return channel["id"]
 
         # Channel not found - could create it or return None
