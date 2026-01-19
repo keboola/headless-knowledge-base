@@ -467,6 +467,11 @@ class SlackTestClient:
                 "id": user_id or "U_E2E_TEST_USER",
                 "username": "e2e_test_user",
                 "name": "E2E Test User",
+                "team_id": "T_E2E_STAGING",
+            },
+            "team": {
+                "id": "T_E2E_STAGING",
+                "domain": "e2e-staging",
             },
             "channel": {
                 "id": self.channel_id,
@@ -483,6 +488,8 @@ class SlackTestClient:
             ],
             "trigger_id": f"{timestamp}.{self.channel_id}",
             "response_url": "https://hooks.slack.com/actions/FAKE/FAKE/FAKE",
+            "api_app_id": "A_E2E_TEST_APP",
+            "token": "",
         }
 
         body = f"payload={json.dumps(payload)}"
