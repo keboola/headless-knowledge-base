@@ -112,9 +112,9 @@ class TestNegativeFeedbackOpensModal:
         # Setup pending feedback
         pending_feedback[message_ts] = [chunk_id]
 
-        # Mock client
+        # Mock client - views_open must be AsyncMock since bot uses await
         mock_client = MagicMock()
-        mock_client.views_open = MagicMock()
+        mock_client.views_open = AsyncMock()
 
         body = {
             "trigger_id": trigger_id,
@@ -142,8 +142,9 @@ class TestNegativeFeedbackOpensModal:
 
         pending_feedback[message_ts] = [chunk_id]
 
+        # Mock client - views_open must be AsyncMock since bot uses await
         mock_client = MagicMock()
-        mock_client.views_open = MagicMock()
+        mock_client.views_open = AsyncMock()
 
         body = {
             "trigger_id": trigger_id,
@@ -169,8 +170,9 @@ class TestNegativeFeedbackOpensModal:
 
         pending_feedback[message_ts] = [chunk_id]
 
+        # Mock client - views_open must be AsyncMock since bot uses await
         mock_client = MagicMock()
-        mock_client.views_open = MagicMock()
+        mock_client.views_open = AsyncMock()
 
         body = {
             "trigger_id": trigger_id,
@@ -502,8 +504,9 @@ class TestFullFeedbackModalFlow:
         pending_feedback[message_ts] = [chunk_id]
 
         # Step 1: Click Incorrect button
+        # views_open must be AsyncMock since bot uses await
         mock_client = MagicMock()
-        mock_client.views_open = MagicMock()
+        mock_client.views_open = AsyncMock()
 
         body = {
             "trigger_id": trigger_id,
