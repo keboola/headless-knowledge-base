@@ -22,6 +22,120 @@ from knowledge_base.lifecycle.feedback import get_feedback_for_chunk
 # LIVE ADMIN ESCALATION TESTS
 # =============================================================================
 
+class TestAdminNotificationLive:
+    """
+    Live E2E tests for admin notification - verify real Slack messages are sent.
+
+    These tests call the actual notification functions and verify
+    messages appear in #knowledge-admins.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.e2e
+    async def test_send_to_admin_channel_works(
+        self,
+        slack_client,
+        e2e_config,
+        admin_channel_id,
+        unique_test_id,
+    ):
+        """
+        LIVE TEST: Verify send_to_admin_channel actually posts to #knowledge-admins.
+
+        This tests the core function that should always send feedback to admin channel.
+        """
+        from slack_sdk import WebClient
+        from knowledge_base.slack.owner_notification import send_to_admin_channel
+
+        bot_client = WebClient(token=e2e_config["bot_token"])
+
+        # Call the actual notification function
+        context = {
+            "query": f"Test query {unique_test_id}",
+            "source_titles": ["Test Document"],
+        }
+
+        success = await send_to_admin_channel(
+            client=bot_client,
+            feedback_type="incorrect",
+            issue_description=f"[E2E Test] This is a test feedback notification {unique_test_id}",
+            suggested_correction="This is the suggested correction",
+            reporter_id=e2e_config["bot_user_id"],  # Use bot as reporter for test
+            channel_id=e2e_config["channel_id"],
+            message_ts="1234567890.123456",
+            context=context,
+            owner_email=None,
+            owner_notified=False,
+        )
+
+        assert success, "send_to_admin_channel should return True"
+
+        # Wait for message to appear
+        await asyncio.sleep(2)
+
+        # Verify message appeared in admin channel
+        admin_msg = await slack_client.wait_for_message_in_channel(
+            channel_name="knowledge-admins",
+            contains=unique_test_id,
+            from_bot=True,
+            timeout=10,
+        )
+
+        assert admin_msg is not None, (
+            f"Admin notification with ID {unique_test_id} should appear in #knowledge-admins"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.e2e
+    async def test_notify_content_owner_always_sends_to_admin(
+        self,
+        slack_client,
+        e2e_config,
+        admin_channel_id,
+        unique_test_id,
+    ):
+        """
+        LIVE TEST: Verify notify_content_owner ALWAYS sends to admin channel.
+
+        Even when owner lookup fails, the notification should go to admin channel.
+        """
+        from slack_sdk import WebClient
+        from knowledge_base.slack.owner_notification import notify_content_owner
+
+        bot_client = WebClient(token=e2e_config["bot_token"])
+
+        # Call with fake chunk ID (no owner will be found)
+        result = await notify_content_owner(
+            client=bot_client,
+            chunk_ids=["fake_chunk_for_test"],
+            feedback_type="outdated",
+            issue_description=f"[E2E Test] Content marked outdated {unique_test_id}",
+            suggested_correction="Updated information here",
+            reporter_id=e2e_config["bot_user_id"],
+            channel_id=e2e_config["channel_id"],
+            message_ts="1234567890.999999",
+        )
+
+        # Owner wasn't found, so should return False (but admin channel still notified)
+        assert result is False, "Should return False when owner not found"
+
+        # Wait for message to appear
+        await asyncio.sleep(2)
+
+        # Verify message appeared in admin channel
+        admin_msg = await slack_client.wait_for_message_in_channel(
+            channel_name="knowledge-admins",
+            contains=unique_test_id,
+            from_bot=True,
+            timeout=10,
+        )
+
+        assert admin_msg is not None, (
+            f"Admin notification with ID {unique_test_id} should appear in #knowledge-admins "
+            "even when owner is not found"
+        )
+
+
 class TestAdminEscalationLive:
     """
     Live E2E tests for admin escalation - verify real Slack messages are sent.
