@@ -127,7 +127,7 @@ jobs:
       # Slack configuration
       SLACK_BOT_TOKEN: ${{ secrets.STAGING_SLACK_BOT_TOKEN }}
       SLACK_USER_TOKEN: ${{ secrets.STAGING_SLACK_USER_TOKEN }}
-      SLACK_SIGNING_SECRET: ${{ secrets.STAGING_SLACK_SIGNING_SECRET }}
+      SLACK_SIGNING_SECRET: ${{ secrets.SLACK_STAGING_SIGNING_SECRET }}
       E2E_TEST_CHANNEL_ID: ${{ secrets.STAGING_TEST_CHANNEL_ID }}
       E2E_BOT_USER_ID: ${{ secrets.STAGING_BOT_USER_ID }}
       STAGING_BOT_URL: https://slack-bot-staging-4aosg235qq-uc.a.run.app
