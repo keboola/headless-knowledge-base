@@ -124,18 +124,19 @@ jobs:
     needs: deploy-staging
     runs-on: ubuntu-latest
     env:
-      # Slack configuration
-      SLACK_BOT_TOKEN: ${{ secrets.STAGING_SLACK_BOT_TOKEN }}
-      SLACK_USER_TOKEN: ${{ secrets.STAGING_SLACK_USER_TOKEN }}
+      # Slack configuration (Pattern: {SERVICE}_{ENV}_*)
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_STAGING_BOT_TOKEN }}
+      SLACK_USER_TOKEN: ${{ secrets.SLACK_STAGING_USER_TOKEN }}
       SLACK_SIGNING_SECRET: ${{ secrets.SLACK_STAGING_SIGNING_SECRET }}
-      E2E_TEST_CHANNEL_ID: ${{ secrets.STAGING_TEST_CHANNEL_ID }}
-      E2E_BOT_USER_ID: ${{ secrets.STAGING_BOT_USER_ID }}
+      # E2E test configuration
+      E2E_TEST_CHANNEL_ID: ${{ secrets.E2E_STAGING_TEST_CHANNEL_ID }}
+      E2E_BOT_USER_ID: ${{ secrets.E2E_STAGING_BOT_USER_ID }}
       STAGING_BOT_URL: https://slack-bot-staging-4aosg235qq-uc.a.run.app
       # ChromaDB configuration
       CHROMA_HOST: chromadb-staging-4aosg235qq-uc.a.run.app
       CHROMA_PORT: "443"
       CHROMA_USE_SSL: "True"
-      CHROMA_TOKEN: ${{ secrets.STAGING_CHROMADB_TOKEN }}
+      CHROMA_TOKEN: ${{ secrets.CHROMA_STAGING_TOKEN }}
       # Vertex AI for embeddings
       EMBEDDING_PROVIDER: vertex-ai
       VERTEX_AI_PROJECT: ai-knowledge-base-42
