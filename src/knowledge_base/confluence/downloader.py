@@ -1,8 +1,8 @@
 """Confluence downloader with sync and rebase capabilities.
 
 ARCHITECTURE NOTE (per docs/ARCHITECTURE.md):
-- ChromaDB is the SOURCE OF TRUTH for knowledge data
-- This downloader saves markdown files and indexes directly to ChromaDB
+- Graphiti is the SOURCE OF TRUTH for knowledge data
+- This downloader saves markdown files and indexes directly to Graphiti
 - RawPage in SQLite is kept only for sync tracking (not chunk storage)
 """
 
@@ -22,7 +22,7 @@ from knowledge_base.confluence.markdown_converter import (
 from knowledge_base.confluence.models import GovernanceInfo, PageContent
 from knowledge_base.config import settings
 from knowledge_base.db.database import async_session_maker
-# NOTE: GovernanceMetadata is DEPRECATED - governance data now in ChromaDB metadata
+# NOTE: GovernanceMetadata is DEPRECATED - governance data now in Graphiti metadata
 from knowledge_base.db.models import GovernanceMetadata, RawPage, calculate_staleness
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 class ConfluenceDownloader:
     """Downloads and syncs Confluence pages to the local database.
 
-    After downloading, pages are automatically indexed to ChromaDB (source of truth).
+    After downloading, pages are automatically indexed to Graphiti (source of truth).
     """
 
     def __init__(self, client: ConfluenceClient | None = None, index_to_chromadb: bool = True):

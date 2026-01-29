@@ -1,6 +1,6 @@
 """Quality scoring and usage-based decay for content chunks.
 
-ChromaDB is the SOURCE OF TRUTH for quality scores per docs/ARCHITECTURE.md.
+Graphiti is the SOURCE OF TRUTH for quality scores.
 ChunkAccessLog is stored in SQLite/DuckDB for analytics only.
 """
 
@@ -18,20 +18,8 @@ from knowledge_base.db.models import (
     ChunkQuality,
     UserFeedback,
 )
-from knowledge_base.vectorstore.client import ChromaClient
 
 logger = logging.getLogger(__name__)
-
-# Singleton ChromaDB client for quality operations
-_chroma_client: ChromaClient | None = None
-
-
-def get_chroma_client() -> ChromaClient:
-    """Get or create a ChromaDB client instance."""
-    global _chroma_client
-    if _chroma_client is None:
-        _chroma_client = ChromaClient()
-    return _chroma_client
 
 
 def calculate_usage_adjusted_decay(quality: ChunkQuality) -> float:
@@ -141,10 +129,10 @@ async def record_chunk_access(
 ) -> None:
     """Record an access to a chunk for usage tracking.
 
-    Updates access count in ChromaDB (source of truth) and logs to SQLite/DuckDB.
+    Updates access count in Graphiti (source of truth) and logs to SQLite/DuckDB.
     """
-    # 1. Update access count in ChromaDB (source of truth)
-    await record_chunk_access_chromadb(chunk_id)
+    # 1. Update access count in Graphiti (source of truth)
+    await record_chunk_access_graphiti(chunk_id)
 
     # 2. Log access to SQLite/DuckDB (for analytics)
     async with async_session_maker() as session:
@@ -157,26 +145,36 @@ async def record_chunk_access(
         await session.commit()
 
 
-async def record_chunk_access_chromadb(chunk_id: str) -> None:
-    """Increment access count in ChromaDB (source of truth)."""
+async def record_chunk_access_graphiti(chunk_id: str) -> None:
+    """Increment access count in Graphiti (source of truth)."""
     try:
-        chroma = get_chroma_client()
+        from knowledge_base.graph.graphiti_builder import get_graphiti_builder
 
-        # Get current metadata
-        metadata = await chroma.get_metadata([chunk_id])
+        builder = get_graphiti_builder()
 
-        if chunk_id in metadata:
-            current_access = metadata[chunk_id].get("access_count", 0)
-            await chroma.update_single_metadata(
+        # Get current episode
+        episode = await builder.get_chunk_episode(chunk_id)
+
+        if episode:
+            metadata = episode.get("metadata", {})
+            current_access = metadata.get("access_count", 0)
+            # Update access count
+            await builder.update_chunk_metadata(
                 chunk_id,
                 {"access_count": current_access + 1},
             )
-            logger.debug(f"Incremented access count in ChromaDB: {chunk_id}")
+            logger.debug(f"Incremented access count in Graphiti: {chunk_id}")
         else:
-            logger.warning(f"Chunk {chunk_id} not found in ChromaDB for access tracking")
+            logger.warning(f"Chunk {chunk_id} not found in Graphiti for access tracking")
 
     except Exception as e:
-        logger.warning(f"Failed to update access count in ChromaDB: {e}")
+        logger.warning(f"Failed to update access count in Graphiti: {e}")
+
+
+# Backward compatibility alias
+async def record_chunk_access_chromadb(chunk_id: str) -> None:
+    """DEPRECATED: Use record_chunk_access_graphiti() instead."""
+    await record_chunk_access_graphiti(chunk_id)
 
 
 async def update_rolling_access_counts() -> dict:
@@ -211,47 +209,48 @@ async def update_rolling_access_counts() -> dict:
 async def recalculate_quality_scores() -> dict:
     """Recalculate quality scores based on decay and feedback.
 
-    This reads quality scores from ChromaDB (source of truth) and applies decay.
+    This reads quality scores from Graphiti (source of truth) and applies decay.
     """
-    return await recalculate_quality_scores_chromadb()
+    return await recalculate_quality_scores_graphiti()
 
 
-async def recalculate_quality_scores_chromadb() -> dict:
-    """Recalculate quality scores in ChromaDB based on decay and feedback.
+async def recalculate_quality_scores_graphiti() -> dict:
+    """Recalculate quality scores in Graphiti based on decay and feedback.
 
-    ChromaDB is the source of truth for quality scores. This function:
-    1. Reads all chunk metadata from ChromaDB
+    Graphiti is the source of truth for quality scores. This function:
+    1. Reads all chunk metadata from Graphiti
     2. Calculates decay based on access patterns
     3. Reduces decay for chunks with positive feedback
-    4. Updates scores in ChromaDB
+    4. Updates scores in Graphiti
     """
     stats = {"recalculated": 0, "decayed": 0}
 
     try:
-        chroma = get_chroma_client()
+        from knowledge_base.graph.graphiti_builder import get_graphiti_builder
+        from knowledge_base.graph.graphiti_retriever import get_graphiti_retriever
 
-        # Get all chunks from ChromaDB
-        # Note: This gets all chunks - for large databases, consider pagination
-        all_chunks = await chroma.get(limit=10000)
+        builder = get_graphiti_builder()
+        retriever = get_graphiti_retriever()
 
-        if not all_chunks or not all_chunks.get("ids"):
-            logger.info("No chunks found in ChromaDB for quality recalculation")
+        # Get all chunks from Graphiti
+        all_episodes = await retriever.get_all_episodes(limit=10000)
+
+        if not all_episodes:
+            logger.info("No chunks found in Graphiti for quality recalculation")
             return stats
 
-        chunk_ids = all_chunks["ids"]
-        metadatas = all_chunks.get("metadatas", [{}] * len(chunk_ids))
+        chunk_ids = [ep.get("chunk_id") for ep in all_episodes if ep.get("chunk_id")]
 
         # Get recent helpful feedback counts from SQLite/DuckDB
         async with async_session_maker() as session:
             feedback_counts = await get_helpful_feedback_counts(session, chunk_ids)
 
-        # Prepare batch updates
-        updates = []
-
-        for chunk_id, metadata in zip(chunk_ids, metadatas):
-            if metadata is None:
+        for episode in all_episodes:
+            chunk_id = episode.get("chunk_id")
+            if not chunk_id:
                 continue
 
+            metadata = episode.get("metadata", {})
             current_score = metadata.get("quality_score", 100.0)
             access_count = metadata.get("access_count", 0)
 
@@ -267,24 +266,26 @@ async def recalculate_quality_scores_chromadb() -> dict:
             if decay > 0:
                 new_score = max(current_score - decay, 0)
                 if new_score < current_score:
-                    updates.append((chunk_id, {"quality_score": new_score}))
+                    await builder.update_chunk_quality(chunk_id, new_score)
                     stats["decayed"] += 1
 
             stats["recalculated"] += 1
 
-        # Apply batch updates to ChromaDB
-        if updates:
-            await chroma.batch_update_metadata(updates)
-
         logger.info(
-            f"Recalculated quality scores in ChromaDB: {stats['recalculated']} total, "
+            f"Recalculated quality scores in Graphiti: {stats['recalculated']} total, "
             f"{stats['decayed']} decayed"
         )
 
     except Exception as e:
-        logger.error(f"Failed to recalculate quality scores in ChromaDB: {e}")
+        logger.error(f"Failed to recalculate quality scores in Graphiti: {e}")
 
     return stats
+
+
+# Backward compatibility alias
+async def recalculate_quality_scores_chromadb() -> dict:
+    """DEPRECATED: Use recalculate_quality_scores_graphiti() instead."""
+    return await recalculate_quality_scores_graphiti()
 
 
 def calculate_decay_from_access(access_count: int) -> float:

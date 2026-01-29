@@ -364,14 +364,14 @@ async def _metadata(space: str | None, regenerate: bool, verbose: bool, batch_si
 @click.option("--reindex", "-r", is_flag=True, help="Delete and rebuild the index")
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed progress")
 def index(space: str | None, reindex: bool, verbose: bool) -> None:
-    """Index chunks into ChromaDB for vector search."""
+    """Index chunks into Graphiti for search."""
     asyncio.run(_index(space, reindex, verbose))
 
 
 async def _index(space: str | None, reindex: bool, verbose: bool) -> None:
     """Async implementation of index command.
 
-    NOTE: ChromaDB is now the source of truth. Indexing happens automatically
+    NOTE: Graphiti is now the source of truth. Indexing happens automatically
     during Confluence sync. This command indexes from markdown files for
     pages that may not have been indexed yet.
     """
@@ -380,23 +380,19 @@ async def _index(space: str | None, reindex: bool, verbose: bool) -> None:
 
     from knowledge_base.db.database import async_session_maker, init_db
     from knowledge_base.db.models import RawPage
-    from knowledge_base.vectorstore import VectorIndexer, get_embeddings
+    from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
     from knowledge_base.vectorstore.indexer import ChunkData
     from knowledge_base.chunking.markdown_chunker import MarkdownChunker
 
     await init_db()
 
-    # Get embeddings provider info
-    embeddings = get_embeddings()
-    click.echo(f"Using embeddings: {embeddings.provider_name} (dimension: {embeddings.dimension})")
-    click.echo("NOTE: ChromaDB is now the source of truth. Indexing happens during sync.")
+    click.echo("NOTE: Graphiti is now the source of truth. Indexing to graph database.")
 
-    indexer = VectorIndexer(embeddings=embeddings)
+    indexer = GraphitiIndexer()
     chunker = MarkdownChunker()
 
     if reindex:
-        click.echo("Reindexing: Clearing existing ChromaDB index...")
-        await indexer.chroma.clear()
+        click.echo("Reindexing: Note - existing data will be overwritten...")
 
     async with async_session_maker() as session:
         try:
@@ -466,8 +462,8 @@ async def _index(space: str | None, reindex: bool, verbose: bool) -> None:
             click.echo(f"  Chunks indexed: {total_chunks}")
 
             # Show stats
-            stats = await indexer.get_stats()
-            click.echo(f"  Total in index: {stats['indexed_chunks']}")
+            stats_count = await indexer.get_chunk_count()
+            click.echo(f"  Total in index: {stats_count}")
 
         except Exception as e:
             logger.error(f"Indexing failed: {e}")
@@ -482,12 +478,12 @@ def stats() -> None:
 
 
 async def _stats() -> None:
-    """Show database and ChromaDB statistics."""
+    """Show database and Graphiti statistics."""
     from sqlalchemy import func, select
 
     from knowledge_base.db.database import async_session_maker, init_db
     from knowledge_base.db.models import RawPage
-    from knowledge_base.vectorstore.client import ChromaClient
+    from knowledge_base.graph.graphiti_builder import get_graphiti_builder
 
     await init_db()
 
@@ -528,14 +524,17 @@ async def _stats() -> None:
         for space_key, count in spaces.fetchall():
             click.echo(f"  {space_key}: {count}")
 
-    # Get chunk statistics from ChromaDB (source of truth)
-    chroma = ChromaClient()
+    # Get chunk statistics from Graphiti (source of truth)
+    builder = get_graphiti_builder()
     try:
-        total_chunks_count = await chroma.count()
-        click.echo(f"\nChunk Statistics (ChromaDB):")
-        click.echo(f"  Total chunks in ChromaDB: {total_chunks_count}")
+        graphiti_stats = await builder.get_stats()
+        click.echo(f"\nChunk Statistics (Graphiti):")
+        click.echo(f"  Backend: {graphiti_stats.get('backend', 'unknown')}")
+        click.echo(f"  Enabled: {graphiti_stats.get('enabled', False)}")
+        if 'episode_count' in graphiti_stats:
+            click.echo(f"  Total episodes: {graphiti_stats['episode_count']}")
     except Exception as e:
-        click.echo(f"\nChunk Statistics: Unable to connect to ChromaDB ({e})")
+        click.echo(f"\nChunk Statistics: Unable to connect to Graphiti ({e})")
 
 
 # =============================================================================
@@ -857,27 +856,24 @@ def show_score(chunk_id: str) -> None:
 async def _show_score(chunk_id: str) -> None:
     """Async implementation of show-score command.
 
-    Retrieves quality score from ChromaDB (source of truth).
+    Retrieves quality score from Graphiti (source of truth).
     """
     from knowledge_base.db.database import init_db
-    from knowledge_base.vectorstore.client import ChromaClient
+    from knowledge_base.graph.graphiti_builder import get_graphiti_builder
     from knowledge_base.lifecycle.feedback import get_feedback_for_chunk
 
     await init_db()
 
-    # Get chunk info from ChromaDB (source of truth)
-    chroma = ChromaClient()
-    chroma_result = await chroma.get(ids=[chunk_id])
+    # Get chunk info from Graphiti (source of truth)
+    builder = get_graphiti_builder()
+    episode = await builder.get_chunk_episode(chunk_id)
 
-    if not chroma_result.get("ids"):
-        click.echo(f"Chunk not found in ChromaDB: {chunk_id}", err=True)
+    if not episode:
+        click.echo(f"Chunk not found in Graphiti: {chunk_id}", err=True)
         return
 
-    documents = chroma_result.get("documents", [])
-    metadatas = chroma_result.get("metadatas", [])
-
-    content = documents[0] if documents else ""
-    metadata = metadatas[0] if metadatas else {}
+    content = episode.get("content", "")
+    metadata = episode.get("metadata", {})
 
     page_title = metadata.get("page_title", "Unknown")
     quality_score = metadata.get("quality_score", 100.0)
@@ -890,7 +886,7 @@ async def _show_score(chunk_id: str) -> None:
     click.echo(f"\nPage: {page_title}")
     click.echo(f"Content preview: {content[:100]}...")
 
-    click.echo(f"\nQuality Score (ChromaDB): {quality_score:.1f}/100")
+    click.echo(f"\nQuality Score (Graphiti): {quality_score:.1f}/100")
     click.echo(f"  Access count: {access_count}")
     click.echo(f"  Feedback count: {feedback_count}")
     click.echo(f"  Last updated: {updated_at}")
@@ -965,7 +961,7 @@ async def _pipeline(spaces: str | None, verbose: bool, force_parse: bool, reinde
     from knowledge_base.chunking.parser import PageParser
     from knowledge_base.confluence.downloader import ConfluenceDownloader
     from knowledge_base.db.database import async_session_maker, init_db
-    from knowledge_base.vectorstore import VectorIndexer, get_embeddings
+    from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
 
     # Initialize database
     await init_db()
@@ -1026,15 +1022,12 @@ async def _pipeline(spaces: str | None, verbose: bool, force_parse: bool, reinde
     click.echo(f"  Pages with chunks: {chunk_stats['pages_with_chunks']}")
     click.echo(f"  Average chunk size: {chunk_stats['average_chunk_size']} chars")
 
-    # Step 3: Index into ChromaDB
+    # Step 3: Index into Graphiti
     click.echo("\n" + "=" * 60)
-    click.echo("STEP 3: Indexing chunks into vector store")
+    click.echo("STEP 3: Indexing chunks into Graphiti")
     click.echo("=" * 60)
 
-    embeddings = get_embeddings()
-    click.echo(f"Using embeddings: {embeddings.provider_name} (dimension: {embeddings.dimension})")
-
-    indexer = VectorIndexer(embeddings=embeddings)
+    indexer = GraphitiIndexer()
 
     def progress_callback(indexed: int, total: int) -> None:
         if verbose:
@@ -1046,11 +1039,46 @@ async def _pipeline(spaces: str | None, verbose: bool, force_parse: bool, reinde
     async with async_session_maker() as session:
         try:
             if reindex:
-                click.echo("Reindexing (deleting existing index)...")
-                count = await indexer.reindex(session, space_key, progress_callback)
-            else:
-                click.echo("Indexing chunks...")
-                count = await indexer.index_chunks(session, space_key, progress_callback)
+                click.echo("Reindexing (overwriting existing data)...")
+
+            click.echo("Indexing chunks to Graphiti...")
+
+            # Get chunks from parser and index them
+            from sqlalchemy import select
+            from knowledge_base.db.models import Chunk, RawPage
+            from knowledge_base.vectorstore.indexer import ChunkData
+            import json
+
+            query = (
+                select(Chunk)
+                .join(RawPage, Chunk.page_id == RawPage.page_id)
+                .where(RawPage.status == "active")
+            )
+            if space_key:
+                query = query.where(RawPage.space_key == space_key)
+
+            result = await session.execute(query)
+            chunks = result.scalars().all()
+
+            chunk_data_list = []
+            for chunk in chunks:
+                chunk_data = ChunkData(
+                    chunk_id=chunk.chunk_id,
+                    content=chunk.content,
+                    page_id=chunk.page_id,
+                    page_title=chunk.page_title,
+                    chunk_index=chunk.chunk_index,
+                    space_key=chunk.page.space_key if chunk.page else "",
+                    url=chunk.page.url if chunk.page else "",
+                    author=chunk.page.author if chunk.page else "",
+                    created_at=chunk.page.created_at.isoformat() if chunk.page and chunk.page.created_at else "",
+                    updated_at=chunk.page.updated_at.isoformat() if chunk.page and chunk.page.updated_at else "",
+                    chunk_type=chunk.chunk_type or "text",
+                    parent_headers=json.dumps(chunk.parent_headers) if chunk.parent_headers else "[]",
+                )
+                chunk_data_list.append(chunk_data)
+
+            count = await indexer.index_chunks_direct(chunk_data_list, progress_callback)
 
             if not verbose:
                 click.echo()  # New line after progress
@@ -1059,8 +1087,8 @@ async def _pipeline(spaces: str | None, verbose: bool, force_parse: bool, reinde
             click.echo(f"  Chunks indexed: {count}")
 
             # Show stats
-            stats = await indexer.get_stats()
-            click.echo(f"  Total in index: {stats['indexed_chunks']}")
+            stats_count = await indexer.get_chunk_count()
+            click.echo(f"  Total in index: {stats_count}")
 
         except Exception as e:
             logger.error(f"Indexing failed: {e}")
@@ -1090,69 +1118,17 @@ def search() -> None:
 @search.command(name="rebuild-bm25")
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed progress")
 def rebuild_bm25(verbose: bool) -> None:
-    """Rebuild the BM25 keyword search index from all chunks."""
-    asyncio.run(_rebuild_bm25(verbose))
-
-
-async def _rebuild_bm25(verbose: bool) -> None:
-    """Async implementation of rebuild-bm25 command.
-
-    Gets chunk data from ChromaDB (source of truth).
-    """
-    from knowledge_base.db.database import init_db
-    from knowledge_base.search.bm25 import BM25Index
-    from knowledge_base.vectorstore.client import ChromaClient
-
-    await init_db()
-
-    click.echo("Building BM25 index from ChromaDB chunks...")
-
-    # Get all chunks from ChromaDB (source of truth)
-    chroma = ChromaClient()
-    chroma_result = await chroma.get(limit=100000)  # Large limit to get all
-
-    chunk_ids = chroma_result.get("ids", [])
-    documents = chroma_result.get("documents", [])
-    metadatas_list = chroma_result.get("metadatas", [])
-
-    if not chunk_ids:
-        click.echo("No chunks found in ChromaDB.")
-        return
-
-    click.echo(f"Found {len(chunk_ids)} chunks")
-
-    # Extract data for BM25 index
-    contents = []
-    metadatas = []
-
-    for i, chunk_id in enumerate(chunk_ids):
-        content = documents[i] if documents and i < len(documents) else ""
-        metadata = metadatas_list[i] if metadatas_list and i < len(metadatas_list) else {}
-
-        contents.append(content)
-        metadatas.append({
-            "page_id": metadata.get("page_id", ""),
-            "page_title": metadata.get("page_title", ""),
-            "chunk_index": metadata.get("chunk_index", 0),
-        })
-
-    # Build index
-    bm25 = BM25Index()
-    bm25.build(chunk_ids, contents, metadatas)
-
-    # Save to disk
-    bm25.save()
-
-    click.echo(f"\nBM25 index built successfully!")
-    click.echo(f"  Documents indexed: {len(bm25)}")
-    click.echo(f"  Index saved to: {bm25.index_path}")
+    """DEPRECATED: BM25 is now handled by Graphiti's built-in hybrid search."""
+    click.echo("NOTE: This command is deprecated.")
+    click.echo("Graphiti now provides built-in BM25+vector hybrid search.")
+    click.echo("No separate BM25 index is needed.")
 
 
 @search.command(name="query")
 @click.argument("query_text")
-@click.option("--method", "-m", type=click.Choice(["hybrid", "bm25", "vector"]), default="hybrid", help="Search method")
+@click.option("--method", "-m", type=click.Choice(["hybrid", "bm25", "vector"]), default="hybrid", help="Search method (all use Graphiti now)")
 @click.option("--top", "-k", type=int, default=5, help="Number of results to show")
-@click.option("--weights", "-w", help="BM25,Vector weights (e.g., '0.3,0.7')")
+@click.option("--weights", "-w", help="DEPRECATED: Graphiti handles weights internally")
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed output")
 def query(query_text: str, method: str, top: int, weights: str | None, verbose: bool) -> None:
     """Search the knowledge base with the given query."""
@@ -1162,84 +1138,36 @@ def query(query_text: str, method: str, top: int, weights: str | None, verbose: 
 async def _query(query_text: str, method: str, top: int, weights: str | None, verbose: bool) -> None:
     """Async implementation of query command."""
     from knowledge_base.db.database import init_db
-    from knowledge_base.search import BM25Index, HybridRetriever
-    from knowledge_base.vectorstore import VectorRetriever
+    from knowledge_base.search import HybridRetriever
 
     await init_db()
 
-    # Parse weights if provided
-    bm25_weight = None
-    vector_weight = None
     if weights:
-        try:
-            bm25_weight, vector_weight = map(float, weights.split(","))
-        except ValueError:
-            click.echo("Error: weights must be in format 'BM25,Vector' e.g., '0.3,0.7'", err=True)
-            return
+        click.echo("Note: --weights is deprecated. Graphiti handles weights internally.")
 
     click.echo(f"Query: '{query_text}'")
-    click.echo(f"Method: {method}")
+    click.echo(f"Method: hybrid (Graphiti)")
     click.echo("-" * 60)
 
-    if method == "bm25":
-        # BM25 only
-        bm25 = BM25Index()
-        if not bm25.load():
-            click.echo("Error: BM25 index not found. Run 'kb search rebuild-bm25' first.", err=True)
-            return
+    # All methods now use Graphiti hybrid search
+    retriever = HybridRetriever()
 
-        results = bm25.search_with_content(query_text, k=top)
-        click.echo(f"\nBM25 Results ({len(results)} found):\n")
+    health = await retriever.check_health()
+    if verbose:
+        click.echo(f"Health: {health}")
 
-        for i, (chunk_id, content, metadata, score) in enumerate(results, 1):
-            title = metadata.get("page_title", "Unknown")
-            click.echo(f"{i}. [{score:.4f}] {title}")
-            if verbose:
-                click.echo(f"   Chunk ID: {chunk_id}")
-                click.echo(f"   Content: {content[:150]}...")
-            click.echo()
+    if not health.get("graphiti_healthy"):
+        click.echo("Warning: Graphiti may not be fully available.")
 
-    elif method == "vector":
-        # Vector only
-        retriever = VectorRetriever()
+    results = await retriever.search(query_text, k=top)
+    click.echo(f"\nSearch Results ({len(results)} found):\n")
 
-        if not await retriever.check_health():
-            click.echo("Error: ChromaDB not available.", err=True)
-            return
-
-        results = await retriever.search(query_text, n_results=top)
-        click.echo(f"\nVector Results ({len(results)} found):\n")
-
-        for i, r in enumerate(results, 1):
-            click.echo(f"{i}. [{r.score:.4f}] {r.page_title}")
-            if verbose:
-                click.echo(f"   Chunk ID: {r.chunk_id}")
-                click.echo(f"   Content: {r.content[:150]}...")
-            click.echo()
-
-    else:
-        # Hybrid search
-        retriever = HybridRetriever(
-            bm25_weight=bm25_weight,
-            vector_weight=vector_weight,
-        )
-
-        health = await retriever.check_health()
+    for i, r in enumerate(results, 1):
+        click.echo(f"{i}. [{r.score:.4f}] {r.page_title}")
         if verbose:
-            click.echo(f"Health: {health}")
-
-        if not health.get("bm25_built"):
-            click.echo("Warning: BM25 index not built. Run 'kb search rebuild-bm25' for better results.")
-
-        results = await retriever.search(query_text, k=top)
-        click.echo(f"\nHybrid Results ({len(results)} found):\n")
-
-        for i, r in enumerate(results, 1):
-            click.echo(f"{i}. [{r.score:.4f}] {r.page_title}")
-            if verbose:
-                click.echo(f"   Chunk ID: {r.chunk_id}")
-                click.echo(f"   Content: {r.content[:150]}...")
-            click.echo()
+            click.echo(f"   Chunk ID: {r.chunk_id}")
+            click.echo(f"   Content: {r.content[:150]}...")
+        click.echo()
 
 
 @search.command(name="stats")
@@ -1251,35 +1179,23 @@ def search_stats() -> None:
 async def _search_stats() -> None:
     """Async implementation of search stats command."""
     from knowledge_base.db.database import init_db
-    from knowledge_base.search import BM25Index, HybridRetriever
+    from knowledge_base.search import HybridRetriever
 
     await init_db()
 
     click.echo("Search Index Statistics")
     click.echo("=" * 50)
 
-    # BM25 stats
-    bm25 = BM25Index()
-    if bm25.load():
-        click.echo(f"\nBM25 Index:")
-        click.echo(f"  Documents: {len(bm25)}")
-        click.echo(f"  Index path: {bm25.index_path}")
-    else:
-        click.echo(f"\nBM25 Index: Not built")
-        click.echo(f"  Run 'kb search rebuild-bm25' to build")
-
-    # Vector/Chroma stats
+    # Graphiti stats
     retriever = HybridRetriever()
     health = await retriever.check_health()
 
-    click.echo(f"\nVector Index (ChromaDB):")
-    click.echo(f"  Healthy: {health['chroma_healthy']}")
-    click.echo(f"  Embedding provider: {health['embedding_provider']}")
+    click.echo(f"\nGraphiti Search Backend:")
+    click.echo(f"  Enabled: {health.get('graphiti_enabled', False)}")
+    click.echo(f"  Healthy: {health.get('graphiti_healthy', False)}")
+    click.echo(f"  Backend: {health.get('backend', 'unknown')}")
 
-    # Weights
-    click.echo(f"\nDefault Weights:")
-    click.echo(f"  BM25: {settings.SEARCH_BM25_WEIGHT}")
-    click.echo(f"  Vector: {settings.SEARCH_VECTOR_WEIGHT}")
+    click.echo(f"\nNote: Graphiti provides built-in hybrid search (BM25 + vector + graph).")
 
 
 def main() -> None:

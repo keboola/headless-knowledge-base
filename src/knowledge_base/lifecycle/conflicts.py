@@ -1,6 +1,6 @@
 """AI-assisted conflict detection and resolution for knowledge content.
 
-Chunk data is retrieved from ChromaDB (source of truth).
+Chunk data is retrieved from Graphiti (source of truth).
 ContentConflict records are stored in SQLite/DuckDB for workflow tracking.
 """
 
@@ -14,7 +14,6 @@ from knowledge_base.config import settings
 from knowledge_base.db.database import async_session_maker
 # ContentConflict is a workflow model kept in database
 from knowledge_base.db.models import ContentConflict
-from knowledge_base.vectorstore.client import ChromaClient
 
 from .archival import deprecate_chunk
 
@@ -173,7 +172,7 @@ async def get_open_conflicts(limit: int = 50) -> list[ContentConflict]:
 async def get_conflict_with_chunks(conflict_id: int) -> dict | None:
     """Get a conflict with full chunk content for comparison.
 
-    Retrieves chunk data from ChromaDB (source of truth).
+    Retrieves chunk data from Graphiti (source of truth).
     """
     async with async_session_maker() as session:
         # Get conflict from database
@@ -184,20 +183,21 @@ async def get_conflict_with_chunks(conflict_id: int) -> dict | None:
         if not conflict:
             return None
 
-    # Get chunk data from ChromaDB (source of truth)
-    chroma = ChromaClient()
-    chunk_ids = [conflict.chunk_a_id, conflict.chunk_b_id]
-    chroma_result = await chroma.get(ids=chunk_ids)
+    # Get chunk data from Graphiti (source of truth)
+    from knowledge_base.graph.graphiti_builder import get_graphiti_builder
 
-    # Build lookup map from ChromaDB results
+    builder = get_graphiti_builder()
+    chunk_ids = [conflict.chunk_a_id, conflict.chunk_b_id]
+
+    # Build lookup map from Graphiti results
     chunk_map = {}
-    for i, chunk_id in enumerate(chroma_result.get("ids", [])):
-        documents = chroma_result.get("documents", [])
-        metadatas = chroma_result.get("metadatas", [])
-        chunk_map[chunk_id] = {
-            "content": documents[i] if documents and i < len(documents) else None,
-            "page_title": metadatas[i].get("page_title") if metadatas and i < len(metadatas) else None,
-        }
+    for chunk_id in chunk_ids:
+        episode = await builder.get_chunk_episode(chunk_id)
+        if episode:
+            chunk_map[chunk_id] = {
+                "content": episode.get("content"),
+                "page_title": episode.get("metadata", {}).get("page_title"),
+            }
 
     return {
         "conflict": conflict,
@@ -222,7 +222,7 @@ async def detect_conflicts_for_chunk(
     """
     Detect conflicts for a chunk against similar chunks.
 
-    Retrieves chunk data from ChromaDB (source of truth).
+    Retrieves chunk data from Graphiti (source of truth).
 
     Args:
         chunk_id: The chunk to check
@@ -230,22 +230,23 @@ async def detect_conflicts_for_chunk(
         llm_check_func: Optional async function(chunk_a_content, chunk_b_content) -> dict
                         Returns {"is_contradiction": bool, "confidence": float, "explanation": str}
     """
+    from knowledge_base.graph.graphiti_builder import get_graphiti_builder
+
     conflicts = []
 
-    # Get all needed chunks from ChromaDB in one call
+    # Get all needed chunks from Graphiti
     all_chunk_ids = [chunk_id] + [cid for cid, _ in similar_chunks]
-    chroma = ChromaClient()
-    chroma_result = await chroma.get(ids=all_chunk_ids)
+    builder = get_graphiti_builder()
 
     # Build lookup map
     chunk_map = {}
-    for i, cid in enumerate(chroma_result.get("ids", [])):
-        documents = chroma_result.get("documents", [])
-        metadatas = chroma_result.get("metadatas", [])
-        chunk_map[cid] = {
-            "content": documents[i] if documents and i < len(documents) else "",
-            "page_id": metadatas[i].get("page_id", "") if metadatas and i < len(metadatas) else "",
-        }
+    for cid in all_chunk_ids:
+        episode = await builder.get_chunk_episode(cid)
+        if episode:
+            chunk_map[cid] = {
+                "content": episode.get("content", ""),
+                "page_id": episode.get("metadata", {}).get("page_id", ""),
+            }
 
     source_chunk = chunk_map.get(chunk_id)
     if not source_chunk or not source_chunk.get("content"):
@@ -313,7 +314,7 @@ async def run_conflict_detection_batch(
     """
     Scheduled job to detect conflicts across recently modified chunks.
 
-    Chunk data is retrieved from ChromaDB (source of truth).
+    Chunk data is retrieved from Graphiti (source of truth).
 
     Args:
         days: Check chunks created/modified in last N days
@@ -327,24 +328,18 @@ async def run_conflict_detection_batch(
         logger.warning("No similarity function provided, skipping conflict detection")
         return stats
 
-    # If chunk_ids not provided, query ChromaDB for recent chunks
+    # If chunk_ids not provided, query Graphiti for recent chunks
     if chunk_ids is None:
+        from knowledge_base.graph.graphiti_retriever import get_graphiti_retriever
+
         cutoff = datetime.utcnow() - timedelta(days=days)
         cutoff_iso = cutoff.isoformat()
 
-        # Get all chunks and filter by created_at client-side
-        # ChromaDB doesn't support date range filters natively
-        chroma = ChromaClient()
-        # Use a reasonable limit to avoid memory issues
-        result = await chroma.get(limit=10000)
+        # Get recent chunks from Graphiti
+        retriever = get_graphiti_retriever()
+        recent_episodes = await retriever.get_recent_episodes(days=days, limit=10000)
 
-        chunk_ids = []
-        for i, cid in enumerate(result.get("ids", [])):
-            metadatas = result.get("metadatas", [])
-            if metadatas and i < len(metadatas):
-                created_at = metadatas[i].get("created_at", "")
-                if created_at and created_at >= cutoff_iso:
-                    chunk_ids.append(cid)
+        chunk_ids = [ep.get("chunk_id") for ep in recent_episodes if ep.get("chunk_id")]
 
         logger.info(f"Found {len(chunk_ids)} chunks created since {cutoff_iso}")
 

@@ -37,8 +37,15 @@ variable "confluence_space_keys" {
 # -----------------------------------------------------------------------------
 # Staging Environment Variables
 # -----------------------------------------------------------------------------
-variable "chromadb_token_staging" {
-  description = "ChromaDB authentication token for staging"
+variable "neo4j_auth_staging" {
+  description = "Neo4j authentication string for staging (format: neo4j/password)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "neo4j_password_staging" {
+  description = "Neo4j password for staging (for client connections)"
   type        = string
   sensitive   = true
   default     = ""

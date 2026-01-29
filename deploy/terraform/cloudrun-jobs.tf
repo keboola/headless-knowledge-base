@@ -47,26 +47,32 @@ resource "google_cloud_run_v2_job" "confluence_sync" {
           }
         }
 
+        # Graph Database Configuration (Graphiti + Neo4j)
         env {
-          name  = "CHROMA_HOST"
-          value = replace(google_cloud_run_v2_service.chromadb.uri, "https://", "")
+          name  = "GRAPH_BACKEND"
+          value = "neo4j"
         }
 
         env {
-          name  = "CHROMA_PORT"
-          value = "443"
-        }
-
-        env {
-          name  = "CHROMA_USE_SSL"
+          name  = "GRAPH_ENABLE_GRAPHITI"
           value = "true"
         }
 
         env {
-          name = "CHROMA_TOKEN"
+          name  = "NEO4J_URI"
+          value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j.uri, "https://", "")}"
+        }
+
+        env {
+          name  = "NEO4J_USER"
+          value = "neo4j"
+        }
+
+        env {
+          name = "NEO4J_PASSWORD"
           value_source {
             secret_key_ref {
-              secret  = google_secret_manager_secret.chromadb_token.secret_id
+              secret  = google_secret_manager_secret.neo4j_password.secret_id
               version = "latest"
             }
           }
@@ -93,7 +99,8 @@ resource "google_cloud_run_v2_job" "confluence_sync" {
   depends_on = [
     google_secret_manager_secret_version.confluence_email,
     google_secret_manager_secret_version.confluence_api_token,
-    google_secret_manager_secret_version.chromadb_token,
+    google_secret_manager_secret_version.neo4j_password,
+    google_cloud_run_v2_service.neo4j,
   ]
 }
 
@@ -154,26 +161,32 @@ resource "google_cloud_run_v2_job" "index_rebuild" {
           }
         }
 
+        # Graph Database Configuration (Graphiti + Neo4j)
         env {
-          name  = "CHROMA_HOST"
-          value = replace(google_cloud_run_v2_service.chromadb.uri, "https://", "")
+          name  = "GRAPH_BACKEND"
+          value = "neo4j"
         }
 
         env {
-          name  = "CHROMA_PORT"
-          value = "443"
-        }
-
-        env {
-          name  = "CHROMA_USE_SSL"
+          name  = "GRAPH_ENABLE_GRAPHITI"
           value = "true"
         }
 
         env {
-          name = "CHROMA_TOKEN"
+          name  = "NEO4J_URI"
+          value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j.uri, "https://", "")}"
+        }
+
+        env {
+          name  = "NEO4J_USER"
+          value = "neo4j"
+        }
+
+        env {
+          name = "NEO4J_PASSWORD"
           value_source {
             secret_key_ref {
-              secret  = google_secret_manager_secret.chromadb_token.secret_id
+              secret  = google_secret_manager_secret.neo4j_password.secret_id
               version = "latest"
             }
           }
@@ -218,7 +231,8 @@ resource "google_cloud_run_v2_job" "index_rebuild" {
   }
 
   depends_on = [
-    google_secret_manager_secret_version.chromadb_token,
+    google_secret_manager_secret_version.neo4j_password,
+    google_cloud_run_v2_service.neo4j,
   ]
 }
 
@@ -417,26 +431,32 @@ resource "google_cloud_run_v2_job" "pipeline" {
           }
         }
 
+        # Graph Database Configuration (Graphiti + Neo4j)
         env {
-          name  = "CHROMA_HOST"
-          value = replace(google_cloud_run_v2_service.chromadb.uri, "https://", "")
+          name  = "GRAPH_BACKEND"
+          value = "neo4j"
         }
 
         env {
-          name  = "CHROMA_PORT"
-          value = "443"
-        }
-
-        env {
-          name  = "CHROMA_USE_SSL"
+          name  = "GRAPH_ENABLE_GRAPHITI"
           value = "true"
         }
 
         env {
-          name = "CHROMA_TOKEN"
+          name  = "NEO4J_URI"
+          value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j.uri, "https://", "")}"
+        }
+
+        env {
+          name  = "NEO4J_USER"
+          value = "neo4j"
+        }
+
+        env {
+          name = "NEO4J_PASSWORD"
           value_source {
             secret_key_ref {
-              secret  = google_secret_manager_secret.chromadb_token.secret_id
+              secret  = google_secret_manager_secret.neo4j_password.secret_id
               version = "latest"
             }
           }
@@ -483,7 +503,8 @@ resource "google_cloud_run_v2_job" "pipeline" {
   depends_on = [
     google_secret_manager_secret_version.confluence_email,
     google_secret_manager_secret_version.confluence_api_token,
-    google_secret_manager_secret_version.chromadb_token,
+    google_secret_manager_secret_version.neo4j_password,
+    google_cloud_run_v2_service.neo4j,
   ]
 }
 

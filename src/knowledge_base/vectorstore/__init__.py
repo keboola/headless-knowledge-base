@@ -1,7 +1,7 @@
-"""Vector store module for embeddings and ChromaDB operations.
+"""Vector store module for embeddings and indexing.
 
-This module provides lazy imports to avoid loading heavy dependencies
-(chromadb, sentence-transformers) until they're actually needed.
+Graphiti is now the source of truth for chunk storage.
+This module provides embeddings and ChunkData for indexing.
 """
 
 
@@ -15,21 +15,19 @@ def __getattr__(name: str):
         )
         return locals()[name]
 
-    if name == "ChromaClient":
-        from knowledge_base.vectorstore.client import ChromaClient
-        return ChromaClient
-
-    if name == "VectorIndexer":
-        from knowledge_base.vectorstore.indexer import VectorIndexer
-        return VectorIndexer
-
     if name == "ChunkData":
         from knowledge_base.vectorstore.indexer import ChunkData
         return ChunkData
 
-    if name in ("VectorRetriever", "SearchResult"):
-        from knowledge_base.vectorstore.retriever import VectorRetriever, SearchResult
-        return locals()[name]
+    # Backward compatibility: VectorIndexer now wraps GraphitiIndexer
+    if name == "VectorIndexer":
+        from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
+        return GraphitiIndexer
+
+    # SearchResult is now in search.models
+    if name == "SearchResult":
+        from knowledge_base.search.models import SearchResult
+        return SearchResult
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
@@ -38,9 +36,7 @@ __all__ = [
     "BaseEmbeddings",
     "SentenceTransformerEmbeddings",
     "get_embeddings",
-    "ChromaClient",
-    "VectorIndexer",
     "ChunkData",
-    "VectorRetriever",
+    "VectorIndexer",  # Alias for GraphitiIndexer
     "SearchResult",
 ]

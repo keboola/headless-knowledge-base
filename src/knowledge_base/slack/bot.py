@@ -25,7 +25,7 @@ from knowledge_base.lifecycle import (
 )
 from knowledge_base.rag.factory import get_llm
 from knowledge_base.rag.exceptions import LLMError
-from knowledge_base.vectorstore.retriever import SearchResult
+from knowledge_base.search.models import SearchResult
 from knowledge_base.slack.modals import (
     build_incorrect_feedback_modal,
     build_outdated_feedback_modal,
@@ -314,11 +314,12 @@ def create_app() -> App:
 
 
 async def _search_chunks(query: str, limit: int = 5) -> list[SearchResult]:
-    """Search for relevant chunks using hybrid search (BM25 + vector).
+    """Search for relevant chunks using Graphiti hybrid search.
 
-    Uses HybridRetriever which combines:
-    - BM25 keyword search (good for abbreviations, exact terms)
-    - Vector semantic search (good for conceptual queries)
+    Uses HybridRetriever which delegates to Graphiti's unified search:
+    - Semantic similarity (embeddings)
+    - BM25 keyword matching
+    - Graph relationships
 
     Returns SearchResult objects with content and metadata.
     """
@@ -331,7 +332,7 @@ async def _search_chunks(query: str, limit: int = 5) -> list[SearchResult]:
         health = await retriever.check_health()
         logger.info(f"Hybrid search health: {health}")
 
-        # Use hybrid search (combines BM25 + vector with RRF)
+        # Use Graphiti hybrid search
         results = await retriever.search(query, k=limit)
         logger.info(f"Hybrid search returned {len(results)} results")
 
@@ -348,18 +349,6 @@ async def _search_chunks(query: str, limit: int = 5) -> list[SearchResult]:
     except Exception as e:
         logger.warning(f"Hybrid search failed: {e}", exc_info=True)
 
-        # Fallback to vector-only search
-        try:
-            from knowledge_base.vectorstore import VectorRetriever
-
-            logger.info("Falling back to vector-only search")
-            retriever = VectorRetriever()
-            results = await retriever.search(query, n_results=limit)
-            logger.info(f"Vector search returned {len(results)} results")
-            return results
-        except Exception as e2:
-            logger.warning(f"Vector search also failed: {e2}", exc_info=True)
-
     return []
 
 
@@ -372,7 +361,7 @@ async def _generate_answer(
 
     Args:
         question: The user's question
-        chunks: SearchResult objects from ChromaDB containing content and metadata
+        chunks: SearchResult objects from Graphiti containing content and metadata
         conversation_history: Previous messages in the conversation thread
     """
     if not chunks:

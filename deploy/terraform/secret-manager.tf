@@ -117,9 +117,9 @@ resource "google_secret_manager_secret_version" "confluence_api_token" {
   }
 }
 
-# ChromaDB Auth Token
-resource "google_secret_manager_secret" "chromadb_token" {
-  secret_id = "chromadb-token"
+# Neo4j Authentication (format: "neo4j/password")
+resource "google_secret_manager_secret" "neo4j_auth" {
+  secret_id = "neo4j-auth"
 
   replication {
     auto {}
@@ -127,12 +127,35 @@ resource "google_secret_manager_secret" "chromadb_token" {
 
   labels = {
     environment = var.environment
-    purpose     = "chromadb"
+    purpose     = "neo4j"
   }
 }
 
-resource "google_secret_manager_secret_version" "chromadb_token" {
-  secret      = google_secret_manager_secret.chromadb_token.id
+resource "google_secret_manager_secret_version" "neo4j_auth" {
+  secret      = google_secret_manager_secret.neo4j_auth.id
+  secret_data = "REPLACE_ME"
+
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
+}
+
+# Neo4j Password (for client connections)
+resource "google_secret_manager_secret" "neo4j_password" {
+  secret_id = "neo4j-password"
+
+  replication {
+    auto {}
+  }
+
+  labels = {
+    environment = var.environment
+    purpose     = "neo4j"
+  }
+}
+
+resource "google_secret_manager_secret_version" "neo4j_password" {
+  secret      = google_secret_manager_secret.neo4j_password.id
   secret_data = "REPLACE_ME"
 
   lifecycle {
@@ -163,17 +186,18 @@ resource "google_secret_manager_secret_iam_member" "slack_anthropic_access" {
   member    = "serviceAccount:${google_service_account.slack_bot.email}"
 }
 
-resource "google_secret_manager_secret_iam_member" "slack_chromadb_access" {
-  secret_id = google_secret_manager_secret.chromadb_token.secret_id
+# Slack Bot Neo4j password access
+resource "google_secret_manager_secret_iam_member" "slack_neo4j_password_access" {
+  secret_id = google_secret_manager_secret.neo4j_password.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.slack_bot.email}"
 }
 
-# ChromaDB service account secret access
-resource "google_secret_manager_secret_iam_member" "chromadb_token_access" {
-  secret_id = google_secret_manager_secret.chromadb_token.secret_id
+# Neo4j service account secret access
+resource "google_secret_manager_secret_iam_member" "neo4j_auth_access" {
+  secret_id = google_secret_manager_secret.neo4j_auth.secret_id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.chromadb.email}"
+  member    = "serviceAccount:${google_service_account.neo4j.email}"
 }
 
 # Jobs service account secret access
@@ -195,8 +219,9 @@ resource "google_secret_manager_secret_iam_member" "jobs_anthropic_access" {
   member    = "serviceAccount:${google_service_account.jobs.email}"
 }
 
-resource "google_secret_manager_secret_iam_member" "jobs_chromadb_access" {
-  secret_id = google_secret_manager_secret.chromadb_token.secret_id
+# Jobs service account Neo4j password access
+resource "google_secret_manager_secret_iam_member" "jobs_neo4j_password_access" {
+  secret_id = google_secret_manager_secret.neo4j_password.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.jobs.email}"
 }

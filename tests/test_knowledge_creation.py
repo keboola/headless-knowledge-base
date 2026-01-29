@@ -2,15 +2,15 @@
 """Quick script to test knowledge creation without Slack slash command."""
 
 import asyncio
-from knowledge_base.vectorstore.indexer import VectorIndexer
-from knowledge_base.vectorstore.client import ChromaClient
+from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
+from knowledge_base.graph.graphiti_retriever import get_graphiti_retriever
 
 
 async def create_knowledge(fact: str, title: str = "Quick Fact", created_by: str = "test_user"):
     """Create a knowledge chunk directly."""
     print(f"Creating knowledge: {fact[:100]}...")
 
-    indexer = VectorIndexer()
+    indexer = GraphitiIndexer()
 
     result = await indexer.index_single_chunk(
         content=fact,
@@ -33,18 +33,15 @@ async def verify_knowledge(search_query: str):
     """Verify the knowledge was indexed."""
     print(f"\n🔍 Searching for: '{search_query}'")
 
-    client = ChromaClient()
-    results = client.collection.query(
-        query_texts=[search_query],
-        n_results=3
-    )
+    retriever = get_graphiti_retriever()
+    results = await retriever.search(search_query, num_results=3)
 
-    if results['ids'][0]:
-        print(f"✅ Found {len(results['ids'][0])} matching chunks:")
-        for i, (doc, metadata) in enumerate(zip(results['documents'][0], results['metadatas'][0])):
-            print(f"\n   {i+1}. {doc[:100]}...")
-            print(f"      Created by: {metadata.get('created_by', 'unknown')}")
-            print(f"      Quality: {metadata.get('quality_score', 'N/A')}")
+    if results:
+        print(f"✅ Found {len(results)} matching chunks:")
+        for i, result in enumerate(results):
+            print(f"\n   {i+1}. {result.content[:100]}...")
+            print(f"      Created by: {result.metadata.get('created_by', 'unknown')}")
+            print(f"      Quality: {result.metadata.get('quality_score', 'N/A')}")
     else:
         print("❌ No matching chunks found")
 

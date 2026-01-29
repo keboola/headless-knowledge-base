@@ -26,11 +26,11 @@ class Settings(BaseSettings):
     # File Storage
     PAGES_DIR: str = "data/pages"  # Flat directory for .md files with random names
 
-    # ChromaDB
-    CHROMA_HOST: str = "chromadb"
-    CHROMA_PORT: int = 8000
-    CHROMA_USE_SSL: bool = True  # Use HTTPS by default for secure connections
-    CHROMA_TOKEN: str = ""  # Authentication token for ChromaDB (GCP deployment)
+    # ChromaDB (DEPRECATED - Graphiti is now the sole storage layer)
+    CHROMA_HOST: str = "chromadb"  # DEPRECATED: No longer used
+    CHROMA_PORT: int = 8000  # DEPRECATED: No longer used
+    CHROMA_USE_SSL: bool = True  # DEPRECATED: No longer used
+    CHROMA_TOKEN: str = ""  # DEPRECATED: No longer used
 
     # Redis
     REDIS_URL: str = "redis://redis:6379/0"
@@ -83,11 +83,25 @@ class Settings(BaseSettings):
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = "changeme"  # MUST be changed in production
 
-    # Hybrid Search (Phase 05.5)
-    SEARCH_BM25_WEIGHT: float = 0.3  # Weight for BM25 keyword search
-    SEARCH_VECTOR_WEIGHT: float = 0.7  # Weight for vector semantic search
-    SEARCH_TOP_K: int = 10  # Default number of results
-    BM25_INDEX_PATH: str = "data/bm25_index.pkl"  # Path to persist BM25 index
+    # Hybrid Search (DEPRECATED - Graphiti handles search internally)
+    SEARCH_BM25_WEIGHT: float = 0.3  # DEPRECATED: Graphiti handles weights internally
+    SEARCH_VECTOR_WEIGHT: float = 0.7  # DEPRECATED: Graphiti handles weights internally
+    SEARCH_TOP_K: int = 10  # Default number of results (still used)
+    BM25_INDEX_PATH: str = "data/bm25_index.pkl"  # DEPRECATED: No longer used
+
+    # Graph Database (Graphiti + Kuzu/Neo4j)
+    GRAPH_BACKEND: str = "kuzu"  # "kuzu" (embedded, dev) or "neo4j" (production)
+    GRAPH_KUZU_PATH: str = "data/kuzu_graph"  # Directory for Kuzu embedded database
+    GRAPH_GROUP_ID: str = "default"  # Graphiti group ID for multi-tenancy
+    # Neo4j settings (for production)
+    NEO4J_URI: str = "bolt://localhost:7687"
+    NEO4J_USER: str = "neo4j"
+    NEO4J_PASSWORD: str = ""
+    # Feature flags for Graphiti-only architecture
+    GRAPH_ENABLE_GRAPHITI: bool = True  # Master switch for Graphiti (now required)
+    GRAPH_DUAL_WRITE: bool = False  # DEPRECATED: No longer used
+    GRAPH_COMPARE_MODE: bool = False  # DEPRECATED: No longer used
+    GRAPH_EXPANSION_ENABLED: bool = True  # Always enabled with Graphiti-only
 
     # GCP Deployment Settings
     GCP_PROJECT_ID: str = ""  # GCP project ID (e.g., ai-knowledge-base-42)

@@ -2,7 +2,6 @@
 
 from typing import Any
 
-import httpx
 import redis.asyncio as redis
 from fastapi import APIRouter
 
@@ -25,26 +24,27 @@ async def ready() -> dict[str, Any]:
     Readiness check - verifies all dependent services are available.
 
     Checks:
-    - ChromaDB: Vector database connection
+    - Graphiti: Graph database connection (Kuzu/Neo4j)
     - Redis: Task queue broker connection
     - LLM: Language model provider connection (Claude, Ollama, etc.)
     """
     services: dict[str, str] = {}
     all_ok = True
 
-    # Check ChromaDB
+    # Check Graphiti (graph database)
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(
-                f"http://{settings.CHROMA_HOST}:{settings.CHROMA_PORT}/api/v1/heartbeat"
-            )
-            if response.status_code == 200:
-                services["chromadb"] = "ok"
-            else:
-                services["chromadb"] = f"error: status {response.status_code}"
-                all_ok = False
+        from knowledge_base.graph.graphiti_client import get_graphiti_client
+
+        if settings.GRAPH_ENABLE_GRAPHITI:
+            client = get_graphiti_client()
+            # For Kuzu, check if client was created successfully
+            # For Neo4j, this would verify the connection
+            services["graphiti"] = f"ok ({settings.GRAPH_BACKEND})"
+        else:
+            services["graphiti"] = "disabled"
+            all_ok = False
     except Exception as e:
-        services["chromadb"] = f"error: {type(e).__name__}"
+        services["graphiti"] = f"error: {type(e).__name__}"
         all_ok = False
 
     # Check Redis

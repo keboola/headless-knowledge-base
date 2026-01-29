@@ -373,21 +373,23 @@ class TestOwnerNotification:
 
     @pytest.mark.asyncio
     async def test_get_owner_email_from_governance(self, test_db_session):
-        """Should get owner email from ChromaDB metadata (source of truth)."""
+        """Should get owner email from Graphiti metadata (source of truth)."""
         chunk_id = f"chunk_{uuid.uuid4().hex[:8]}"
         owner_email = "owner@example.com"
 
-        # Mock ChromaDB client to return owner in metadata
-        mock_chroma = MagicMock()
-        mock_chroma.get_metadata = AsyncMock(return_value={
-            chunk_id: {"owner": owner_email}
+        # Mock Graphiti builder to return owner in metadata
+        mock_builder = MagicMock()
+        mock_builder.get_chunk_episode = AsyncMock(return_value={
+            "chunk_id": chunk_id,
+            "content": "test content",
+            "metadata": {"owner": owner_email}
         })
 
-        with patch("knowledge_base.slack.owner_notification.get_chroma_client", return_value=mock_chroma):
+        with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder", return_value=mock_builder):
             result = await get_owner_email_for_chunks([chunk_id])
 
         assert result == owner_email
-        mock_chroma.get_metadata.assert_called_once_with([chunk_id])
+        mock_builder.get_chunk_episode.assert_called_once_with(chunk_id)
 
     @pytest.mark.asyncio
     async def test_lookup_slack_user_by_email_success(self):

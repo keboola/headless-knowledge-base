@@ -1,7 +1,7 @@
 """Handler for /ingest-doc slash command - ingest external documents.
 
-Uses ChromaDB as the source of truth for indexed chunks.
-See docs/adr/0005-chromadb-source-of-truth.md for architecture details.
+Uses Graphiti as the source of truth for indexed chunks.
+VectorIndexer is now an alias for GraphitiIndexer.
 """
 
 import asyncio

@@ -1,6 +1,6 @@
 """Handler for /create-knowledge slash command.
 
-Creates quick knowledge directly in ChromaDB (source of truth).
+Creates quick knowledge directly in Graphiti (source of truth).
 No SQLite intermediate storage - per docs/ARCHITECTURE.md.
 """
 
@@ -20,11 +20,11 @@ logger = logging.getLogger(__name__)
 async def handle_create_knowledge(ack: Any, command: dict, client: WebClient) -> None:
     """Handle the /create-knowledge slash command.
 
-    Creates a new knowledge chunk directly in ChromaDB (source of truth).
+    Creates a new knowledge chunk directly in Graphiti (source of truth).
     No intermediate SQLite storage needed.
 
     NOTE: This uses background task processing to avoid Slack's 3-second timeout
-    in Cloud Run deployments. The indexing operation (embedding generation + ChromaDB upload)
+    in Cloud Run deployments. The indexing operation (embedding generation + Graphiti upload)
     can take 2-4 seconds, which would cause "operation_timeout" errors.
     """
     # CRITICAL: Acknowledge immediately to avoid timeout
@@ -59,7 +59,7 @@ async def handle_create_knowledge(ack: Any, command: dict, client: WebClient) ->
             chunk_id = f"{page_id}_0"
             now = datetime.utcnow()
 
-            # Create ChunkData for direct ChromaDB indexing (no SQLite)
+            # Create ChunkData for direct Graphiti indexing (no SQLite)
             chunk_data = ChunkData(
                 chunk_id=chunk_id,
                 content=text,
@@ -87,9 +87,8 @@ async def handle_create_knowledge(ack: Any, command: dict, client: WebClient) ->
                 summary=text[:200] if len(text) > 200 else text,
             )
 
-            # Index directly to ChromaDB (source of truth)
-            # This involves: 1) embedding generation (Vertex AI call ~1-2s)
-            #                2) ChromaDB upload (~1-2s)
+            # Index directly to Graphiti (source of truth)
+            # VectorIndexer is now an alias for GraphitiIndexer
             indexer = VectorIndexer()
             await indexer.index_single_chunk(chunk_data)
 

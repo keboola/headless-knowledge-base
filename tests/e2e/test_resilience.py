@@ -1,7 +1,7 @@
 """Resilience and Fallback Tests.
 
 Per QA Recommendation D: Test graceful degradation when external services
-(LLM, ChromaDB) are unavailable.
+(LLM, Graphiti) are unavailable.
 """
 
 import pytest
@@ -86,39 +86,39 @@ class TestLLMOutageResilience:
         assert len(fallback_chain) >= 2, "Should have fallback options"
 
 
-class TestChromaDBOutageResilience:
-    """Test behavior when ChromaDB is unavailable."""
+class TestGraphitiOutageResilience:
+    """Test behavior when Graphiti is unavailable."""
 
     @pytest.mark.asyncio
-    async def test_chromadb_connection_failure(self, e2e_config):
+    async def test_graphiti_connection_failure(self, e2e_config):
         """
-        Scenario: ChromaDB is unreachable.
+        Scenario: Graphiti is unreachable.
 
         The bot should return helpful message, not crash.
         """
-        # Simulate ChromaDB connection error
-        connection_error = ConnectionError("Failed to connect to ChromaDB at chromadb:8000")
+        # Simulate Graphiti connection error
+        connection_error = ConnectionError("Failed to connect to Graphiti database")
 
-        with patch("knowledge_base.vectorstore.retriever.VectorRetriever") as mock_retriever:
+        with patch("knowledge_base.graph.graphiti_retriever.get_graphiti_retriever") as mock_retriever:
             mock_retriever.side_effect = connection_error
 
             try:
                 mock_retriever()
             except ConnectionError as e:
-                assert "chromadb" in str(e).lower()
+                assert "graphiti" in str(e).lower()
                 # Expected bot message: "Knowledge base is temporarily unavailable."
 
     @pytest.mark.asyncio
-    async def test_chromadb_timeout_handling(self, e2e_config):
+    async def test_graphiti_timeout_handling(self, e2e_config):
         """
-        Scenario: ChromaDB query times out.
+        Scenario: Graphiti query times out.
 
         The bot should handle timeout gracefully.
         """
         import asyncio
 
         async def mock_search_timeout(*args, **kwargs):
-            raise asyncio.TimeoutError("ChromaDB query timed out")
+            raise asyncio.TimeoutError("Graphiti query timed out")
 
         # Expected behavior:
         # 1. Catch timeout
@@ -129,38 +129,30 @@ class TestChromaDBOutageResilience:
         assert isinstance(timeout_error, asyncio.TimeoutError)
 
 
-class TestBM25FallbackOnVectorFailure:
-    """Test BM25 fallback when vector search fails."""
+class TestSearchFallbackBehavior:
+    """Test search fallback when Graphiti is disabled or fails."""
 
     @pytest.mark.asyncio
-    async def test_vector_failure_falls_back_to_bm25(self, e2e_config):
+    async def test_graphiti_disabled_returns_empty(self, e2e_config):
         """
-        Scenario: Vector search fails, BM25 continues working.
+        Scenario: Graphiti is disabled in settings.
 
-        Hybrid search should still return BM25 results.
+        Search should return empty results gracefully.
         """
-        from knowledge_base.search.bm25 import BM25Index
+        from knowledge_base.search.hybrid import HybridRetriever
 
-        # Build a working BM25 index
-        bm25 = BM25Index()
-        bm25.build(
-            ["chunk_1", "chunk_2"],
-            ["Vacation policy allows 20 days PTO.", "Office hours are 9-5."],
-            [{}, {}],
-        )
+        # Mock a disabled retriever
+        mock_retriever = MagicMock()
+        mock_retriever.is_enabled = False
 
-        # Simulate vector search failure
-        vector_results = []  # Empty due to failure
+        retriever = HybridRetriever()
+        retriever._retriever = mock_retriever
 
-        # BM25 should still work - search for a word that exists
-        bm25_results = bm25.search("vacation", k=3)
+        # Search should return empty list, not crash
+        results = await retriever.search("test query", k=3)
 
-        # BM25 may return results or not depending on tokenization
-        # The important test is that it doesn't crash
-        assert isinstance(bm25_results, list), "BM25 should return a list"
-        # If results found, vacation chunk should be first
-        if len(bm25_results) > 0:
-            assert bm25_results[0][0] == "chunk_1", "Should find vacation chunk"
+        assert isinstance(results, list)
+        assert len(results) == 0, "Should return empty list when Graphiti disabled"
 
 
 class TestSlackAPIResilience:
@@ -266,35 +258,33 @@ class TestGracefulDegradation:
         # Component availability matrix
         components = {
             "LLM": True,
-            "ChromaDB": True,
-            "BM25": True,
+            "Graphiti": True,
             "Database": True,
             "Slack": True,
         }
 
-        # Simulate ChromaDB failure
-        components["ChromaDB"] = False
+        # Simulate Graphiti failure
+        components["Graphiti"] = False
 
         # System should still work with:
-        # - BM25 search (keyword matching)
         # - Database (feedback storage)
         # - Slack (user interaction)
 
         working_components = [k for k, v in components.items() if v]
-        assert "BM25" in working_components
+        assert "Database" in working_components
         assert "Slack" in working_components
 
         # Expected degraded behavior:
-        # "I found some information using keyword search. Vector search is temporarily unavailable."
+        # "Knowledge base search is temporarily unavailable. Please try again later."
 
     @pytest.mark.asyncio
     async def test_all_search_methods_fail(self, e2e_config):
         """
-        Scenario: Both BM25 and vector search fail.
+        Scenario: Graphiti search fails completely.
 
         Bot should inform user no results found.
         """
-        # When all search methods fail:
+        # When search fails:
         # 1. Return: "I couldn't find any information about that topic."
         # 2. Suggest: "Try rephrasing your question or contact #help-channel"
         # 3. Log the failure for investigation

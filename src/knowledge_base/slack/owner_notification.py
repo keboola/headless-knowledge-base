@@ -3,7 +3,7 @@
 Notifies content owners when their content receives negative feedback.
 Falls back to admin channel if owner cannot be identified or notified.
 
-Owner information is read from ChromaDB metadata (source of truth).
+Owner information is read from Graphiti metadata (source of truth).
 """
 
 import logging
@@ -16,20 +16,8 @@ from sqlalchemy import select
 from knowledge_base.config import settings
 from knowledge_base.db.database import async_session_maker
 from knowledge_base.db.models import BotResponse
-from knowledge_base.vectorstore.client import ChromaClient
 
 logger = logging.getLogger(__name__)
-
-# Singleton ChromaDB client
-_chroma_client: ChromaClient | None = None
-
-
-def get_chroma_client() -> ChromaClient:
-    """Get or create a ChromaDB client instance."""
-    global _chroma_client
-    if _chroma_client is None:
-        _chroma_client = ChromaClient()
-    return _chroma_client
 
 # Admin channel fallback
 ADMIN_CHANNEL = getattr(settings, "KNOWLEDGE_ADMIN_CHANNEL", "#knowledge-admins")
@@ -110,9 +98,9 @@ async def notify_content_owner(
 
 
 async def get_owner_email_for_chunks(chunk_ids: list[str]) -> str | None:
-    """Get owner email from ChromaDB metadata for chunks.
+    """Get owner email from Graphiti metadata for chunks.
 
-    Owner is stored in ChromaDB metadata (source of truth).
+    Owner is stored in Graphiti metadata (source of truth).
 
     Args:
         chunk_ids: List of chunk IDs to look up
@@ -124,20 +112,22 @@ async def get_owner_email_for_chunks(chunk_ids: list[str]) -> str | None:
         return None
 
     try:
-        chroma = get_chroma_client()
-        metadata = await chroma.get_metadata(chunk_ids)
+        from knowledge_base.graph.graphiti_builder import get_graphiti_builder
+
+        builder = get_graphiti_builder()
 
         # Find the first chunk with an owner
         for chunk_id in chunk_ids:
-            if chunk_id in metadata:
-                owner = metadata[chunk_id].get("owner", "")
+            episode = await builder.get_chunk_episode(chunk_id)
+            if episode:
+                owner = episode.get("metadata", {}).get("owner", "")
                 if owner:
                     return owner
 
         return None
 
     except Exception as e:
-        logger.warning(f"Failed to get owner from ChromaDB: {e}")
+        logger.warning(f"Failed to get owner from Graphiti: {e}")
         return None
 
 
@@ -521,7 +511,7 @@ async def _get_feedback_context(message_ts: str, chunk_ids: list[str]) -> dict[s
     """Get context for the feedback from database.
 
     Bot response comes from SQLite/DuckDB (analytics).
-    Source titles come from ChromaDB metadata (source of truth).
+    Source titles come from Graphiti metadata (source of truth).
 
     Args:
         message_ts: Original message timestamp
@@ -547,21 +537,23 @@ async def _get_feedback_context(message_ts: str, chunk_ids: list[str]) -> dict[s
                 context["query"] = bot_response.query
                 context["response"] = bot_response.response_text
 
-    # Get source titles from ChromaDB metadata (source of truth)
+    # Get source titles from Graphiti metadata (source of truth)
     if chunk_ids:
         try:
-            chroma = get_chroma_client()
-            metadata = await chroma.get_metadata(chunk_ids)
+            from knowledge_base.graph.graphiti_builder import get_graphiti_builder
+
+            builder = get_graphiti_builder()
 
             seen_titles = set()
             for chunk_id in chunk_ids:
-                if chunk_id in metadata:
-                    title = metadata[chunk_id].get("page_title", "")
+                episode = await builder.get_chunk_episode(chunk_id)
+                if episode:
+                    title = episode.get("metadata", {}).get("page_title", "")
                     if title and title not in seen_titles:
                         context["source_titles"].append(title)
                         seen_titles.add(title)
         except Exception as e:
-            logger.warning(f"Failed to get source titles from ChromaDB: {e}")
+            logger.warning(f"Failed to get source titles from Graphiti: {e}")
 
     return context
 

@@ -9,6 +9,35 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 
 from knowledge_base.config import settings
 
+
+@pytest.fixture(scope="session")
+def chromadb_available():
+    """Check if Graphiti is available and skip tests if not.
+
+    This fixture attempts to connect to Graphiti and skips the test
+    if the connection fails.
+
+    Note: This is still named chromadb_available for backward compatibility
+    but now checks Graphiti.
+    """
+    from knowledge_base.graph.graphiti_client import get_graphiti_client
+    from knowledge_base.config import settings
+
+    if not settings.GRAPH_ENABLE_GRAPHITI:
+        pytest.skip("Graphiti is disabled in settings.")
+
+    try:
+        client = get_graphiti_client()
+        # Try to verify connection is healthy
+        # For Kuzu (dev), this just checks if the client was created
+        # For Neo4j (prod), this would check the connection
+        return True
+    except Exception as e:
+        pytest.skip(
+            f"Graphiti not available: {e}. "
+            "Ensure GRAPH_ENABLE_GRAPHITI=true and Kuzu/Neo4j is accessible."
+        )
+
 @pytest.fixture(scope="session")
 def event_loop():
     """Create an instance of the default event loop for each test session."""

@@ -1,6 +1,6 @@
 """User feedback collection and processing for content chunks.
 
-ChromaDB is the SOURCE OF TRUTH for quality scores per docs/ARCHITECTURE.md.
+Graphiti is the SOURCE OF TRUTH for quality scores (ChromaDB eliminated).
 UserFeedback records are stored in SQLite/DuckDB for analytics and retraining.
 """
 
@@ -14,20 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from knowledge_base.config import settings
 from knowledge_base.db.database import async_session_maker
 from knowledge_base.db.models import UserFeedback
-from knowledge_base.vectorstore.client import ChromaClient
 
 logger = logging.getLogger(__name__)
-
-# Singleton ChromaDB client for feedback operations
-_chroma_client: ChromaClient | None = None
-
-
-def get_chroma_client() -> ChromaClient:
-    """Get or create a ChromaDB client instance."""
-    global _chroma_client
-    if _chroma_client is None:
-        _chroma_client = ChromaClient()
-    return _chroma_client
 
 FeedbackType = Literal["helpful", "outdated", "incorrect", "confusing"]
 
@@ -57,12 +45,12 @@ async def submit_feedback(
     """
     Submit user feedback on a content chunk.
 
-    Quality score is updated in ChromaDB (source of truth) immediately.
+    Quality score is updated in Graphiti (source of truth) immediately.
     Feedback record is stored in SQLite/DuckDB for analytics and retraining.
     """
-    # 1. Update quality score in ChromaDB FIRST (source of truth)
+    # 1. Update quality score in Graphiti FIRST (source of truth)
     score_impact = get_feedback_score_impact(feedback_type)
-    await apply_feedback_to_quality_chromadb(chunk_id, score_impact)
+    await apply_feedback_to_quality_graphiti(chunk_id, score_impact)
 
     # 2. Store feedback record in SQLite/DuckDB (for analytics/retraining)
     async with async_session_maker() as session:
@@ -88,18 +76,20 @@ async def submit_feedback(
         return feedback
 
 
-async def apply_feedback_to_quality_chromadb(
+async def apply_feedback_to_quality_graphiti(
     chunk_id: str,
     score_impact: int,
 ) -> None:
-    """Apply feedback score impact directly to ChromaDB (source of truth).
+    """Apply feedback score impact directly to Graphiti (source of truth).
 
-    ChromaDB stores the authoritative quality score. No SQLite sync needed.
+    Graphiti stores the authoritative quality score. No other sync needed.
     """
-    chroma = get_chroma_client()
+    from knowledge_base.graph.graphiti_builder import get_graphiti_builder
 
-    # Get current quality score from ChromaDB
-    current_score = await chroma.get_quality_score(chunk_id)
+    builder = get_graphiti_builder()
+
+    # Get current quality score from Graphiti
+    current_score = await builder.get_chunk_quality_score(chunk_id)
 
     if current_score is not None:
         # Apply impact (positive feedback caps at 100, negative at 0)
@@ -108,19 +98,31 @@ async def apply_feedback_to_quality_chromadb(
             new_score = min(new_score, 100.0)  # Cap at max score
         new_score = max(new_score, 0.0)  # Don't go below 0
     else:
-        # Chunk not found in ChromaDB - this shouldn't happen
+        # Chunk not found in Graphiti - this shouldn't happen
         # but handle gracefully
-        logger.warning(f"Chunk {chunk_id} not found in ChromaDB for feedback")
+        logger.warning(f"Chunk {chunk_id} not found in Graphiti for feedback")
         new_score = max(100.0 + score_impact, 0.0)
 
-    # Update quality score in ChromaDB
-    await chroma.update_quality_score(
+    # Update quality score in Graphiti
+    success = await builder.update_chunk_quality(
         chunk_id=chunk_id,
         new_score=new_score,
         increment_feedback_count=True,
     )
 
-    logger.debug(f"Updated quality score in ChromaDB: {chunk_id} -> {new_score}")
+    if success:
+        logger.debug(f"Updated quality score in Graphiti: {chunk_id} -> {new_score}")
+    else:
+        logger.warning(f"Failed to update quality score for {chunk_id}")
+
+
+# Backward compatibility aliases
+async def apply_feedback_to_quality_chromadb(
+    chunk_id: str,
+    score_impact: int,
+) -> None:
+    """DEPRECATED: Use apply_feedback_to_quality_graphiti() instead."""
+    await apply_feedback_to_quality_graphiti(chunk_id, score_impact)
 
 
 async def apply_feedback_to_quality(
@@ -128,13 +130,8 @@ async def apply_feedback_to_quality(
     chunk_id: str,
     score_impact: int,
 ) -> None:
-    """Apply feedback score impact to chunk quality.
-
-    DEPRECATED: Use apply_feedback_to_quality_chromadb() instead.
-    This function is kept for backward compatibility during migration.
-    """
-    # Delegate to ChromaDB-first implementation
-    await apply_feedback_to_quality_chromadb(chunk_id, score_impact)
+    """DEPRECATED: Use apply_feedback_to_quality_graphiti() instead."""
+    await apply_feedback_to_quality_graphiti(chunk_id, score_impact)
 
 
 async def get_feedback_for_chunk(chunk_id: str) -> list[UserFeedback]:

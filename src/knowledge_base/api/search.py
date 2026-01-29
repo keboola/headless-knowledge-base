@@ -8,8 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from knowledge_base.api.schemas import SearchRequest, SearchResponse, SearchResultItem
 from knowledge_base.config import settings
-from knowledge_base.search import BM25Index, HybridRetriever
-from knowledge_base.vectorstore import VectorRetriever
+from knowledge_base.search import HybridRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -118,10 +117,13 @@ def _to_result_item(result: Any, include_content: bool = True) -> SearchResultIt
 async def search(request: SearchRequest, raw_request: Request) -> SearchResponse:
     """Search the knowledge base.
 
-    Supports three search methods:
-    - **hybrid**: Combines BM25 keyword search with vector semantic search (recommended)
-    - **vector**: Pure vector/semantic search
-    - **bm25**: Pure keyword search
+    Uses Graphiti's unified hybrid search combining:
+    - **semantic**: Vector similarity search (embeddings)
+    - **keyword**: BM25 keyword matching
+    - **graph**: Relationship-aware retrieval
+
+    Note: The search_method parameter is deprecated. All methods now use
+    Graphiti's hybrid search for best results.
 
     Filters can be applied to narrow results by space, document type, topics, or date.
     """
@@ -132,46 +134,12 @@ async def search(request: SearchRequest, raw_request: Request) -> SearchResponse
     start_time = time.time()
 
     try:
-        if request.search_method == "hybrid":
-            retriever = HybridRetriever()
-            raw_results = await retriever.search(
-                query=request.query,
-                k=request.top_k * 2 if request.filters else request.top_k,  # Get more if filtering
-            )
-
-        elif request.search_method == "vector":
-            retriever = VectorRetriever()
-            raw_results = await retriever.search(
-                query=request.query,
-                n_results=request.top_k * 2 if request.filters else request.top_k,
-            )
-
-        elif request.search_method == "bm25":
-            bm25 = BM25Index()
-            if not bm25.load():
-                raise HTTPException(
-                    status_code=503,
-                    detail="BM25 index not available. Run 'kb search rebuild-bm25' first.",
-                )
-            # BM25 returns tuples, convert to objects
-            bm25_results = bm25.search_with_content(request.query, k=request.top_k * 2)
-            raw_results = []
-            for chunk_id, content, metadata, score in bm25_results:
-                # Create a simple object with required attributes
-                class BM25Result:
-                    pass
-                r = BM25Result()
-                r.chunk_id = chunk_id
-                r.content = content
-                r.score = score
-                r.metadata = metadata
-                r.page_title = metadata.get("page_title", "")
-                raw_results.append(r)
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown search method: {request.search_method}",
-            )
+        # All search methods now use Graphiti's hybrid search
+        retriever = HybridRetriever()
+        raw_results = await retriever.search(
+            query=request.query,
+            k=request.top_k * 2 if request.filters else request.top_k,  # Get more if filtering
+        )
 
         # Convert to response items
         results = [_to_result_item(r, request.include_content) for r in raw_results]
@@ -206,7 +174,7 @@ async def search(request: SearchRequest, raw_request: Request) -> SearchResponse
         detail = "Internal server error"
         if settings.DEBUG:
             detail = f"Search failed: {str(e)}"
-            
+
         raise HTTPException(
             status_code=500,
             detail=detail,
@@ -221,11 +189,10 @@ async def search_health() -> dict[str, Any]:
         health = await retriever.check_health()
 
         return {
-            "status": "healthy" if health.get("chroma_healthy") else "degraded",
-            "bm25_indexed": health.get("bm25_indexed", 0),
-            "bm25_built": health.get("bm25_built", False),
-            "chroma_healthy": health.get("chroma_healthy", False),
-            "embedding_provider": health.get("embedding_provider", "unknown"),
+            "status": "healthy" if health.get("graphiti_healthy") else "degraded",
+            "graphiti_enabled": health.get("graphiti_enabled", False),
+            "graphiti_healthy": health.get("graphiti_healthy", False),
+            "backend": health.get("backend", "unknown"),
         }
 
     except Exception as e:

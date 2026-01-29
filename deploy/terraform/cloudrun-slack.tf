@@ -49,26 +49,34 @@ resource "google_cloud_run_v2_service" "slack_bot" {
         }
       }
 
+      # Graph Database Configuration (Graphiti + Neo4j)
       env {
-        name  = "CHROMA_HOST"
-        value = replace(google_cloud_run_v2_service.chromadb.uri, "https://", "")
+        name  = "GRAPH_BACKEND"
+        value = "neo4j"
       }
 
       env {
-        name  = "CHROMA_PORT"
-        value = "443"
-      }
-
-      env {
-        name  = "CHROMA_USE_SSL"
+        name  = "GRAPH_ENABLE_GRAPHITI"
         value = "true"
       }
 
+      # Neo4j connection - using internal Cloud Run URL
+      # Note: Bolt protocol over HTTPS via Cloud Run's internal networking
       env {
-        name = "CHROMA_TOKEN"
+        name  = "NEO4J_URI"
+        value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j.uri, "https://", "")}"
+      }
+
+      env {
+        name  = "NEO4J_USER"
+        value = "neo4j"
+      }
+
+      env {
+        name = "NEO4J_PASSWORD"
         value_source {
           secret_key_ref {
-            secret  = google_secret_manager_secret.chromadb_token.secret_id
+            secret  = google_secret_manager_secret.neo4j_password.secret_id
             version = "latest"
           }
         }
@@ -138,6 +146,8 @@ resource "google_cloud_run_v2_service" "slack_bot" {
     google_secret_manager_secret_version.slack_bot_token,
     google_secret_manager_secret_version.slack_signing_secret,
     google_secret_manager_secret_version.anthropic_api_key,
+    google_secret_manager_secret_version.neo4j_password,
+    google_cloud_run_v2_service.neo4j,
   ]
 }
 

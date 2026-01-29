@@ -45,6 +45,6 @@ async def test_health_ready_returns_services(client: AsyncClient):
     data = response.json()
     assert "status" in data
     assert "services" in data
-    assert "chromadb" in data["services"]
+    assert "graphiti" in data["services"]  # Graph database (Kuzu/Neo4j)
     assert "redis" in data["services"]
     assert "llm" in data["services"]  # Provider-agnostic LLM check

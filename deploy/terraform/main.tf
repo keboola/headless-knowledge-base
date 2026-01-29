@@ -8,11 +8,11 @@
 # - VPC Network with private subnets
 # - GCE instance for DuckDB (stateful database)
 # - Cloud Run service for Slack bot
-# - Cloud Run service for ChromaDB
+# - Cloud Run service for Neo4j (Graphiti graph database)
 # - Cloud Run Jobs for background tasks
 # - Cloud Scheduler for automated job triggers
 # - Secret Manager for sensitive data
-# - Cloud Storage for ChromaDB persistence
+# - Cloud Storage for Neo4j persistence
 #
 # Usage:
 #   1. terraform init

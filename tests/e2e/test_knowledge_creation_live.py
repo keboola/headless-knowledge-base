@@ -1,13 +1,13 @@
-"""Live E2E tests for knowledge creation with real ChromaDB integration.
+"""Live E2E tests for knowledge creation with real Graphiti integration.
 
 These tests verify that knowledge creation actually works end-to-end:
-- Content is indexed in ChromaDB
+- Content is indexed in Graphiti (Kuzu/Neo4j)
 - Embeddings are generated
 - Knowledge is searchable by the bot
 - Quality scores are tracked
 
 Prerequisites:
-- ChromaDB running and accessible
+- Graphiti enabled (GRAPH_ENABLE_GRAPHITI=true)
 - Bot has required permissions
 """
 
@@ -65,16 +65,17 @@ class TestKnowledgeCreationLive:
     async def test_create_knowledge_chunk_directly(
         self,
         unique_test_id,
+        chromadb_available,
     ):
         """
-        Verify: Knowledge can be created and indexed in ChromaDB.
+        Verify: Knowledge can be created and indexed in Graphiti.
 
         This tests the core indexing functionality without Slack.
         """
-        from knowledge_base.vectorstore.indexer import VectorIndexer
-        from knowledge_base.vectorstore.client import ChromaClient
+        from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
+        from knowledge_base.graph.graphiti_builder import get_graphiti_builder
 
-        indexer = VectorIndexer()
+        indexer = GraphitiIndexer()
 
         # Create unique knowledge
         fact = f"The test system {unique_test_id} is managed by the platform team. Contact them in #platform-{unique_test_id}."
@@ -90,16 +91,16 @@ class TestKnowledgeCreationLive:
         # Index it
         await indexer.index_single_chunk(chunk)
 
-        # Verify it's searchable in ChromaDB
-        await asyncio.sleep(1)  # Give ChromaDB a moment
+        # Verify it's searchable in Graphiti
+        await asyncio.sleep(1)  # Give Graphiti a moment
 
-        client = ChromaClient()
-        # Use the client's get method to retrieve by ID
-        chunk_data = await client.get(ids=[chunk.chunk_id])
+        builder = get_graphiti_builder()
+        # Use the builder's get method to retrieve by ID
+        episode = await builder.get_chunk_episode(chunk.chunk_id)
 
         # Verify our chunk is stored
-        assert len(chunk_data['ids']) == 1, f"Created knowledge should be retrievable. Got {len(chunk_data['ids'])} results"
-        assert chunk_data['documents'][0] == fact, "Content should match"
+        assert episode is not None, f"Created knowledge should be retrievable"
+        assert fact in episode.get("content", ""), "Content should match"
 
     @pytest.mark.asyncio
     @pytest.mark.e2e
@@ -117,9 +118,9 @@ class TestKnowledgeCreationLive:
         2. Ask the bot about that topic
         3. Verify bot's response contains the knowledge
         """
-        from knowledge_base.vectorstore.indexer import VectorIndexer
+        from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
 
-        indexer = VectorIndexer()
+        indexer = GraphitiIndexer()
 
         # Create very specific knowledge
         unique_service = f"TestService{unique_test_id}"
@@ -166,14 +167,15 @@ class TestKnowledgeCreationLive:
     async def test_multiple_knowledge_chunks_searchable(
         self,
         unique_test_id,
+        chromadb_available,
     ):
         """
         Verify: Multiple related knowledge chunks are all indexed and searchable.
         """
-        from knowledge_base.vectorstore.indexer import VectorIndexer
-        from knowledge_base.vectorstore.client import ChromaClient
+        from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
+        from knowledge_base.graph.graphiti_builder import get_graphiti_builder
 
-        indexer = VectorIndexer()
+        indexer = GraphitiIndexer()
 
         # Create 3 related facts
         facts = [
@@ -198,13 +200,17 @@ class TestKnowledgeCreationLive:
         # Wait for indexing
         await asyncio.sleep(2)
 
-        # Verify all chunks are retrievable
-        client = ChromaClient()
-        chunk_data = await client.get(ids=created_chunks)
+        # Verify chunks are retrievable
+        builder = get_graphiti_builder()
+        found_count = 0
+        for chunk_id in created_chunks:
+            episode = await builder.get_chunk_episode(chunk_id)
+            if episode:
+                found_count += 1
 
-        assert len(chunk_data['ids']) >= 2, (
+        assert found_count >= 2, (
             f"Should find at least 2 of our 3 chunks. "
-            f"Found {len(chunk_data['ids'])}"
+            f"Found {found_count}"
         )
 
     @pytest.mark.asyncio
@@ -212,14 +218,15 @@ class TestKnowledgeCreationLive:
     async def test_knowledge_has_correct_metadata(
         self,
         unique_test_id,
+        chromadb_available,
     ):
         """
         Verify: Created knowledge chunks have correct metadata stored.
         """
-        from knowledge_base.vectorstore.indexer import VectorIndexer
-        from knowledge_base.vectorstore.client import ChromaClient
+        from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
+        from knowledge_base.graph.graphiti_builder import get_graphiti_builder
 
-        indexer = VectorIndexer()
+        indexer = GraphitiIndexer()
 
         fact = f"TestMetadata{unique_test_id}: This is a test fact for metadata validation."
         creator = f"test_user_{unique_test_id}"
@@ -236,33 +243,34 @@ class TestKnowledgeCreationLive:
 
         chunk_id = chunk.chunk_id
 
-        # Retrieve the chunk from ChromaDB
+        # Retrieve the chunk from Graphiti
         await asyncio.sleep(1)
 
-        client = ChromaClient()
-        chunk_data = await client.get(ids=[chunk_id])
+        builder = get_graphiti_builder()
+        episode = await builder.get_chunk_episode(chunk_id)
 
-        assert len(chunk_data['ids']) == 1, "Should retrieve the chunk"
-        assert chunk_data['documents'][0] == fact, "Content should match"
+        assert episode is not None, "Should retrieve the chunk"
+        assert fact in episode.get("content", ""), "Content should match"
 
-        metadata = chunk_data['metadatas'][0]
-        assert metadata['author'] == creator, "Author should be stored"
-        assert metadata['url'] == f"test://metadata/{unique_test_id}", "URL should be stored"
-        assert metadata['quality_score'] == 100.0, "Initial quality should be 100.0"
+        metadata = episode.get("metadata", {})
+        assert metadata.get("author") == creator, "Author should be stored"
+        assert metadata.get("url") == f"test://metadata/{unique_test_id}", "URL should be stored"
+        assert metadata.get("quality_score") == 100.0, "Initial quality should be 100.0"
 
     @pytest.mark.asyncio
     @pytest.mark.e2e
     async def test_knowledge_quality_score_initialized(
         self,
         unique_test_id,
+        chromadb_available,
     ):
         """
         Verify: New knowledge starts with quality score of 100.0.
         """
-        from knowledge_base.vectorstore.indexer import VectorIndexer
-        from knowledge_base.vectorstore.client import ChromaClient
+        from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
+        from knowledge_base.graph.graphiti_builder import get_graphiti_builder
 
-        indexer = VectorIndexer()
+        indexer = GraphitiIndexer()
 
         fact = f"TestQuality{unique_test_id}: Quality score test fact."
 
@@ -275,14 +283,14 @@ class TestKnowledgeCreationLive:
 
         await indexer.index_single_chunk(chunk)
 
-        # Verify by retrieving from ChromaDB
+        # Verify by retrieving from Graphiti
         await asyncio.sleep(1)
 
-        client = ChromaClient()
-        chunk_data = await client.get(ids=[chunk.chunk_id])
+        builder = get_graphiti_builder()
+        episode = await builder.get_chunk_episode(chunk_id=chunk.chunk_id)
 
-        assert len(chunk_data['ids']) == 1, "Should retrieve the chunk"
-        metadata = chunk_data['metadatas'][0]
-        assert metadata['quality_score'] == 100.0, (
+        assert episode is not None, "Should retrieve the chunk"
+        metadata = episode.get("metadata", {})
+        assert metadata.get("quality_score") == 100.0, (
             "New knowledge should start with quality score of 100.0"
         )

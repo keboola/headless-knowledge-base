@@ -1,7 +1,12 @@
-"""Hybrid search module combining BM25 and vector search."""
+"""Hybrid search module using Graphiti's unified search.
 
-from knowledge_base.search.bm25 import BM25Index
-from knowledge_base.search.fusion import reciprocal_rank_fusion
+Graphiti provides built-in hybrid search combining:
+- Semantic similarity (embeddings)
+- BM25 keyword matching
+- Graph relationships
+"""
+
 from knowledge_base.search.hybrid import HybridRetriever
+from knowledge_base.search.models import SearchResult
 
-__all__ = ["BM25Index", "HybridRetriever", "reciprocal_rank_fusion"]
+__all__ = ["HybridRetriever", "SearchResult"]

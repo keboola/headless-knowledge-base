@@ -1,6 +1,6 @@
 """Admin escalation for negative feedback on knowledge base content.
 
-Chunk data is retrieved from ChromaDB (source of truth).
+Chunk data is retrieved from Graphiti (source of truth).
 BotResponse and UserFeedback are stored in database for analytics.
 """
 
@@ -16,7 +16,6 @@ from knowledge_base.config import settings
 from knowledge_base.db.database import async_session_maker
 # BotResponse and UserFeedback are analytics models kept in database
 from knowledge_base.db.models import BotResponse, UserFeedback
-from knowledge_base.vectorstore.client import ChromaClient
 
 logger = logging.getLogger(__name__)
 
@@ -228,18 +227,17 @@ async def check_auto_escalation(
             # Check if we already escalated (could add a flag)
             logger.info(f"Auto-escalating chunk {chunk_id} after {count} negative reports")
 
-            # Get chunk info from ChromaDB (source of truth)
-            chroma = ChromaClient()
-            chroma_result = await chroma.get(ids=[chunk_id])
+            # Get chunk info from Graphiti (source of truth)
+            from knowledge_base.graph.graphiti_builder import get_graphiti_builder
 
-            if chroma_result.get("ids"):
-                documents = chroma_result.get("documents", [])
-                metadatas = chroma_result.get("metadatas", [])
+            builder = get_graphiti_builder()
+            episode = await builder.get_chunk_episode(chunk_id)
 
+            if episode:
                 chunk_info = {
                     "chunk_id": chunk_id,
-                    "content": documents[0] if documents else "",
-                    "page_title": metadatas[0].get("page_title", "") if metadatas else "",
+                    "content": episode.get("content", ""),
+                    "page_title": episode.get("metadata", {}).get("page_title", ""),
                 }
 
                 await _auto_notify_admins(
@@ -256,7 +254,7 @@ async def check_auto_escalation(
 async def _get_escalation_context(message_ts: str, chunk_ids: list[str]) -> dict:
     """Get context for the escalation.
 
-    Bot response from database, chunk metadata from ChromaDB.
+    Bot response from database, chunk metadata from Graphiti.
     """
     context = {
         "query": None,
@@ -276,16 +274,18 @@ async def _get_escalation_context(message_ts: str, chunk_ids: list[str]) -> dict
                 context["query"] = bot_response.query
                 context["response"] = bot_response.response_text
 
-    # Get chunk sources from ChromaDB (source of truth)
+    # Get chunk sources from Graphiti (source of truth)
     if chunk_ids:
-        chroma = ChromaClient()
-        chroma_result = await chroma.get(ids=chunk_ids)
+        from knowledge_base.graph.graphiti_builder import get_graphiti_builder
 
-        for i, chunk_id in enumerate(chroma_result.get("ids", [])):
-            metadatas = chroma_result.get("metadatas", [])
-            if metadatas and i < len(metadatas):
-                page_title = metadatas[i].get("page_title", "")
-                url = metadatas[i].get("url", "")
+        builder = get_graphiti_builder()
+
+        for chunk_id in chunk_ids:
+            episode = await builder.get_chunk_episode(chunk_id)
+            if episode:
+                metadata = episode.get("metadata", {})
+                page_title = metadata.get("page_title", "")
+                url = metadata.get("url", "")
                 if page_title:
                     context["source_titles"].append(page_title)
                     context["source_urls"].append(url)

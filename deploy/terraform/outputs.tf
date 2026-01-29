@@ -3,9 +3,9 @@ output "slack_bot_url" {
   value       = google_cloud_run_v2_service.slack_bot.uri
 }
 
-output "chromadb_url" {
-  description = "URL of the ChromaDB Cloud Run service"
-  value       = google_cloud_run_v2_service.chromadb.uri
+output "neo4j_url" {
+  description = "URL of the Neo4j Cloud Run service"
+  value       = google_cloud_run_v2_service.neo4j.uri
 }
 
 output "duckdb_internal_ip" {

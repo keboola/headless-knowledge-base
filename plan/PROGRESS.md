@@ -32,8 +32,8 @@
 
 ## Summary
 
-- **Total Phases**: 19
-- **Completed**: 19 (01, 02, 03, 04, 04.5, 05, 05.5, 06, 07, 08, 09, 10, 10.5, 10.6, 11, 11.5, 12, 13, 14)
+- **Total Phases**: 20
+- **Completed**: 20 (01, 02, 03, 04, 04.5, 05, 05.5, 06, 07, 08, 09, 10, 10.5, 10.6, 11, 11.5, 12, 13, 14, Graph Integration)
 - **In Progress**: 0
 - **Pending**: 0
 - **Blocked**: 0
@@ -69,6 +69,13 @@
 | 2026-01-02 | 10.6 | Added content owner notification via DM (lookup by email) | Claude |
 | 2026-01-02 | 10.6 | Added fallback to admin channel when owner not found | Claude |
 | 2026-01-02 | 10.6 | Added 15 E2E tests for feedback modals and owner notification | Claude |
+| 2026-01-27 | Graph | Implemented Graphiti integration with Kuzu embedded backend | Claude |
+| 2026-01-27 | Graph | Added GraphitiClient, GraphitiBuilder, GraphitiRetriever modules | Claude |
+| 2026-01-27 | Graph | Added entity_schemas.py with Pydantic models for graph entities | Claude |
+| 2026-01-27 | Graph | Integrated graph expansion into hybrid.py search (opt-in, OFF by default) | Claude |
+| 2026-01-27 | Graph | Added docker-compose Neo4j service (optional profile) | Claude |
+| 2026-01-27 | Graph | Added scripts/resync_to_graphiti.py for full re-sync | Claude |
+| 2026-01-27 | Graph | Added 31 unit tests for Graphiti module (test_graphiti.py) | Claude |
 
 ## Notes
 
