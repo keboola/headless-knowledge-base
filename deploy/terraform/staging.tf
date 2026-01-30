@@ -6,131 +6,64 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# Staging Neo4j
+# Staging Neo4j VM (Compute Engine)
 # -----------------------------------------------------------------------------
-resource "google_cloud_run_v2_service" "neo4j_staging" {
-  name     = "neo4j-staging"
-  location = var.region
+# Neo4j requires direct TCP access for Bolt protocol.
+# Cloud Run cannot proxy Bolt (HTTP-only), so we use a VM like DuckDB.
+# -----------------------------------------------------------------------------
 
-  # Internal only - accessed via VPC by other services
-  ingress = "INGRESS_TRAFFIC_INTERNAL_ONLY"
+resource "google_compute_instance" "neo4j_staging" {
+  name         = "neo4j-staging"
+  machine_type = "e2-small" # 2 vCPU, 2GB RAM - sufficient for staging
+  zone         = var.zone
 
-  template {
-    scaling {
-      min_instance_count = 0 # Scale to zero when not in use (cost saving)
-      max_instance_count = 1
+  boot_disk {
+    initialize_params {
+      image = "debian-cloud/debian-12"
+      size  = 10
+      type  = "pd-standard"
     }
-
-    containers {
-      image = "neo4j:5.26-community"
-
-      # Expose Bolt port for graph queries (Cloud Run maps external :443 to this)
-      ports {
-        container_port = 7687
-      }
-
-      resources {
-        limits = {
-          cpu    = "1"
-          memory = "2Gi"
-        }
-      }
-
-      # Neo4j authentication
-      env {
-        name = "NEO4J_AUTH"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.neo4j_auth_staging.secret_id
-            version = "latest"
-          }
-        }
-      }
-
-      # Enable APOC plugin (required by Graphiti)
-      env {
-        name  = "NEO4J_PLUGINS"
-        value = "[\"apoc\"]"
-      }
-
-      # Allow APOC procedures
-      env {
-        name  = "NEO4J_dbms_security_procedures_unrestricted"
-        value = "apoc.*"
-      }
-
-      # Configure Bolt connector
-      env {
-        name  = "NEO4J_server_bolt_listen__address"
-        value = "0.0.0.0:7687"
-      }
-
-      # Configure HTTP connector
-      env {
-        name  = "NEO4J_server_http_listen__address"
-        value = "0.0.0.0:7474"
-      }
-
-      # Disable HTTPS
-      env {
-        name  = "NEO4J_server_https_enabled"
-        value = "false"
-      }
-
-      # Memory configuration (smaller for staging)
-      env {
-        name  = "NEO4J_server_memory_heap_initial__size"
-        value = "256M"
-      }
-
-      env {
-        name  = "NEO4J_server_memory_heap_max__size"
-        value = "1G"
-      }
-
-      env {
-        name  = "NEO4J_server_memory_pagecache_size"
-        value = "256M"
-      }
-
-      volume_mounts {
-        name       = "neo4j-data"
-        mount_path = "/data"
-      }
-
-      # Note: Neo4j takes 60-90 seconds to start with GCS storage
-      # Using TCP probe on Bolt port since HTTP is not exposed
-      # Liveness probe removed - Cloud Run doesn't support TCP liveness probes
-      startup_probe {
-        tcp_socket {
-          port = 7687
-        }
-        initial_delay_seconds = 60
-        period_seconds        = 10
-        failure_threshold     = 30
-        timeout_seconds       = 10
-      }
-    }
-
-    volumes {
-      name = "neo4j-data"
-      gcs {
-        bucket    = google_storage_bucket.neo4j_data_staging.name
-        read_only = false
-      }
-    }
-
-    vpc_access {
-      connector = google_vpc_access_connector.connector.id
-      egress    = "ALL_TRAFFIC"
-    }
-
-    service_account = google_service_account.neo4j_staging.email
   }
 
-  depends_on = [
-    google_secret_manager_secret_version.neo4j_auth_staging,
-  ]
+  # Data disk for Neo4j
+  attached_disk {
+    source      = google_compute_disk.neo4j_staging_data.self_link
+    device_name = "neo4j-staging-data"
+    mode        = "READ_WRITE"
+  }
+
+  network_interface {
+    subnetwork = google_compute_subnetwork.main.self_link
+    # No external IP - access via VPC only
+  }
+
+  metadata = {
+    neo4j-password = random_password.neo4j_staging_password.result
+  }
+
+  metadata_startup_script = file("${path.module}/scripts/neo4j-staging-startup.sh")
+
+  service_account {
+    email  = google_service_account.neo4j_staging.email
+    scopes = ["cloud-platform"]
+  }
+
+  tags = ["neo4j-staging"]
+
+  # Allow stopping for updates
+  allow_stopping_for_update = true
+}
+
+resource "google_compute_disk" "neo4j_staging_data" {
+  name = "neo4j-staging-data-disk"
+  type = "pd-ssd"
+  zone = var.zone
+  size = 20
+
+  labels = {
+    environment = "staging"
+    purpose     = "neo4j-data"
+  }
 }
 
 resource "google_service_account" "neo4j_staging" {
@@ -138,32 +71,24 @@ resource "google_service_account" "neo4j_staging" {
   display_name = "Neo4j Staging Service Account"
 }
 
-resource "google_storage_bucket" "neo4j_data_staging" {
-  name     = "${var.project_id}-neo4j-data-staging"
-  location = var.region
-
-  uniform_bucket_level_access = true
-
-  # Auto-delete old data after 30 days (staging doesn't need long retention)
-  lifecycle_rule {
-    condition {
-      age = 30
-    }
-    action {
-      type = "Delete"
-    }
-  }
-
-  labels = {
-    environment = "staging"
-    purpose     = "neo4j-persistence"
-  }
+# Generate random password for staging Neo4j
+resource "random_password" "neo4j_staging_password" {
+  length  = 24
+  special = false
 }
 
-resource "google_storage_bucket_iam_member" "neo4j_staging_storage" {
-  bucket = google_storage_bucket.neo4j_data_staging.name
-  role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.neo4j_staging.email}"
+# Firewall rule to allow Bolt connections from VPC
+resource "google_compute_firewall" "neo4j_staging_bolt" {
+  name    = "allow-neo4j-staging-bolt"
+  network = google_compute_network.main.name
+
+  allow {
+    protocol = "tcp"
+    ports    = ["7687"]
+  }
+
+  source_ranges = ["10.0.0.0/24", "10.8.0.0/28"] # VPC subnet + VPC connector
+  target_tags   = ["neo4j-staging"]
 }
 
 # -----------------------------------------------------------------------------
@@ -232,8 +157,8 @@ resource "google_cloud_run_v2_service" "slack_bot_staging" {
 
       env {
         name  = "NEO4J_URI"
-        # Cloud Run exposes services on port 443, so we need bolt+s://...:443
-        value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j_staging.uri, "https://", "")}:443"
+        # Direct Bolt connection to VM (no TLS for internal traffic)
+        value = "bolt://${google_compute_instance.neo4j_staging.network_interface[0].network_ip}:7687"
       }
 
       env {
@@ -242,13 +167,8 @@ resource "google_cloud_run_v2_service" "slack_bot_staging" {
       }
 
       env {
-        name = "NEO4J_PASSWORD"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.neo4j_password_staging.secret_id
-            version = "latest"
-          }
-        }
+        name  = "NEO4J_PASSWORD"
+        value = random_password.neo4j_staging_password.result
       }
 
       env {
@@ -304,7 +224,7 @@ resource "google_cloud_run_v2_service" "slack_bot_staging" {
 
     vpc_access {
       connector = google_vpc_access_connector.connector.id
-      egress    = "PRIVATE_RANGES_ONLY"
+      egress    = "PRIVATE_RANGES_ONLY" # Only route private IPs through VPC
     }
 
     service_account = google_service_account.slack_bot_staging.email
@@ -318,8 +238,7 @@ resource "google_cloud_run_v2_service" "slack_bot_staging" {
   depends_on = [
     google_secret_manager_secret_version.slack_bot_token_staging,
     google_secret_manager_secret_version.slack_signing_secret_staging,
-    google_secret_manager_secret_version.neo4j_password_staging,
-    google_cloud_run_v2_service.neo4j_staging,
+    google_compute_instance.neo4j_staging,
   ]
 }
 
@@ -336,50 +255,9 @@ resource "google_service_account" "slack_bot_staging" {
   display_name = "Slack Bot Staging Service Account"
 }
 
-# Allow staging bot to invoke staging Neo4j
-resource "google_cloud_run_v2_service_iam_member" "neo4j_staging_invoker" {
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_run_v2_service.neo4j_staging.name
-  role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.slack_bot_staging.email}"
-}
-
 # -----------------------------------------------------------------------------
 # Staging Secrets
 # -----------------------------------------------------------------------------
-resource "google_secret_manager_secret" "neo4j_auth_staging" {
-  secret_id = "neo4j-auth-staging"
-  replication {
-    auto {}
-  }
-}
-
-resource "google_secret_manager_secret_version" "neo4j_auth_staging" {
-  secret      = google_secret_manager_secret.neo4j_auth_staging.id
-  secret_data = "REPLACE_ME"
-
-  lifecycle {
-    ignore_changes = [secret_data]
-  }
-}
-
-resource "google_secret_manager_secret" "neo4j_password_staging" {
-  secret_id = "neo4j-password-staging"
-  replication {
-    auto {}
-  }
-}
-
-resource "google_secret_manager_secret_version" "neo4j_password_staging" {
-  secret      = google_secret_manager_secret.neo4j_password_staging.id
-  secret_data = "REPLACE_ME"
-
-  lifecycle {
-    ignore_changes = [secret_data]
-  }
-}
-
 resource "google_secret_manager_secret" "slack_bot_token_staging" {
   secret_id = "slack-bot-token-staging"
   replication {
@@ -405,12 +283,6 @@ resource "google_secret_manager_secret_version" "slack_signing_secret_staging" {
 }
 
 # Grant staging service accounts access to secrets
-resource "google_secret_manager_secret_iam_member" "neo4j_staging_auth_access" {
-  secret_id = google_secret_manager_secret.neo4j_auth_staging.id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.neo4j_staging.email}"
-}
-
 resource "google_secret_manager_secret_iam_member" "slack_bot_staging_token_access" {
   secret_id = google_secret_manager_secret.slack_bot_token_staging.id
   role      = "roles/secretmanager.secretAccessor"
@@ -419,12 +291,6 @@ resource "google_secret_manager_secret_iam_member" "slack_bot_staging_token_acce
 
 resource "google_secret_manager_secret_iam_member" "slack_bot_staging_signing_access" {
   secret_id = google_secret_manager_secret.slack_signing_secret_staging.id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.slack_bot_staging.email}"
-}
-
-resource "google_secret_manager_secret_iam_member" "slack_bot_staging_neo4j_password_access" {
-  secret_id = google_secret_manager_secret.neo4j_password_staging.id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.slack_bot_staging.email}"
 }
@@ -443,6 +309,139 @@ resource "google_project_iam_member" "slack_bot_staging_vertex_ai" {
 }
 
 # -----------------------------------------------------------------------------
+# Staging Confluence Sync Job
+# -----------------------------------------------------------------------------
+resource "google_cloud_run_v2_job" "confluence_sync_staging" {
+  name     = "confluence-sync-staging"
+  location = var.region
+
+  template {
+    template {
+      containers {
+        image = "${var.region}-docker.pkg.dev/${var.project_id}/knowledge-base/jobs:staging"
+
+        command = ["python", "-m", "knowledge_base.cli", "pipeline", "--spaces", "KI", "--verbose"]
+
+        resources {
+          limits = {
+            cpu    = "2"
+            memory = "2Gi"
+          }
+        }
+
+        # Confluence credentials (reuse production secrets)
+        env {
+          name  = "CONFLUENCE_URL"
+          value = var.confluence_base_url
+        }
+
+        env {
+          name  = "CONFLUENCE_SPACE_KEYS"
+          value = var.confluence_space_keys
+        }
+
+        env {
+          name = "CONFLUENCE_USERNAME"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.confluence_email.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        env {
+          name = "CONFLUENCE_API_TOKEN"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.confluence_api_token.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        # Staging Neo4j VM
+        env {
+          name  = "GRAPH_BACKEND"
+          value = "neo4j"
+        }
+
+        env {
+          name  = "GRAPH_ENABLE_GRAPHITI"
+          value = "true"
+        }
+
+        env {
+          name  = "NEO4J_URI"
+          # Direct Bolt connection to VM (no TLS for internal traffic)
+          value = "bolt://${google_compute_instance.neo4j_staging.network_interface[0].network_ip}:7687"
+        }
+
+        env {
+          name  = "NEO4J_USER"
+          value = "neo4j"
+        }
+
+        env {
+          name  = "NEO4J_PASSWORD"
+          value = random_password.neo4j_staging_password.result
+        }
+
+        # LLM/Embeddings
+        env {
+          name  = "LLM_PROVIDER"
+          value = "gemini"
+        }
+
+        env {
+          name  = "EMBEDDING_PROVIDER"
+          value = "vertex-ai"
+        }
+
+        env {
+          name  = "GCP_PROJECT_ID"
+          value = var.project_id
+        }
+
+        env {
+          name  = "VERTEX_AI_PROJECT"
+          value = var.project_id
+        }
+
+        env {
+          name  = "VERTEX_AI_LOCATION"
+          value = var.region
+        }
+
+        env {
+          name = "ANTHROPIC_API_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.anthropic_api_key.secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
+
+      timeout     = "14400s"  # 4 hours for full KI space intake
+      max_retries = 1
+
+      vpc_access {
+        connector = google_vpc_access_connector.connector.id
+        egress    = "PRIVATE_RANGES_ONLY" # Route to VM via private IP
+      }
+
+      service_account = google_service_account.slack_bot_staging.email
+    }
+  }
+
+  depends_on = [
+    google_compute_instance.neo4j_staging,
+  ]
+}
+
+# -----------------------------------------------------------------------------
 # Outputs
 # -----------------------------------------------------------------------------
 output "staging_slack_bot_url" {
@@ -450,7 +449,7 @@ output "staging_slack_bot_url" {
   description = "URL of the staging Slack bot Cloud Run service"
 }
 
-output "staging_neo4j_url" {
-  value       = google_cloud_run_v2_service.neo4j_staging.uri
-  description = "URL of the staging Neo4j Cloud Run service"
+output "staging_neo4j_ip" {
+  value       = google_compute_instance.neo4j_staging.network_interface[0].network_ip
+  description = "Internal IP of the staging Neo4j VM"
 }

@@ -182,9 +182,10 @@ class GraphitiClient:
         config = LLMConfig(
             api_key=settings.ANTHROPIC_API_KEY,
             model=settings.ANTHROPIC_MODEL,
+            max_tokens=8192,  # Claude 3.5 Haiku max output tokens
         )
 
-        return AnthropicClient(config=config)
+        return AnthropicClient(config=config, max_tokens=8192)
 
     def _get_embedder(self):
         """Get the embedder client for Graphiti vector operations.
