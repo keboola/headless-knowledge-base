@@ -89,9 +89,9 @@ class Settings(BaseSettings):
     SEARCH_TOP_K: int = 10  # Default number of results (still used)
     BM25_INDEX_PATH: str = "data/bm25_index.pkl"  # DEPRECATED: No longer used
 
-    # Graph Database (Graphiti + Kuzu/Neo4j)
-    GRAPH_BACKEND: str = "kuzu"  # "kuzu" (embedded, dev) or "neo4j" (production)
-    GRAPH_KUZU_PATH: str = "data/kuzu_graph"  # Directory for Kuzu embedded database
+    # Graph Database (Graphiti + Neo4j)
+    GRAPH_BACKEND: str = "neo4j"  # "neo4j" for all environments
+    GRAPH_KUZU_PATH: str = "data/kuzu_graph"  # DEPRECATED: Kuzu no longer used
     GRAPH_GROUP_ID: str = "default"  # Graphiti group ID for multi-tenancy
     # Neo4j settings (for production)
     NEO4J_URI: str = "bolt://localhost:7687"

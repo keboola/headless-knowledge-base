@@ -29,13 +29,11 @@ def chromadb_available():
     try:
         client = get_graphiti_client()
         # Try to verify connection is healthy
-        # For Kuzu (dev), this just checks if the client was created
-        # For Neo4j (prod), this would check the connection
         return True
     except Exception as e:
         pytest.skip(
             f"Graphiti not available: {e}. "
-            "Ensure GRAPH_ENABLE_GRAPHITI=true and Kuzu/Neo4j is accessible."
+            "Ensure GRAPH_ENABLE_GRAPHITI=true and Neo4j is accessible."
         )
 
 @pytest.fixture(scope="session")

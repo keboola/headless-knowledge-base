@@ -4,23 +4,20 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - CHROMA_HOST=chromadb
-      - CHROMA_PORT=8000
       - REDIS_URL=redis://redis:6379/0
       - LLM_PROVIDER=${LLM_PROVIDER:-claude}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-3-5-haiku-20241022}
       - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_LLM_MODEL=${OLLAMA_LLM_MODEL:-llama3.1:8b}
-      # Graphiti/Graph database settings
-      - GRAPH_BACKEND=${GRAPH_BACKEND:-kuzu}
-      - GRAPH_KUZU_PATH=/app/data/kuzu_graph
-      - GRAPH_ENABLE_GRAPHITI=${GRAPH_ENABLE_GRAPHITI:-false}
+      # Graphiti/Graph database settings (Neo4j only)
+      - GRAPH_BACKEND=neo4j
+      - GRAPH_ENABLE_GRAPHITI=true
       - NEO4J_URI=${NEO4J_URI:-bolt://neo4j:7687}
       - NEO4J_USER=${NEO4J_USER:-neo4j}
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
     depends_on:
-      chromadb:
+      neo4j:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -36,8 +33,6 @@ services:
     build: .
     command: ["python", "-m", "knowledge_base.slack.bot"]
     environment:
-      - CHROMA_HOST=chromadb
-      - CHROMA_PORT=8000
       - REDIS_URL=redis://redis:6379/0
       - LLM_PROVIDER=${LLM_PROVIDER:-claude}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
@@ -47,15 +42,14 @@ services:
       - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
       - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET}
       - SLACK_APP_TOKEN=${SLACK_APP_TOKEN}
-      # Graphiti/Graph database settings
-      - GRAPH_BACKEND=${GRAPH_BACKEND:-kuzu}
-      - GRAPH_KUZU_PATH=/app/data/kuzu_graph
-      - GRAPH_ENABLE_GRAPHITI=${GRAPH_ENABLE_GRAPHITI:-false}
+      # Graphiti/Graph database settings (Neo4j only)
+      - GRAPH_BACKEND=neo4j
+      - GRAPH_ENABLE_GRAPHITI=true
       - NEO4J_URI=${NEO4J_URI:-bolt://neo4j:7687}
       - NEO4J_USER=${NEO4J_USER:-neo4j}
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
     depends_on:
-      chromadb:
+      neo4j:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -63,24 +57,6 @@ services:
       - ./src:/app/src:ro
       - ./data:/app/data
       - ./knowledge_base.db:/app/knowledge_base.db
-    networks:
-      - backend
-    restart: unless-stopped
-
-  chromadb:
-    image: chromadb/chroma:latest
-    ports:
-      - "8001:8000"
-    volumes:
-      - chroma_data:/chroma/chroma
-    environment:
-      - ANONYMIZED_TELEMETRY=false
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
     networks:
       - backend
     restart: unless-stopped
@@ -150,12 +126,9 @@ services:
       - backend
     restart: unless-stopped
 
-  # Neo4j - Graph database for production Graphiti deployment
-  # Only starts with: docker compose --profile neo4j up
+  # Neo4j - Graph database for Graphiti (all environments)
   neo4j:
     image: neo4j:5.26-community
-    profiles:
-      - neo4j
     ports:
       - "7474:7474"  # HTTP browser interface
       - "7687:7687"  # Bolt protocol
@@ -178,7 +151,6 @@ services:
     restart: unless-stopped
 
 volumes:
-  chroma_data:
   redis_data:
   ollama_data:
   neo4j_data:
