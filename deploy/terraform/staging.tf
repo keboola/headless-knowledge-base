@@ -24,8 +24,9 @@ resource "google_cloud_run_v2_service" "neo4j_staging" {
     containers {
       image = "neo4j:5.26-community"
 
+      # Expose Bolt port for graph queries (Cloud Run maps external :443 to this)
       ports {
-        container_port = 7474
+        container_port = 7687
       }
 
       resources {
@@ -98,25 +99,16 @@ resource "google_cloud_run_v2_service" "neo4j_staging" {
       }
 
       # Note: Neo4j takes 60-90 seconds to start with GCS storage
+      # Using TCP probe on Bolt port since HTTP is not exposed
+      # Liveness probe removed - Cloud Run doesn't support TCP liveness probes
       startup_probe {
-        http_get {
-          path = "/"
-          port = 7474
+        tcp_socket {
+          port = 7687
         }
         initial_delay_seconds = 60
         period_seconds        = 10
         failure_threshold     = 30
         timeout_seconds       = 10
-      }
-
-      liveness_probe {
-        http_get {
-          path = "/"
-          port = 7474
-        }
-        period_seconds    = 30
-        timeout_seconds   = 5
-        failure_threshold = 3
       }
     }
 
@@ -240,7 +232,8 @@ resource "google_cloud_run_v2_service" "slack_bot_staging" {
 
       env {
         name  = "NEO4J_URI"
-        value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j_staging.uri, "https://", "")}"
+        # Cloud Run exposes services on port 443, so we need bolt+s://...:443
+        value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j_staging.uri, "https://", "")}:443"
       }
 
       env {

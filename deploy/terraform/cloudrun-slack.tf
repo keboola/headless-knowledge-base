@@ -62,9 +62,10 @@ resource "google_cloud_run_v2_service" "slack_bot" {
 
       # Neo4j connection - using internal Cloud Run URL
       # Note: Bolt protocol over HTTPS via Cloud Run's internal networking
+      # Cloud Run exposes services on port 443, so we need bolt+s://...:443
       env {
         name  = "NEO4J_URI"
-        value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j.uri, "https://", "")}"
+        value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j.uri, "https://", "")}:443"
       }
 
       env {

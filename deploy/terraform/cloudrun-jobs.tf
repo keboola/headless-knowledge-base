@@ -60,7 +60,7 @@ resource "google_cloud_run_v2_job" "confluence_sync" {
 
         env {
           name  = "NEO4J_URI"
-          value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j.uri, "https://", "")}"
+          value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j.uri, "https://", "")}:443"
         }
 
         env {
@@ -174,7 +174,7 @@ resource "google_cloud_run_v2_job" "index_rebuild" {
 
         env {
           name  = "NEO4J_URI"
-          value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j.uri, "https://", "")}"
+          value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j.uri, "https://", "")}:443"
         }
 
         env {
@@ -444,7 +444,7 @@ resource "google_cloud_run_v2_job" "pipeline" {
 
         env {
           name  = "NEO4J_URI"
-          value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j.uri, "https://", "")}"
+          value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j.uri, "https://", "")}:443"
         }
 
         env {
