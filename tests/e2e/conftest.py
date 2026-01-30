@@ -19,21 +19,60 @@ def chromadb_available():
 
     Note: This is still named chromadb_available for backward compatibility
     but now checks Graphiti.
+
+    IMPORTANT: Tests that require this fixture need:
+    1. GRAPH_ENABLE_GRAPHITI=true
+    2. ANTHROPIC_API_KEY set (for entity extraction)
+    3. Network access to Neo4j (not possible from GitHub Actions to VPC internal IPs)
     """
-    from knowledge_base.graph.graphiti_client import get_graphiti_client
     from knowledge_base.config import settings
 
     if not settings.GRAPH_ENABLE_GRAPHITI:
         pytest.skip("Graphiti is disabled in settings.")
 
+    # Check for Anthropic API key (required for entity extraction)
+    if not os.environ.get("ANTHROPIC_API_KEY") and not settings.ANTHROPIC_API_KEY:
+        pytest.skip(
+            "ANTHROPIC_API_KEY not available. "
+            "Graphiti requires this for entity extraction."
+        )
+
+    # Check for Neo4j connection by actually trying to create a client
     try:
-        client = get_graphiti_client()
-        # Try to verify connection is healthy
+        from knowledge_base.graph.graphiti_client import GraphitiClient, GraphitiClientError
+
+        # Create a new client instance (don't use singleton to avoid polluting other tests)
+        client = GraphitiClient()
+
+        # Try to actually connect - this will fail if Neo4j is not reachable
+        import asyncio
+        loop = asyncio.new_event_loop()
+        try:
+            # Use a short timeout to fail fast if Neo4j is not reachable
+            async def test_connection():
+                try:
+                    graphiti = await asyncio.wait_for(client.get_client(), timeout=10.0)
+                    return True
+                except asyncio.TimeoutError:
+                    raise GraphitiClientError("Connection to Neo4j timed out")
+                except Exception as e:
+                    raise GraphitiClientError(f"Failed to connect: {e}")
+                finally:
+                    # Clean up
+                    GraphitiClient.reset()
+
+            loop.run_until_complete(test_connection())
+        finally:
+            loop.close()
+
         return True
+
     except Exception as e:
         pytest.skip(
-            f"Graphiti not available: {e}. "
-            "Ensure GRAPH_ENABLE_GRAPHITI=true and Neo4j is accessible."
+            f"Graphiti/Neo4j not reachable: {e}. "
+            "These tests require network access to the staging Neo4j VM. "
+            "When running from GitHub Actions, the runner cannot reach VPC internal IPs. "
+            "Run these tests from within GCP VPC or with a local Neo4j instance."
         )
 
 @pytest.fixture(scope="session")

@@ -8,13 +8,26 @@ These tests verify that knowledge creation actually works end-to-end:
 
 Prerequisites:
 - Graphiti enabled (GRAPH_ENABLE_GRAPHITI=true)
+- Neo4j reachable from test environment
+- ANTHROPIC_API_KEY available
 - Bot has required permissions
+
+NOTE: These tests require direct network access to the staging Neo4j VM.
+When running from GitHub Actions (outside VPC), these tests are skipped
+because the GitHub runner cannot reach the VPC internal IP (10.0.0.x).
+
+To run these tests:
+1. Run from within GCP VPC (e.g., Cloud Shell, GCE instance)
+2. Or set up VPN/tunnel to staging VPC
+3. Or run integration tests locally with a local Neo4j instance
 """
 
 import pytest
 import asyncio
 import uuid
+import os
 from datetime import datetime
+from unittest.mock import MagicMock, AsyncMock, patch
 
 
 def create_test_chunk(unique_test_id: str, content: str, title: str, url: str, author: str = "e2e_test"):
