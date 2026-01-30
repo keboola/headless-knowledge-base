@@ -4,16 +4,16 @@ These tests verify that the quality scoring system actually affects
 search results - higher quality content should appear before lower
 quality content in bot responses.
 
-IMPORTANT ARCHITECTURAL NOTE (Post-Migration):
-- Quality scores are stored in ChromaDB (source of truth)
+IMPORTANT ARCHITECTURAL NOTE (Post-Graphiti Migration):
+- Quality scores are stored in Graphiti (source of truth)
 - Feedback records are stored in DuckDB (analytics only)
 - Tests mock the VectorIndexer to verify correct chunk creation
-- Tests mock ChromaDB client for quality score operations
+- Tests mock Graphiti builder for quality score operations
 
 These tests verify:
-1. Quality score CHANGES work correctly via ChromaDB
+1. Quality score CHANGES work correctly via Graphiti
 2. Feedback mechanism works correctly
-3. Search ranking based on ChromaDB quality scores
+3. Search ranking based on Graphiti quality scores
 """
 
 import pytest
@@ -113,22 +113,23 @@ class TestQualityBasedSearchRanking:
         mock_client.chat_update = MagicMock()
         mock_client.chat_postEphemeral = MagicMock()
 
-        # Track quality score changes through mocked ChromaDB
+        # Track quality score changes through mocked Graphiti
         quality_scores = {high_chunk_id: 100.0, low_chunk_id: 100.0}
 
         # Apply 3x incorrect feedback to significantly lower the score
-        with patch("knowledge_base.lifecycle.feedback.get_chroma_client") as mock_chroma:
-            mock_chroma_client = MagicMock()
+        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+            mock_builder = MagicMock()
 
             async def mock_get_score(chunk_id):
                 return quality_scores.get(chunk_id, 100.0)
 
-            async def mock_update_score(chunk_id, new_score, increment_feedback_count=False):
+            async def mock_update_quality(chunk_id, new_score, increment_feedback_count=False):
                 quality_scores[chunk_id] = new_score
+                return True
 
-            mock_chroma_client.get_quality_score = AsyncMock(side_effect=mock_get_score)
-            mock_chroma_client.update_quality_score = AsyncMock(side_effect=mock_update_score)
-            mock_chroma.return_value = mock_chroma_client
+            mock_builder.get_chunk_quality_score = AsyncMock(side_effect=mock_get_score)
+            mock_builder.update_chunk_quality = AsyncMock(side_effect=mock_update_quality)
+            mock_builder_fn.return_value = mock_builder
 
             for i in range(3):
                 fake_ts = f"demote_{unique_topic}_{i}"
@@ -225,20 +226,21 @@ class TestQualityBasedSearchRanking:
         mock_client.chat_update = MagicMock()
         mock_client.chat_postEphemeral = MagicMock()
 
-        with patch("knowledge_base.lifecycle.feedback.get_chroma_client") as mock_chroma:
-            mock_chroma_client = MagicMock()
+        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+            mock_builder = MagicMock()
 
             async def mock_get_score(chunk_id):
                 nonlocal quality_score
                 return quality_score
 
-            async def mock_update_score(chunk_id, new_score, increment_feedback_count=False):
+            async def mock_update_quality(chunk_id, new_score, increment_feedback_count=False):
                 nonlocal quality_score
                 quality_score = new_score
+                return True
 
-            mock_chroma_client.get_quality_score = AsyncMock(side_effect=mock_get_score)
-            mock_chroma_client.update_quality_score = AsyncMock(side_effect=mock_update_score)
-            mock_chroma.return_value = mock_chroma_client
+            mock_builder.get_chunk_quality_score = AsyncMock(side_effect=mock_get_score)
+            mock_builder.update_chunk_quality = AsyncMock(side_effect=mock_update_quality)
+            mock_builder_fn.return_value = mock_builder
 
             for i in range(4):
                 fake_ts = f"heavy_demote_{unique_id}_{i}"
@@ -337,19 +339,20 @@ class TestQualityBasedSearchRanking:
         mock_client.chat_update = MagicMock()
         mock_client.chat_postEphemeral = MagicMock()
 
-        with patch("knowledge_base.lifecycle.feedback.get_chroma_client") as mock_chroma:
-            mock_chroma_client = MagicMock()
+        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+            mock_builder = MagicMock()
 
             async def mock_get_score(chunk_id):
                 return quality_score
 
-            async def mock_update_score(chunk_id, new_score, increment_feedback_count=False):
+            async def mock_update_quality(chunk_id, new_score, increment_feedback_count=False):
                 nonlocal quality_score
                 quality_score = min(new_score, 100.0)  # Cap at 100
+                return True
 
-            mock_chroma_client.get_quality_score = AsyncMock(side_effect=mock_get_score)
-            mock_chroma_client.update_quality_score = AsyncMock(side_effect=mock_update_score)
-            mock_chroma.return_value = mock_chroma_client
+            mock_builder.get_chunk_quality_score = AsyncMock(side_effect=mock_get_score)
+            mock_builder.update_chunk_quality = AsyncMock(side_effect=mock_update_quality)
+            mock_builder_fn.return_value = mock_builder
 
             for i in range(5):
                 fake_ts = f"promote_{unique_topic}_{i}"

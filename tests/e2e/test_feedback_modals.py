@@ -424,7 +424,7 @@ class TestOwnerNotification:
 
     @pytest.mark.asyncio
     async def test_notify_owner_success_sends_dm(self):
-        """Should send DM to owner when found."""
+        """Should send DM to owner when found, AND send to admin channel."""
         mock_client = MagicMock()
         mock_client.users_lookupByEmail.return_value = {
             "ok": True,
@@ -434,51 +434,58 @@ class TestOwnerNotification:
 
         with patch("knowledge_base.slack.owner_notification.get_owner_email_for_chunks", new_callable=AsyncMock) as mock_get_email:
             with patch("knowledge_base.slack.owner_notification._get_feedback_context", new_callable=AsyncMock) as mock_context:
-                mock_get_email.return_value = "owner@example.com"
-                mock_context.return_value = {"query": "Test query", "source_titles": ["Doc 1"]}
+                with patch("knowledge_base.slack.owner_notification.ADMIN_CHANNEL", "#test-admins"):
+                    with patch("knowledge_base.slack.owner_notification._get_admin_channel_id", new_callable=AsyncMock) as mock_admin_id:
+                        mock_get_email.return_value = "owner@example.com"
+                        mock_context.return_value = {"query": "Test query", "source_titles": ["Doc 1"]}
+                        mock_admin_id.return_value = "C_ADMIN_TEST"
 
-                result = await notify_content_owner(
-                    client=mock_client,
-                    chunk_ids=["chunk_1"],
-                    feedback_type="incorrect",
-                    issue_description="Something is wrong",
-                    suggested_correction="Here's the fix",
-                    reporter_id="U_REPORTER",
-                    channel_id="C_TEST",
-                    message_ts="1234567890.123456",
-                )
+                        result = await notify_content_owner(
+                            client=mock_client,
+                            chunk_ids=["chunk_1"],
+                            feedback_type="incorrect",
+                            issue_description="Something is wrong",
+                            suggested_correction="Here's the fix",
+                            reporter_id="U_REPORTER",
+                            channel_id="C_TEST",
+                            message_ts="1234567890.123456",
+                        )
 
         assert result is True
-        mock_client.chat_postMessage.assert_called_once()
-        call_kwargs = mock_client.chat_postMessage.call_args.kwargs
-        assert call_kwargs["channel"] == "U_OWNER_123"  # DM to owner
+        # Now it sends to BOTH owner DM AND admin channel
+        assert mock_client.chat_postMessage.call_count == 2
+        # First call should be to owner DM
+        first_call_kwargs = mock_client.chat_postMessage.call_args_list[0].kwargs
+        assert first_call_kwargs["channel"] == "U_OWNER_123"  # DM to owner
+        # Second call should be to admin channel
+        second_call_kwargs = mock_client.chat_postMessage.call_args_list[1].kwargs
+        assert second_call_kwargs["channel"] == "C_ADMIN_TEST"  # Admin channel
 
     @pytest.mark.asyncio
     async def test_notify_owner_fallback_to_admin_channel(self):
-        """Should fall back to admin channel when owner not found."""
+        """Should send to admin channel when owner not found."""
         mock_client = MagicMock()
-        mock_client.conversations_list.return_value = {
-            "channels": [{"name": "knowledge-admins", "id": "C_ADMIN"}]
-        }
         mock_client.chat_postMessage = MagicMock()
 
         with patch("knowledge_base.slack.owner_notification.get_owner_email_for_chunks", new_callable=AsyncMock) as mock_get_email:
             with patch("knowledge_base.slack.owner_notification._get_feedback_context", new_callable=AsyncMock) as mock_context:
-                mock_get_email.return_value = None  # No owner
-                mock_context.return_value = {"query": "Test query", "source_titles": []}
+                with patch("knowledge_base.slack.owner_notification._get_admin_channel_id", new_callable=AsyncMock) as mock_admin_id:
+                    mock_get_email.return_value = None  # No owner
+                    mock_context.return_value = {"query": "Test query", "source_titles": []}
+                    mock_admin_id.return_value = "C_ADMIN"
 
-                result = await notify_content_owner(
-                    client=mock_client,
-                    chunk_ids=["chunk_1"],
-                    feedback_type="outdated",
-                    issue_description="Content is old",
-                    suggested_correction=None,
-                    reporter_id="U_REPORTER",
-                    channel_id="C_TEST",
-                    message_ts="1234567890.123456",
-                )
+                    result = await notify_content_owner(
+                        client=mock_client,
+                        chunk_ids=["chunk_1"],
+                        feedback_type="outdated",
+                        issue_description="Content is old",
+                        suggested_correction=None,
+                        reporter_id="U_REPORTER",
+                        channel_id="C_TEST",
+                        message_ts="1234567890.123456",
+                    )
 
-        assert result is False  # Owner not notified
+        assert result is False  # Owner not notified (only admin channel)
         mock_client.chat_postMessage.assert_called_once()
         call_kwargs = mock_client.chat_postMessage.call_args.kwargs
         assert call_kwargs["channel"] == "C_ADMIN"  # Admin channel

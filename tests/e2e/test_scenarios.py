@@ -308,12 +308,12 @@ class TestFeedbackLoop:
         fake_ts = f"helpful_test_{unique_id}"
         pending_feedback[fake_ts] = [chunk_id]
 
-        # Mock ChromaDB for feedback
-        with patch("knowledge_base.lifecycle.feedback.get_chroma_client") as mock_chroma:
-            mock_chroma_client = MagicMock()
-            mock_chroma_client.get_quality_score = AsyncMock(return_value=100.0)
-            mock_chroma_client.update_quality_score = AsyncMock()
-            mock_chroma.return_value = mock_chroma_client
+        # Mock Graphiti for feedback
+        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+            mock_builder = MagicMock()
+            mock_builder.get_chunk_quality_score = AsyncMock(return_value=100.0)
+            mock_builder.update_chunk_quality = AsyncMock(return_value=True)
+            mock_builder_fn.return_value = mock_builder
 
             # User clicks "Helpful"
             feedback_body = {
@@ -370,19 +370,20 @@ class TestFeedbackLoop:
         fake_ts = f"outdated_test_{unique_id}"
         pending_feedback[fake_ts] = [chunk_id]
 
-        with patch("knowledge_base.lifecycle.feedback.get_chroma_client") as mock_chroma:
-            mock_chroma_client = MagicMock()
+        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+            mock_builder = MagicMock()
 
             async def mock_get_score(chunk_id):
                 return quality_score
 
-            async def mock_update_score(chunk_id, new_score, increment_feedback_count=False):
+            async def mock_update_quality(chunk_id, new_score, increment_feedback_count=False):
                 nonlocal quality_score
                 quality_score = new_score
+                return True
 
-            mock_chroma_client.get_quality_score = AsyncMock(side_effect=mock_get_score)
-            mock_chroma_client.update_quality_score = AsyncMock(side_effect=mock_update_score)
-            mock_chroma.return_value = mock_chroma_client
+            mock_builder.get_chunk_quality_score = AsyncMock(side_effect=mock_get_score)
+            mock_builder.update_chunk_quality = AsyncMock(side_effect=mock_update_quality)
+            mock_builder_fn.return_value = mock_builder
 
             feedback_body = {
                 "user": {"id": "U_REPORTER"},
@@ -435,19 +436,20 @@ class TestFeedbackLoop:
         fake_ts = f"incorrect_test_{unique_id}"
         pending_feedback[fake_ts] = [chunk_id]
 
-        with patch("knowledge_base.lifecycle.feedback.get_chroma_client") as mock_chroma:
-            mock_chroma_client = MagicMock()
+        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+            mock_builder = MagicMock()
 
             async def mock_get_score(chunk_id):
                 return quality_score
 
-            async def mock_update_score(chunk_id, new_score, increment_feedback_count=False):
+            async def mock_update_quality(chunk_id, new_score, increment_feedback_count=False):
                 nonlocal quality_score
                 quality_score = new_score
+                return True
 
-            mock_chroma_client.get_quality_score = AsyncMock(side_effect=mock_get_score)
-            mock_chroma_client.update_quality_score = AsyncMock(side_effect=mock_update_score)
-            mock_chroma.return_value = mock_chroma_client
+            mock_builder.get_chunk_quality_score = AsyncMock(side_effect=mock_get_score)
+            mock_builder.update_chunk_quality = AsyncMock(side_effect=mock_update_quality)
+            mock_builder_fn.return_value = mock_builder
 
             feedback_body = {
                 "user": {"id": "U_REPORTER"},
@@ -683,12 +685,12 @@ class TestQualityRanking:
             chunk_data = call_args[0][0]
             chunk_id = chunk_data.chunk_id
 
-        # Mock ChromaDB for feedback
-        with patch("knowledge_base.lifecycle.feedback.get_chroma_client") as mock_chroma:
-            mock_chroma_client = MagicMock()
-            mock_chroma_client.get_quality_score = AsyncMock(return_value=100.0)
-            mock_chroma_client.update_quality_score = AsyncMock()
-            mock_chroma.return_value = mock_chroma_client
+        # Mock Graphiti for feedback
+        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+            mock_builder = MagicMock()
+            mock_builder.get_chunk_quality_score = AsyncMock(return_value=100.0)
+            mock_builder.update_chunk_quality = AsyncMock(return_value=True)
+            mock_builder_fn.return_value = mock_builder
 
             # Multiple users mark as helpful
             for i in range(3):
@@ -746,19 +748,20 @@ class TestQualityRanking:
         # Track quality score
         quality_score = 100.0
 
-        with patch("knowledge_base.lifecycle.feedback.get_chroma_client") as mock_chroma:
-            mock_chroma_client = MagicMock()
+        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+            mock_builder = MagicMock()
 
             async def mock_get_score(chunk_id):
                 return quality_score
 
-            async def mock_update_score(chunk_id, new_score, increment_feedback_count=False):
+            async def mock_update_quality(chunk_id, new_score, increment_feedback_count=False):
                 nonlocal quality_score
                 quality_score = new_score
+                return True
 
-            mock_chroma_client.get_quality_score = AsyncMock(side_effect=mock_get_score)
-            mock_chroma_client.update_quality_score = AsyncMock(side_effect=mock_update_score)
-            mock_chroma.return_value = mock_chroma_client
+            mock_builder.get_chunk_quality_score = AsyncMock(side_effect=mock_get_score)
+            mock_builder.update_chunk_quality = AsyncMock(side_effect=mock_update_quality)
+            mock_builder_fn.return_value = mock_builder
 
             # Multiple users mark as incorrect
             for i in range(2):
@@ -888,19 +891,20 @@ class TestRealisticUserJourneys:
         # Track quality score changes
         old_quality_score = 100.0
 
-        with patch("knowledge_base.lifecycle.feedback.get_chroma_client") as mock_chroma:
-            mock_chroma_client = MagicMock()
+        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+            mock_builder = MagicMock()
 
             async def mock_get_score(chunk_id):
                 return old_quality_score
 
-            async def mock_update_score(chunk_id, new_score, increment_feedback_count=False):
+            async def mock_update_quality(chunk_id, new_score, increment_feedback_count=False):
                 nonlocal old_quality_score
                 old_quality_score = new_score
+                return True
 
-            mock_chroma_client.get_quality_score = AsyncMock(side_effect=mock_get_score)
-            mock_chroma_client.update_quality_score = AsyncMock(side_effect=mock_update_score)
-            mock_chroma.return_value = mock_chroma_client
+            mock_builder.get_chunk_quality_score = AsyncMock(side_effect=mock_get_score)
+            mock_builder.update_chunk_quality = AsyncMock(side_effect=mock_update_quality)
+            mock_builder_fn.return_value = mock_builder
 
             # Step 2: Users find it helpful
             for i in range(2):
@@ -1330,12 +1334,12 @@ class TestKnowledgeAdminEscalation:
             chunk_data = call_args[0][0]
             chunk_id = chunk_data.chunk_id
 
-        # Mock ChromaDB for feedback
-        with patch("knowledge_base.lifecycle.feedback.get_chroma_client") as mock_chroma:
-            mock_chroma_client = MagicMock()
-            mock_chroma_client.get_quality_score = AsyncMock(return_value=100.0)
-            mock_chroma_client.update_quality_score = AsyncMock()
-            mock_chroma.return_value = mock_chroma_client
+        # Mock Graphiti for feedback
+        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+            mock_builder = MagicMock()
+            mock_builder.get_chunk_quality_score = AsyncMock(return_value=100.0)
+            mock_builder.update_chunk_quality = AsyncMock(return_value=True)
+            mock_builder_fn.return_value = mock_builder
 
             # User marks as incorrect
             fake_ts = f"incorrect_admin_{unique_id}"
@@ -1479,19 +1483,20 @@ class TestKnowledgeAdminEscalation:
         # Track quality score
         quality_score = 100.0
 
-        with patch("knowledge_base.lifecycle.feedback.get_chroma_client") as mock_chroma:
-            mock_chroma_client = MagicMock()
+        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+            mock_builder = MagicMock()
 
             async def mock_get_score(chunk_id):
                 return quality_score
 
-            async def mock_update_score(chunk_id, new_score, increment_feedback_count=False):
+            async def mock_update_quality(chunk_id, new_score, increment_feedback_count=False):
                 nonlocal quality_score
                 quality_score = new_score
+                return True
 
-            mock_chroma_client.get_quality_score = AsyncMock(side_effect=mock_get_score)
-            mock_chroma_client.update_quality_score = AsyncMock(side_effect=mock_update_score)
-            mock_chroma.return_value = mock_chroma_client
+            mock_builder.get_chunk_quality_score = AsyncMock(side_effect=mock_get_score)
+            mock_builder.update_chunk_quality = AsyncMock(side_effect=mock_update_quality)
+            mock_builder_fn.return_value = mock_builder
 
             # Multiple users report as incorrect
             reporters = ["U_REPORTER_1", "U_REPORTER_2", "U_REPORTER_3"]

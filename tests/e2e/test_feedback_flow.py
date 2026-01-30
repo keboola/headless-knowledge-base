@@ -81,7 +81,7 @@ async def test_complete_feedback_lifecycle(slack_client, db_session, e2e_config)
     fake_message_ts = "1234567890.123456"
     pending_feedback[fake_message_ts] = [chunk_id]
 
-    # 4. Simulate "Helpful" Feedback with ChromaDB mock
+    # 4. Simulate "Helpful" Feedback with Graphiti mock
     helpful_body = {
         "user": {"id": "U_TEST_USER"},
         "actions": [{"action_id": f"feedback_helpful_{fake_message_ts}"}],
@@ -93,12 +93,12 @@ async def test_complete_feedback_lifecycle(slack_client, db_session, e2e_config)
     mock_client.chat_update = MagicMock()
     mock_client.chat_postEphemeral = MagicMock()
 
-    # Mock ChromaDB for feedback quality updates
-    with patch("knowledge_base.lifecycle.feedback.get_chroma_client") as mock_chroma:
-        mock_chroma_client = MagicMock()
-        mock_chroma_client.get_quality_score = AsyncMock(return_value=100.0)
-        mock_chroma_client.update_quality_score = AsyncMock()
-        mock_chroma.return_value = mock_chroma_client
+    # Mock Graphiti for feedback quality updates
+    with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+        mock_builder = MagicMock()
+        mock_builder.get_chunk_quality_score = AsyncMock(return_value=100.0)
+        mock_builder.update_chunk_quality = AsyncMock(return_value=True)
+        mock_builder_fn.return_value = mock_builder
 
         await _handle_feedback_action(helpful_body, mock_client)
 
@@ -109,15 +109,15 @@ async def test_complete_feedback_lifecycle(slack_client, db_session, e2e_config)
     # Test with lower initial score - mock returns 90.0
     pending_feedback[fake_message_ts] = [chunk_id]
 
-    with patch("knowledge_base.lifecycle.feedback.get_chroma_client") as mock_chroma:
-        mock_chroma_client = MagicMock()
-        mock_chroma_client.get_quality_score = AsyncMock(return_value=90.0)
-        mock_chroma_client.update_quality_score = AsyncMock()
-        mock_chroma.return_value = mock_chroma_client
+    with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+        mock_builder = MagicMock()
+        mock_builder.get_chunk_quality_score = AsyncMock(return_value=90.0)
+        mock_builder.update_chunk_quality = AsyncMock(return_value=True)
+        mock_builder_fn.return_value = mock_builder
 
         await _handle_feedback_action(helpful_body, mock_client)
-        # Verify ChromaDB update was called with increased score
-        mock_chroma_client.update_quality_score.assert_called()
+        # Verify Graphiti update was called with increased score
+        mock_builder.update_chunk_quality.assert_called()
 
     # 6. Simulate "Incorrect" Feedback (incorrect = -25)
     incorrect_body = {
@@ -129,15 +129,15 @@ async def test_complete_feedback_lifecycle(slack_client, db_session, e2e_config)
     # Re-populate pending_feedback
     pending_feedback[fake_message_ts] = [chunk_id]
 
-    with patch("knowledge_base.lifecycle.feedback.get_chroma_client") as mock_chroma:
-        mock_chroma_client = MagicMock()
-        mock_chroma_client.get_quality_score = AsyncMock(return_value=92.0)
-        mock_chroma_client.update_quality_score = AsyncMock()
-        mock_chroma.return_value = mock_chroma_client
+    with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+        mock_builder = MagicMock()
+        mock_builder.get_chunk_quality_score = AsyncMock(return_value=92.0)
+        mock_builder.update_chunk_quality = AsyncMock(return_value=True)
+        mock_builder_fn.return_value = mock_builder
 
         await _handle_feedback_action(incorrect_body, mock_client)
         # Verify quality score update was called
-        mock_chroma_client.update_quality_score.assert_called()
+        mock_builder.update_chunk_quality.assert_called()
 
     # 7. Verify both feedback records exist in analytics database
     feedbacks = await get_feedback_for_chunk(chunk_id)
@@ -189,14 +189,14 @@ async def test_feedback_on_multiple_chunks(slack_client, db_session, e2e_config)
     mock_client.chat_update = MagicMock()
     mock_client.chat_postEphemeral = MagicMock()
 
-    # Mock ChromaDB for quality score updates
-    with patch("knowledge_base.lifecycle.feedback.get_chroma_client") as mock_chroma:
-        mock_chroma_client = MagicMock()
-        mock_chroma_client.get_quality_score = AsyncMock(return_value=100.0)
-        mock_chroma_client.update_quality_score = AsyncMock()
-        mock_chroma.return_value = mock_chroma_client
+    # Mock Graphiti for quality score updates
+    with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+        mock_builder = MagicMock()
+        mock_builder.get_chunk_quality_score = AsyncMock(return_value=100.0)
+        mock_builder.update_chunk_quality = AsyncMock(return_value=True)
+        mock_builder_fn.return_value = mock_builder
 
         await _handle_feedback_action(body, mock_client)
 
-        # Verify ChromaDB update was called for each chunk
-        assert mock_chroma_client.update_quality_score.call_count == len(chunk_ids)
+        # Verify Graphiti update was called for each chunk
+        assert mock_builder.update_chunk_quality.call_count == len(chunk_ids)
