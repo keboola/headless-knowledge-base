@@ -140,6 +140,9 @@ jobs:
       NEO4J_URI: ${{ secrets.NEO4J_STAGING_URI }}
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: ${{ secrets.NEO4J_STAGING_PASSWORD }}
+      # Anthropic API for Graphiti entity extraction
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_MODEL: claude-sonnet-4-20250514
       # Vertex AI for embeddings
       EMBEDDING_PROVIDER: vertex-ai
       VERTEX_AI_PROJECT: ai-knowledge-base-42

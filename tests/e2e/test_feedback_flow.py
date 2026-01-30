@@ -94,7 +94,7 @@ async def test_complete_feedback_lifecycle(slack_client, db_session, e2e_config)
     mock_client.chat_postEphemeral = MagicMock()
 
     # Mock Graphiti for feedback quality updates
-    with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+    with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
         mock_builder = MagicMock()
         mock_builder.get_chunk_quality_score = AsyncMock(return_value=100.0)
         mock_builder.update_chunk_quality = AsyncMock(return_value=True)
@@ -109,7 +109,7 @@ async def test_complete_feedback_lifecycle(slack_client, db_session, e2e_config)
     # Test with lower initial score - mock returns 90.0
     pending_feedback[fake_message_ts] = [chunk_id]
 
-    with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+    with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
         mock_builder = MagicMock()
         mock_builder.get_chunk_quality_score = AsyncMock(return_value=90.0)
         mock_builder.update_chunk_quality = AsyncMock(return_value=True)
@@ -129,7 +129,7 @@ async def test_complete_feedback_lifecycle(slack_client, db_session, e2e_config)
     # Re-populate pending_feedback
     pending_feedback[fake_message_ts] = [chunk_id]
 
-    with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+    with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
         mock_builder = MagicMock()
         mock_builder.get_chunk_quality_score = AsyncMock(return_value=92.0)
         mock_builder.update_chunk_quality = AsyncMock(return_value=True)
@@ -190,7 +190,7 @@ async def test_feedback_on_multiple_chunks(slack_client, db_session, e2e_config)
     mock_client.chat_postEphemeral = MagicMock()
 
     # Mock Graphiti for quality score updates
-    with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+    with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
         mock_builder = MagicMock()
         mock_builder.get_chunk_quality_score = AsyncMock(return_value=100.0)
         mock_builder.update_chunk_quality = AsyncMock(return_value=True)

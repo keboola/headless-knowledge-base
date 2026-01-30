@@ -309,7 +309,7 @@ class TestFeedbackLoop:
         pending_feedback[fake_ts] = [chunk_id]
 
         # Mock Graphiti for feedback
-        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+        with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
             mock_builder = MagicMock()
             mock_builder.get_chunk_quality_score = AsyncMock(return_value=100.0)
             mock_builder.update_chunk_quality = AsyncMock(return_value=True)
@@ -370,7 +370,7 @@ class TestFeedbackLoop:
         fake_ts = f"outdated_test_{unique_id}"
         pending_feedback[fake_ts] = [chunk_id]
 
-        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+        with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
             mock_builder = MagicMock()
 
             async def mock_get_score(chunk_id):
@@ -436,7 +436,7 @@ class TestFeedbackLoop:
         fake_ts = f"incorrect_test_{unique_id}"
         pending_feedback[fake_ts] = [chunk_id]
 
-        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+        with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
             mock_builder = MagicMock()
 
             async def mock_get_score(chunk_id):
@@ -686,7 +686,7 @@ class TestQualityRanking:
             chunk_id = chunk_data.chunk_id
 
         # Mock Graphiti for feedback
-        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+        with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
             mock_builder = MagicMock()
             mock_builder.get_chunk_quality_score = AsyncMock(return_value=100.0)
             mock_builder.update_chunk_quality = AsyncMock(return_value=True)
@@ -748,7 +748,7 @@ class TestQualityRanking:
         # Track quality score
         quality_score = 100.0
 
-        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+        with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
             mock_builder = MagicMock()
 
             async def mock_get_score(chunk_id):
@@ -891,7 +891,7 @@ class TestRealisticUserJourneys:
         # Track quality score changes
         old_quality_score = 100.0
 
-        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+        with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
             mock_builder = MagicMock()
 
             async def mock_get_score(chunk_id):
@@ -1335,7 +1335,7 @@ class TestKnowledgeAdminEscalation:
             chunk_id = chunk_data.chunk_id
 
         # Mock Graphiti for feedback
-        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+        with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
             mock_builder = MagicMock()
             mock_builder.get_chunk_quality_score = AsyncMock(return_value=100.0)
             mock_builder.update_chunk_quality = AsyncMock(return_value=True)
@@ -1483,7 +1483,7 @@ class TestKnowledgeAdminEscalation:
         # Track quality score
         quality_score = 100.0
 
-        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+        with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
             mock_builder = MagicMock()
 
             async def mock_get_score(chunk_id):

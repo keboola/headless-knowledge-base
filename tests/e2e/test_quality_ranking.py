@@ -117,7 +117,7 @@ class TestQualityBasedSearchRanking:
         quality_scores = {high_chunk_id: 100.0, low_chunk_id: 100.0}
 
         # Apply 3x incorrect feedback to significantly lower the score
-        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+        with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
             mock_builder = MagicMock()
 
             async def mock_get_score(chunk_id):
@@ -226,7 +226,7 @@ class TestQualityBasedSearchRanking:
         mock_client.chat_update = MagicMock()
         mock_client.chat_postEphemeral = MagicMock()
 
-        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+        with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
             mock_builder = MagicMock()
 
             async def mock_get_score(chunk_id):
@@ -339,7 +339,7 @@ class TestQualityBasedSearchRanking:
         mock_client.chat_update = MagicMock()
         mock_client.chat_postEphemeral = MagicMock()
 
-        with patch("knowledge_base.lifecycle.feedback.get_graphiti_builder") as mock_builder_fn:
+        with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
             mock_builder = MagicMock()
 
             async def mock_get_score(chunk_id):
