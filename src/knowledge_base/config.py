@@ -50,7 +50,9 @@ class Settings(BaseSettings):
 
     # Anthropic (Claude)
     ANTHROPIC_API_KEY: str = ""
-    ANTHROPIC_MODEL: str = "claude-3-5-haiku-20241022"  # Cheap model for development
+    # Using Sonnet for Graphiti entity extraction - Haiku doesn't support the max_tokens
+    # that graphiti-core internally uses (16384). Sonnet is more expensive but works.
+    ANTHROPIC_MODEL: str = "claude-sonnet-4-20250514"
     METADATA_BATCH_SIZE: int = 10
 
     # Confluence
