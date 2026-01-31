@@ -413,6 +413,13 @@ resource "google_cloud_run_v2_job" "confluence_sync_staging" {
           value = var.region
         }
 
+        # Enable Vertex AI authentication for Gemini (uses service account)
+        env {
+          name  = "GOOGLE_GENAI_USE_VERTEXAI"
+          value = "true"
+        }
+
+        # Keep Anthropic key as fallback (optional)
         env {
           name = "ANTHROPIC_API_KEY"
           value_source {

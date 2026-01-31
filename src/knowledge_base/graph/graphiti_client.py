@@ -169,15 +169,40 @@ class GraphitiClient:
     def _get_llm_client(self):
         """Get the LLM client for Graphiti entity extraction.
 
-        Uses the same Anthropic configuration as the rest of the application.
+        Supports multiple LLM providers:
+        - 'claude'/'anthropic': Uses Anthropic Claude API
+        - 'gemini': Uses Google Gemini API
+
+        Falls back based on available credentials.
         """
-        from graphiti_core.llm_client.anthropic_client import AnthropicClient
         from graphiti_core.llm_client import LLMConfig
 
-        if not settings.ANTHROPIC_API_KEY:
-            raise GraphitiClientError(
-                "ANTHROPIC_API_KEY is required for Graphiti entity extraction"
-            )
+        llm_provider = settings.LLM_PROVIDER.lower()
+
+        # Try Gemini if explicitly configured or as fallback
+        if llm_provider == "gemini":
+            return self._get_gemini_client()
+
+        # Try Anthropic
+        if llm_provider in ("claude", "anthropic", ""):
+            if settings.ANTHROPIC_API_KEY:
+                return self._get_anthropic_client()
+            else:
+                # Fall back to Gemini if Anthropic key not available
+                logger.warning(
+                    "ANTHROPIC_API_KEY not set, falling back to Gemini for entity extraction"
+                )
+                return self._get_gemini_client()
+
+        raise GraphitiClientError(
+            f"Unsupported LLM_PROVIDER: {llm_provider}. "
+            "Use 'claude', 'anthropic', or 'gemini'."
+        )
+
+    def _get_anthropic_client(self):
+        """Get Anthropic Claude client for Graphiti."""
+        from graphiti_core.llm_client.anthropic_client import AnthropicClient
+        from graphiti_core.llm_client import LLMConfig
 
         config = LLMConfig(
             api_key=settings.ANTHROPIC_API_KEY,
@@ -186,6 +211,64 @@ class GraphitiClient:
         )
 
         return AnthropicClient(config=config, max_tokens=8192)
+
+    def _get_gemini_client(self):
+        """Get Google Gemini client for Graphiti.
+
+        Requires google-genai package: pip install graphiti-core[google-genai]
+
+        Supports two authentication modes:
+        1. GOOGLE_API_KEY: Direct API key for consumer Gemini API
+        2. Vertex AI: Use service account credentials in GCP environment
+           Set GOOGLE_GENAI_USE_VERTEXAI=true for this mode
+
+        In Cloud Run, the service account credentials are automatically available.
+        """
+        try:
+            from graphiti_core.llm_client.gemini_client import GeminiClient
+            from graphiti_core.llm_client import LLMConfig
+        except ImportError as e:
+            raise GraphitiClientError(
+                "Gemini client requires google-genai package. "
+                "Install with: pip install graphiti-core[google-genai]"
+            ) from e
+
+        # Check for Google API key (direct API access)
+        google_api_key = os.environ.get("GOOGLE_API_KEY", "")
+
+        # Check for Vertex AI mode (uses service account auth)
+        use_vertex_ai = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in ("true", "1", "yes")
+
+        # In GCP (Cloud Run), we can use Vertex AI with service account
+        if settings.is_gcp_deployment and not google_api_key:
+            # Enable Vertex AI mode automatically in GCP
+            os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
+            os.environ["GOOGLE_CLOUD_PROJECT"] = settings.GCP_PROJECT_ID or settings.VERTEX_AI_PROJECT
+            os.environ["GOOGLE_CLOUD_LOCATION"] = settings.VERTEX_AI_LOCATION
+            use_vertex_ai = True
+            logger.info(
+                f"Using Vertex AI authentication for Gemini "
+                f"(project: {settings.GCP_PROJECT_ID}, location: {settings.VERTEX_AI_LOCATION})"
+            )
+
+        if not google_api_key and not use_vertex_ai:
+            raise GraphitiClientError(
+                "Gemini LLM requires either GOOGLE_API_KEY or Vertex AI configuration. "
+                "In GCP, set GOOGLE_GENAI_USE_VERTEXAI=true to use service account auth. "
+                "Otherwise, set GOOGLE_API_KEY for direct API access."
+            )
+
+        model = settings.VERTEX_AI_LLM_MODEL or "gemini-2.0-flash"
+
+        # Create config - api_key may be empty for Vertex AI mode
+        config = LLMConfig(
+            api_key=google_api_key or "vertex-ai-mode",  # Placeholder for Vertex AI
+            model=model,
+            max_tokens=8192,
+        )
+
+        logger.info(f"Using Gemini LLM client with model: {model} (Vertex AI: {use_vertex_ai})")
+        return GeminiClient(config=config, max_tokens=8192)
 
     def _get_embedder(self):
         """Get the embedder client for Graphiti vector operations.

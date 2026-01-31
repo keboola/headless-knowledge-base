@@ -34,7 +34,9 @@ dependencies = [
     "cryptography>=42.0.0",
     # Graph database - Graphiti framework with Kuzu (embedded) and Neo4j (production) backends
     # Pinned to 0.26.3 to avoid DEFAULT_MAX_TOKENS changes that break Claude 3.5 Haiku (8192 max)
-    "graphiti-core[anthropic]==0.26.3",
+    # Install with both anthropic and google-genai extras for provider flexibility
+    "graphiti-core[anthropic,google-genai]==0.26.3",
+    "google-genai>=1.0.0",  # For Gemini LLM client in Graphiti
     "kuzu>=0.4.0",
     "neo4j>=5.26.0",
 ]
