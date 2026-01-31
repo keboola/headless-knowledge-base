@@ -143,12 +143,14 @@ class GraphitiBuilder:
             if topics:
                 await self._add_topic_relationships(graphiti, page_id, topics, event_time)
 
-            logger.info(f"Processed document {page_id} with Graphiti (episode: {episode.uuid})")
+            # add_episode returns AddEpisodeResults which has .episode (EpisodicNode)
+            episode_uuid = episode.episode.uuid if hasattr(episode, 'episode') else getattr(episode, 'uuid', 'unknown')
+            logger.info(f"Processed document {page_id} with Graphiti (episode: {episode_uuid})")
 
             return {
                 "success": True,
                 "page_id": page_id,
-                "episode_id": str(episode.uuid),
+                "episode_id": str(episode_uuid),
                 "event_time": event_time.isoformat(),
             }
 
@@ -478,12 +480,14 @@ class GraphitiBuilder:
                 group_id=self.group_id,
             )
 
-            logger.debug(f"Added chunk episode: {chunk_id} -> {episode.uuid}")
+            # add_episode returns AddEpisodeResults which has .episode (EpisodicNode)
+            episode_uuid = episode.episode.uuid if hasattr(episode, 'episode') else getattr(episode, 'uuid', 'unknown')
+            logger.debug(f"Added chunk episode: {chunk_id} -> {episode_uuid}")
 
             return {
                 "success": True,
                 "chunk_id": chunk_id,
-                "episode_uuid": str(episode.uuid),
+                "episode_uuid": str(episode_uuid),
                 "event_time": ref_time.isoformat(),
             }
 
