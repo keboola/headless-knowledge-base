@@ -117,7 +117,9 @@ class Settings(BaseSettings):
     VERTEX_AI_LOCATION: str = "us-central1"  # Region for Vertex AI
     VERTEX_AI_EMBEDDING_MODEL: str = "text-embedding-005"  # Embedding model
     VERTEX_AI_EMBEDDING_DIMENSION: int = 768  # Embedding dimension
-    VERTEX_AI_LLM_MODEL: str = "gemini-2.0-flash"  # Gemini model
+    # Gemini 2.5 Flash supports up to 65K output tokens (required for graphiti-core's 16384)
+    # Gemini 2.0 Flash only supports 8K output which causes errors with graphiti
+    VERTEX_AI_LLM_MODEL: str = "gemini-2.5-flash"  # Gemini model for entity extraction
     VERTEX_AI_CLAUDE_MODEL: str = "claude-sonnet-4@20250514"  # Claude via Vertex AI
     VERTEX_AI_BATCH_SIZE: int = 20  # Max texts per embedding batch (keep under 20k token limit)
     VERTEX_AI_TIMEOUT: float = 60.0  # API timeout in seconds

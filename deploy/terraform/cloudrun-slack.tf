@@ -95,7 +95,7 @@ resource "google_cloud_run_v2_service" "slack_bot" {
 
       env {
         name  = "GEMINI_MODEL_ID"
-        value = "gemini-2.0-flash"
+        value = "gemini-2.5-flash"
       }
 
       env {
