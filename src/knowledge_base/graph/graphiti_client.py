@@ -220,13 +220,14 @@ class GraphitiClient:
         Supports two authentication modes:
         1. GOOGLE_API_KEY: Direct API key for consumer Gemini API
         2. Vertex AI: Use service account credentials in GCP environment
-           Set GOOGLE_GENAI_USE_VERTEXAI=true for this mode
+           (auto-detected in Cloud Run/GCP environments)
 
         In Cloud Run, the service account credentials are automatically available.
         """
         try:
             from graphiti_core.llm_client.gemini_client import GeminiClient
             from graphiti_core.llm_client import LLMConfig
+            from google import genai
         except ImportError as e:
             raise GraphitiClientError(
                 "Gemini client requires google-genai package. "
@@ -236,39 +237,49 @@ class GraphitiClient:
         # Check for Google API key (direct API access)
         google_api_key = os.environ.get("GOOGLE_API_KEY", "")
 
-        # Check for Vertex AI mode (uses service account auth)
-        use_vertex_ai = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in ("true", "1", "yes")
-
-        # In GCP (Cloud Run), we can use Vertex AI with service account
-        if settings.is_gcp_deployment and not google_api_key:
-            # Enable Vertex AI mode automatically in GCP
-            os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
-            os.environ["GOOGLE_CLOUD_PROJECT"] = settings.GCP_PROJECT_ID or settings.VERTEX_AI_PROJECT
-            os.environ["GOOGLE_CLOUD_LOCATION"] = settings.VERTEX_AI_LOCATION
-            use_vertex_ai = True
-            logger.info(
-                f"Using Vertex AI authentication for Gemini "
-                f"(project: {settings.GCP_PROJECT_ID}, location: {settings.VERTEX_AI_LOCATION})"
-            )
-
-        if not google_api_key and not use_vertex_ai:
-            raise GraphitiClientError(
-                "Gemini LLM requires either GOOGLE_API_KEY or Vertex AI configuration. "
-                "In GCP, set GOOGLE_GENAI_USE_VERTEXAI=true to use service account auth. "
-                "Otherwise, set GOOGLE_API_KEY for direct API access."
-            )
-
         model = settings.VERTEX_AI_LLM_MODEL or "gemini-2.0-flash"
 
-        # Create config - api_key may be empty for Vertex AI mode
-        config = LLMConfig(
-            api_key=google_api_key or "vertex-ai-mode",  # Placeholder for Vertex AI
-            model=model,
-            max_tokens=8192,
-        )
+        # If we have an API key, use consumer Gemini API
+        if google_api_key:
+            config = LLMConfig(
+                api_key=google_api_key,
+                model=model,
+                max_tokens=8192,
+            )
+            logger.info(f"Using Gemini LLM with API key (model: {model})")
+            return GeminiClient(config=config, max_tokens=8192)
 
-        logger.info(f"Using Gemini LLM client with model: {model} (Vertex AI: {use_vertex_ai})")
-        return GeminiClient(config=config, max_tokens=8192)
+        # In GCP (Cloud Run), use Vertex AI with service account authentication
+        if settings.is_gcp_deployment:
+            project_id = settings.GCP_PROJECT_ID or settings.VERTEX_AI_PROJECT
+            location = settings.VERTEX_AI_LOCATION
+
+            logger.info(
+                f"Using Vertex AI Gemini authentication "
+                f"(project: {project_id}, location: {location}, model: {model})"
+            )
+
+            # Create genai.Client configured for Vertex AI
+            # This uses default credentials (service account in Cloud Run)
+            vertex_client = genai.Client(
+                vertexai=True,
+                project=project_id,
+                location=location,
+            )
+
+            # Pass the pre-configured Vertex AI client to GeminiClient
+            config = LLMConfig(
+                api_key="vertex-ai-mode",  # Placeholder - not used with custom client
+                model=model,
+                max_tokens=8192,
+            )
+            return GeminiClient(config=config, max_tokens=8192, client=vertex_client)
+
+        raise GraphitiClientError(
+            "Gemini LLM requires either GOOGLE_API_KEY (consumer API) or "
+            "GCP deployment (Vertex AI with service account). "
+            "Set GOOGLE_API_KEY for consumer API or deploy to Cloud Run."
+        )
 
     def _get_embedder(self):
         """Get the embedder client for Graphiti vector operations.
