@@ -122,6 +122,7 @@ class TestKnowledgeCreationLive:
         slack_client,
         e2e_config,
         unique_test_id,
+        chromadb_available,  # Requires Neo4j access to index knowledge
     ):
         """
         Verify: Created knowledge is returned by the bot when asked.
@@ -130,6 +131,9 @@ class TestKnowledgeCreationLive:
         1. Create knowledge about a unique topic
         2. Ask the bot about that topic
         3. Verify bot's response contains the knowledge
+
+        Note: This test requires direct Neo4j access to index the knowledge.
+        When running from GitHub Actions (outside VPC), this test is skipped.
         """
         from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
 
