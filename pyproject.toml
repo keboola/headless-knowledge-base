@@ -33,7 +33,8 @@ dependencies = [
     "anthropic[vertex]>=0.40.0",
     "cryptography>=42.0.0",
     # Graph database - Graphiti framework with Kuzu (embedded) and Neo4j (production) backends
-    "graphiti-core[anthropic]>=0.26.0",
+    # Pinned to 0.26.3 to avoid DEFAULT_MAX_TOKENS changes that break Claude 3.5 Haiku (8192 max)
+    "graphiti-core[anthropic]==0.26.3",
     "kuzu>=0.4.0",
     "neo4j>=5.26.0",
 ]
