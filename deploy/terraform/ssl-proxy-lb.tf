@@ -92,7 +92,7 @@ resource "google_compute_backend_service" "neo4j_staging_ssl" {
 
 
 
-# HTTP Health Check (Checks if HTTP port is open/responding)
+# HTTP Health Check (Checks if HTTP port is responding)
 
 resource "google_compute_health_check" "neo4j_http_health" {
 

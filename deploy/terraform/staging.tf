@@ -111,7 +111,7 @@ resource "google_compute_network_endpoint_group" "neo4j_staging_neg" {
   name                  = "neo4j-staging-neg"
   network               = google_compute_network.main.id
   subnetwork            = google_compute_subnetwork.main.id
-  default_port          = 7474 # HTTP Port for WebSocket Upgrade
+  default_port          = 7474 # HTTP port for WebSocket Upgrade
   zone                  = var.zone
   network_endpoint_type = "GCE_VM_IP_PORT"
   project               = var.project_id
