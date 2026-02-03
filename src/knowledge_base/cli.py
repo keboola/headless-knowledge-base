@@ -946,17 +946,33 @@ def slack_bot(port: int, socket_mode: bool) -> None:
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed progress")
 @click.option("--force-parse", is_flag=True, help="Re-parse all pages (delete existing chunks)")
 @click.option("--reindex", is_flag=True, help="Delete and rebuild the vector index")
-def pipeline(spaces: str | None, verbose: bool, force_parse: bool, reindex: bool) -> None:
+@click.option("--resume", "-r", is_flag=True, help="Resume from checkpoint (skip indexed chunks)")
+def pipeline(
+    spaces: str | None,
+    verbose: bool,
+    force_parse: bool,
+    reindex: bool,
+    resume: bool,
+) -> None:
     """Run full sync pipeline: download -> parse -> index.
 
     This command runs all steps in a single process, sharing the same
     database connection. Use this for GCP deployments where separate
     jobs cannot share state.
+
+    Use --resume to skip already-indexed chunks and continue from where
+    the last run failed or timed out.
     """
-    asyncio.run(_pipeline(spaces, verbose, force_parse, reindex))
+    asyncio.run(_pipeline(spaces, verbose, force_parse, reindex, resume))
 
 
-async def _pipeline(spaces: str | None, verbose: bool, force_parse: bool, reindex: bool) -> None:
+async def _pipeline(
+    spaces: str | None,
+    verbose: bool,
+    force_parse: bool,
+    reindex: bool,
+    resume: bool,
+) -> None:
     """Async implementation of pipeline command."""
     from knowledge_base.chunking.parser import PageParser
     from knowledge_base.confluence.downloader import ConfluenceDownloader
@@ -1044,8 +1060,8 @@ async def _pipeline(spaces: str | None, verbose: bool, force_parse: bool, reinde
             click.echo("Indexing chunks to Graphiti...")
 
             # Get chunks from parser and index them
-            from sqlalchemy import select
-            from knowledge_base.db.models import Chunk, RawPage
+            from sqlalchemy import func, select
+            from knowledge_base.db.models import Chunk, RawPage, IndexingCheckpoint
             from knowledge_base.vectorstore.indexer import ChunkData
             import json
 
@@ -1056,6 +1072,26 @@ async def _pipeline(spaces: str | None, verbose: bool, force_parse: bool, reinde
             )
             if space_key:
                 query = query.where(RawPage.space_key == space_key)
+
+            # If resuming, exclude already-indexed chunks
+            if resume:
+                indexed_subquery = (
+                    select(IndexingCheckpoint.chunk_id).where(
+                        IndexingCheckpoint.status == "indexed"
+                    )
+                )
+                query = query.where(Chunk.chunk_id.notin_(indexed_subquery))
+
+                # Log resume stats
+                indexed_count_result = await session.execute(
+                    select(func.count()).select_from(IndexingCheckpoint).where(
+                        IndexingCheckpoint.status == "indexed"
+                    )
+                )
+                indexed_count = indexed_count_result.scalar() or 0
+                click.echo(
+                    f"Resuming: {indexed_count} chunks already indexed, skipping them"
+                )
 
             result = await session.execute(query)
             chunks = result.scalars().all()

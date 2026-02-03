@@ -124,6 +124,13 @@ class Settings(BaseSettings):
     VERTEX_AI_BATCH_SIZE: int = 20  # Max texts per embedding batch (keep under 20k token limit)
     VERTEX_AI_TIMEOUT: float = 60.0  # API timeout in seconds
 
+    # Graphiti Indexing Performance
+    GRAPHITI_CONCURRENCY: int = 5  # Concurrent chunks (1=sequential, 5-10=parallel)
+    GRAPHITI_INTER_CHUNK_DELAY: float = 0.0  # Delay between chunks (0.0 with semaphore)
+    GRAPHITI_RATE_LIMIT_THRESHOLD: int = 5  # Circuit breaker threshold
+    GRAPHITI_CIRCUIT_BREAKER_COOLDOWN: int = 60  # Cooldown seconds
+    GRAPHITI_MAX_CONCURRENCY: int = 10  # Safety limit
+
     @property
     def is_gcp_deployment(self) -> bool:
         """Check if running in GCP environment."""

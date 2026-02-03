@@ -488,7 +488,7 @@ resource "google_cloud_run_v2_job" "pipeline" {
         }
       }
 
-      timeout     = "14400s" # 4 hours for full pipeline (was 2h, increased for optimization testing)
+      timeout     = "7200s" # 2 hours for full pipeline
       max_retries = 1
 
       vpc_access {

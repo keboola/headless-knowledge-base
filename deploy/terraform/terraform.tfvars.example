@@ -10,5 +10,20 @@ zone       = "us-central1-a"
 # Environment
 environment = "prod"
 
+# Domain Configuration (Load Balancer & SSL)
+base_domain       = "keboola.com"
+iap_support_email = "support@keboola.com"
+
 # Confluence Configuration
 confluence_base_url = "https://your-company.atlassian.net/wiki"
+confluence_space_keys = "KI,ENG,PRODUCT"
+
+# -----------------------------------------------------------------------------
+# Secrets (Usually passed via environment variables or Secret Manager)
+# -----------------------------------------------------------------------------
+# These are often commented out in tfvars and managed externally,
+# but can be set here for initial testing.
+#
+# slack_bot_token_staging = "xoxb-..."
+# slack_signing_secret_staging = "..."
+# neo4j_password_staging = "..."

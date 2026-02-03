@@ -210,6 +210,36 @@ def calculate_staleness(updated_at: datetime) -> tuple[bool, str | None]:
 # =============================================================================
 
 
+# =============================================================================
+# Indexing Checkpoint System (Phase 13.5)
+# =============================================================================
+
+
+class IndexingCheckpoint(Base):
+    """Track indexing progress for resume capability.
+
+    Enables resumable indexing so timeouts don't lose progress.
+    Tracks which chunks have been indexed with status (pending/indexed/failed/skipped).
+    """
+
+    __tablename__ = "indexing_checkpoints"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chunk_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    # Statuses: pending, indexed, failed, skipped
+
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    indexed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    error_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    page_id: Mapped[str] = mapped_column(String(64), index=True)
+
+    def __repr__(self) -> str:
+        return f"<IndexingCheckpoint(chunk_id={self.chunk_id}, status={self.status})>"
+
+
 class ChunkQuality(Base):
     """DEPRECATED: Quality tracking for chunks with usage-based decay.
 

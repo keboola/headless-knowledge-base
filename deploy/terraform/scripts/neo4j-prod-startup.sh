@@ -1,11 +1,11 @@
 #!/bin/bash
-# Neo4j Staging Server Startup Script
+# Neo4j Production Server Startup Script
 # This script sets up a Neo4j server on a GCE instance using Docker
 
 set -euo pipefail
 
 # Mount the data disk
-DATA_DISK="/dev/disk/by-id/google-neo4j-staging-data"
+DATA_DISK="/dev/disk/by-id/google-neo4j-prod-data"
 MOUNT_POINT="/data"
 
 # Create mount point
@@ -40,19 +40,21 @@ apt-get install -y docker.io
 systemctl enable docker
 systemctl start docker
 
-# Get Neo4j password from metadata
-NEO4J_PASSWORD=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/neo4j-password" -H "Metadata-Flavor: Google" || echo "staging-password")
+# Retrieve Neo4j password from Secret Manager
+NEO4J_PASSWORD=$(gcloud secrets versions access latest --secret="neo4j-password")
 
 # Pull and run Neo4j
 docker pull neo4j:5.26-community
 
 # Stop any existing container
-docker stop neo4j-staging 2>/dev/null || true
-docker rm neo4j-staging 2>/dev/null || true
+docker stop neo4j-prod 2>/dev/null || true
+docker rm neo4j-prod 2>/dev/null || true
 
 # Run Neo4j container
+# Note: We expose 7687 (Bolt) and 7474 (HTTP)
+# We configure Bolt to listen on all interfaces.
 docker run -d \
-    --name neo4j-staging \
+    --name neo4j-prod \
     --restart always \
     -p 7687:7687 \
     -p 7474:7474 \
@@ -62,13 +64,12 @@ docker run -d \
     -e NEO4J_AUTH="neo4j/${NEO4J_PASSWORD}" \
     -e NEO4J_PLUGINS='["apoc"]' \
     -e NEO4J_dbms_security_procedures_unrestricted='apoc.*' \
-    -e NEO4J_server_memory_heap_initial__size=512M \
-    -e NEO4J_server_memory_heap_max__size=1G \
-    -e NEO4J_server_memory_pagecache_size=512M \
+    -e NEO4J_server_memory_heap_initial__size=2G \
+    -e NEO4J_server_memory_heap_max__size=4G \
+    -e NEO4J_server_memory_pagecache_size=2G \
     -e NEO4J_server_bolt_listen__address=0.0.0.0:7687 \
     -e NEO4J_server_http_listen__address=0.0.0.0:7474 \
     -e NEO4J_server_http_allowed__origins="*:*" \
     neo4j:5.26-community
 
-echo "Neo4j staging server started successfully"
-echo "Bolt endpoint: bolt://$(hostname -I | awk '{print $1}'):7687"
+echo "Neo4j production server started successfully"

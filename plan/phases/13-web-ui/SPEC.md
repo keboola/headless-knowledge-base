@@ -1,242 +1,42 @@
-# Phase 13: Web UI (Optional)
+# Phase 13: Web UI & Secure Edge - Specification
 
-## Overview
+## Goal
+Deploy **Neodash** as the visualization frontend, protected by a production-grade **Secure Edge** architecture (Load Balancer, IAP, Cloud Armor).
 
-Build a simple web interface for search, admin functions, and governance dashboards. This is optional - Slack remains the primary user interface.
+## Architecture Upgrade
+Instead of exposing Cloud Run services directly (Public Ingress), we will place them behind a Global Load Balancer.
+- **`ui.example.com`**: Points to Neodash. Protected by **IAP** (Google Workspace Login).
+- **`db.example.com`**: Points to Neo4j. Protected by **Cloud Armor** (WAF) + Native Auth.
 
-## Dependencies
+## Implementation Tasks
 
-- **Requires**: Phase 6 (Search API), Phase 12 (Governance)
-- **Blocks**: None (final phase)
+### 13.1 Infrastructure (Terraform)
+- **Files**:
+    - `deploy/terraform/cloudrun-neodash.tf`: The UI service (Internal Ingress).
+    - `deploy/terraform/load-balancer.tf`: GCLB, Managed SSL, Backend Services, Serverless NEGs.
+    - `deploy/terraform/security.tf`: Cloud Armor Policies, IAP Configuration.
+- **Configuration**:
+    - Enable `iap.googleapis.com`.
+    - Configure OAuth Client ID/Secret (requires manual Console step for Brand).
+    - Configure Serverless NEGs for Cloud Run.
 
-## Deliverables
+### 13.2 Dashboard Configuration
+- **Default Dashboard**: A `dashboard.json` pre-loaded with useful queries:
+    - "Recent Changes" (Temporal graph query).
+    - "Topic Cluster" (Graph exploration).
+    - "Orphaned Documents" (QA query).
 
-```
-src/knowledge_base/
-├── web/
-│   ├── __init__.py
-│   ├── app.py              # Web application setup
-│   ├── routes.py           # Web routes
-│   ├── templates/
-│   │   ├── base.html       # Base template
-│   │   ├── search.html     # Search interface
-│   │   ├── admin.html      # Admin dashboard
-│   │   └── governance.html # Governance dashboard
-│   └── static/
-│       ├── css/
-│       │   └── style.css
-│       └── js/
-│           └── app.js
-```
+## Connectivity Logic
+1.  User visits `https://ui.example.com`.
+2.  **IAP** challenges for Google Login.
+3.  Upon success, **Neodash** loads.
+4.  Neodash attempts to connect to `wss://db.example.com`.
+5.  **Cloud Armor** checks IP/Rate limits.
+6.  Connection established. User enters Neo4j Password (or we bake a read-only token if preferred, but password is safer for now).
 
-## Technical Specification
-
-### Web Framework
-
-```python
-# Using FastAPI with Jinja2 templates
-from fastapi import FastAPI, Request
-from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
-
-app = FastAPI()
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
-
-@app.get("/")
-async def home(request: Request):
-    return templates.TemplateResponse("search.html", {"request": request})
-```
-
-### Search Interface
-
-```html
-<!-- templates/search.html -->
-{% extends "base.html" %}
-{% block content %}
-<div class="search-container">
-    <form id="search-form">
-        <input type="text" name="query" placeholder="Ask a question..." />
-        <button type="submit">Search</button>
-    </form>
-
-    <div id="results">
-        <!-- Populated via JavaScript -->
-    </div>
-</div>
-
-<script>
-document.getElementById('search-form').onsubmit = async (e) => {
-    e.preventDefault();
-    const query = e.target.query.value;
-
-    const response = await fetch('/api/v1/search', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({query, top_k: 5})
-    });
-
-    const results = await response.json();
-    renderResults(results);
-};
-</script>
-{% endblock %}
-```
-
-### Admin Dashboard
-
-```python
-@app.get("/admin")
-async def admin_dashboard(request: Request):
-    """Admin dashboard showing system status."""
-    stats = {
-        "total_pages": await get_page_count(),
-        "indexed_pages": await get_indexed_count(),
-        "pending_sync": await get_pending_sync_count(),
-        "last_sync": await get_last_sync_time(),
-        "queue_depth": await get_celery_queue_depth(),
-    }
-
-    return templates.TemplateResponse(
-        "admin.html",
-        {"request": request, "stats": stats}
-    )
-
-@app.post("/admin/sync")
-async def trigger_sync():
-    """Manually trigger Confluence sync."""
-    from tasks.sync_tasks import full_sync
-    task = full_sync.delay()
-    return {"task_id": task.id, "status": "started"}
-
-@app.post("/admin/reindex")
-async def trigger_reindex():
-    """Manually trigger full reindex."""
-    from tasks.index_tasks import full_reindex
-    task = full_reindex.delay()
-    return {"task_id": task.id, "status": "started"}
-```
-
-### Governance Dashboard
-
-```python
-@app.get("/governance")
-async def governance_dashboard(request: Request):
-    """Governance dashboard showing content health."""
-    detector = ObsoleteDetector()
-    analyzer = GapAnalyzer()
-    coverage = CoverageAnalyzer()
-
-    data = {
-        "obsolete_count": len(await detector.find_obsolete()),
-        "gaps_count": len(await analyzer.find_gaps()),
-        "coverage_matrix": await coverage.get_topic_coverage(),
-        "recent_issues": await get_recent_governance_issues(limit=10),
-    }
-
-    return templates.TemplateResponse(
-        "governance.html",
-        {"request": request, **data}
-    )
-```
-
-### Basic Authentication
-
-```python
-from fastapi import Depends, HTTPException
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
-import secrets
-
-security = HTTPBasic()
-
-def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
-    """Verify admin credentials for protected routes."""
-    correct_username = secrets.compare_digest(
-        credentials.username,
-        settings.admin_username
-    )
-    correct_password = secrets.compare_digest(
-        credentials.password,
-        settings.admin_password
-    )
-
-    if not (correct_username and correct_password):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    return credentials.username
-
-@app.get("/admin", dependencies=[Depends(verify_admin)])
-async def admin_dashboard(request: Request):
-    ...
-```
-
-### Static Assets
-
-```css
-/* static/css/style.css */
-:root {
-    --primary: #2563eb;
-    --secondary: #64748b;
-    --bg: #f8fafc;
-    --card-bg: #ffffff;
-}
-
-body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: var(--bg);
-    margin: 0;
-    padding: 20px;
-}
-
-.search-container {
-    max-width: 800px;
-    margin: 0 auto;
-}
-
-.search-container input {
-    width: 100%;
-    padding: 16px;
-    font-size: 18px;
-    border: 2px solid #e2e8f0;
-    border-radius: 8px;
-}
-
-.result-card {
-    background: var(--card-bg);
-    padding: 20px;
-    margin: 16px 0;
-    border-radius: 8px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-}
-
-.result-card h3 {
-    margin: 0 0 8px 0;
-    color: var(--primary);
-}
-
-.result-card .score {
-    color: var(--secondary);
-    font-size: 14px;
-}
-```
-
-## API Integration
-
-The web UI uses the existing API endpoints:
-
-| Web Feature | API Endpoint |
-|------------|--------------|
-| Search | `POST /api/v1/search` |
-| Stats | `GET /api/v1/stats` |
-| Obsolete docs | `GET /api/v1/governance/obsolete` |
-| Gaps | `GET /api/v1/governance/gaps` |
-| Coverage | `GET /api/v1/governance/coverage` |
-| Trigger sync | `POST /api/v1/admin/sync` |
-
-## Definition of Done
-
-- [ ] Search page works
-- [ ] Admin dashboard shows stats
-- [ ] Governance dashboard displays issues
-- [ ] Basic authentication protects admin routes
-- [ ] Responsive design works on mobile
+## Success Criteria
+- [ ] `ui` subdomain redirects to Google Login.
+- [ ] Only authorized email domains can log in.
+- [ ] `db` subdomain accepts secure WebSocket connections (`wss://`).
+- [ ] Neodash successfully visualizes the graph.
+- [ ] Cloud Armor logs show traffic inspection.

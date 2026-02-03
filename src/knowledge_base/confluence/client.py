@@ -43,7 +43,11 @@ class ConfluenceClient:
         api_token: str | None = None,
         requests_per_second: float = 5.0,
     ):
-        self.url = (url or settings.CONFLUENCE_URL).rstrip("/")
+        base_url = (url or settings.CONFLUENCE_URL).rstrip("/")
+        # Normalize URL: remove /wiki suffix if present to avoid duplication
+        if base_url.endswith("/wiki"):
+            base_url = base_url[:-5]
+        self.url = base_url
         self.username = username or settings.CONFLUENCE_USERNAME
         self.api_token = api_token or settings.CONFLUENCE_API_TOKEN
         self.requests_per_second = requests_per_second
@@ -68,6 +72,9 @@ class ConfluenceClient:
         retry=retry_if_exception_type((httpx.HTTPStatusError, RateLimitError)),
         wait=wait_exponential(multiplier=1, min=2, max=60),
         stop=stop_after_attempt(5),
+        before_sleep=lambda retry_state: logger.warning(
+            f"Confluence API retry {retry_state.attempt_number}/5 after error: {retry_state.outcome.exception()}"
+        ),
     )
     async def _request(
         self,
@@ -91,6 +98,12 @@ class ConfluenceClient:
                 retry_after = int(response.headers.get("Retry-After", 60))
                 logger.warning(f"Rate limited. Waiting {retry_after}s...")
                 raise RateLimitError(retry_after)
+
+            if response.status_code >= 400:
+                logger.error(
+                    f"Confluence API error: {response.status_code} {response.reason_phrase} "
+                    f"for {method} {endpoint} - Response: {response.text[:500]}"
+                )
 
             response.raise_for_status()
             return response.json()

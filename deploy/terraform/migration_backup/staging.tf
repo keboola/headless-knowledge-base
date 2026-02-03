@@ -106,12 +106,12 @@ resource "google_compute_firewall" "neo4j_staging_lb" {
   target_tags   = ["neo4j-staging"]
 }
 
-# NEG for Staging Neo4j (to expose via SSL Proxy LB)
+# NEG for Staging Neo4j (to expose via Load Balancer)
 resource "google_compute_network_endpoint_group" "neo4j_staging_neg" {
   name                  = "neo4j-staging-neg"
   network               = google_compute_network.main.id
   subnetwork            = google_compute_subnetwork.main.id
-  default_port          = 7474 # HTTP Port for WebSocket Upgrade
+  default_port          = 7474 # HTTP Port for GCLB/WebSocket
   zone                  = var.zone
   network_endpoint_type = "GCE_VM_IP_PORT"
   project               = var.project_id
@@ -467,7 +467,7 @@ resource "google_cloud_run_v2_job" "confluence_sync_staging" {
         }
       }
 
-      timeout     = "21600s"  # 6 hours for full KI space intake (was 4h, increased for optimization testing)
+      timeout     = "14400s"  # 4 hours for full KI space intake
       max_retries = 1
 
       vpc_access {
@@ -568,4 +568,17 @@ resource "google_cloud_run_v2_service_iam_member" "neodash_staging_public" {
   name     = google_cloud_run_v2_service.neodash_staging.name
   role     = "roles/run.invoker"
   member   = "allUsers"
+}
+
+# -----------------------------------------------------------------------------
+# Outputs
+# -----------------------------------------------------------------------------
+output "staging_slack_bot_url" {
+  value       = google_cloud_run_v2_service.slack_bot_staging.uri
+  description = "URL of the staging Slack bot Cloud Run service"
+}
+
+output "staging_neo4j_ip" {
+  value       = google_compute_instance.neo4j_staging.network_interface[0].network_ip
+  description = "Internal IP of the staging Neo4j VM"
 }
