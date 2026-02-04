@@ -30,7 +30,7 @@ resource "google_compute_instance" "neo4j_prod" {
   }
 
   metadata = {
-    # Password retrieval script or startup config
+    neo4j-password = random_password.neo4j_prod_password.result
     startup-script = file("${path.module}/scripts/neo4j-prod-startup.sh")
   }
 
@@ -102,4 +102,11 @@ resource "google_compute_network_endpoint" "neo4j_prod_endpoint" {
   ip_address             = google_compute_instance.neo4j_prod.network_interface[0].network_ip
   zone                   = var.zone
   project                = var.project_id
+}
+
+# Generate random password for production Neo4j
+resource "random_password" "neo4j_prod_password" {
+  length           = 16
+  special          = true
+  override_special = "!#$%&*()-_=+[]{}<>:?"
 }
