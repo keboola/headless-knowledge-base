@@ -56,16 +56,16 @@ docker pull neo4j:5.26-community
 docker stop neo4j-staging 2>/dev/null || true
 docker rm neo4j-staging 2>/dev/null || true
 
-# Run Neo4j container - minimal configuration for debugging
-# Start with basic settings and no authentication first
+# Run Neo4j container - add authentication and core WebSocket settings
 docker run -d \
     --name neo4j-staging \
     --restart always \
     -p 7687:7687 \
     -p 7474:7474 \
     -v $MOUNT_POINT/neo4j/data:/data \
-    -v $MOUNT_POINT/neo4j/logs:/logs \
-    -e NEO4J_AUTH=none \
+    -e NEO4J_AUTH="neo4j/${NEO4J_PASSWORD}" \
+    -e NEO4J_server_bolt_advertised_address=neo4j.staging.keboola.dev:443 \
+    -e NEO4J_server_bolt_tls_level=DISABLED \
     neo4j:5.26-community 2>&1 | tee /tmp/docker-run.log
 
 echo "Neo4j staging server started successfully"
