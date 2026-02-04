@@ -50,9 +50,9 @@ docker pull neo4j:5.26-community
 docker stop neo4j-prod 2>/dev/null || true
 docker rm neo4j-prod 2>/dev/null || true
 
-# Run Neo4j container
-# Note: We expose 7687 (Bolt) and 7474 (HTTP)
-# We configure Bolt to listen on all interfaces.
+# Run Neo4j container - production configuration
+# Note: WebSocket forwarding handled by SSL Proxy Load Balancer
+# advertised_address and tls_level settings removed (incompatible with Neo4j 5.26)
 docker run -d \
     --name neo4j-prod \
     --restart always \
@@ -60,16 +60,10 @@ docker run -d \
     -p 7474:7474 \
     -v $MOUNT_POINT/neo4j/data:/data \
     -v $MOUNT_POINT/neo4j/logs:/logs \
-    -v $MOUNT_POINT/neo4j/plugins:/plugins \
     -e NEO4J_AUTH="neo4j/${NEO4J_PASSWORD}" \
     -e NEO4J_server_memory_heap_initial_size=2G \
     -e NEO4J_server_memory_heap_max_size=4G \
     -e NEO4J_server_memory_pagecache_size=2G \
-    -e NEO4J_server_bolt_listen_address=0.0.0.0:7687 \
-    -e NEO4J_server_bolt_advertised_address=neo4j.internal.keboola.com:443 \
-    -e NEO4J_server_bolt_tls_level=DISABLED \
-    -e NEO4J_server_http_listen_address=0.0.0.0:7474 \
-    -e NEO4J_server_http_allowed_origins="*" \
     neo4j:5.26-community 2>&1 | tee /tmp/docker-run.log
 
 echo "Neo4j production server started successfully"
