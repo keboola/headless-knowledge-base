@@ -60,8 +60,6 @@ docker run -d \
     -v $MOUNT_POINT/neo4j/logs:/logs \
     -v $MOUNT_POINT/neo4j/plugins:/plugins \
     -e NEO4J_AUTH="neo4j/${NEO4J_PASSWORD}" \
-    -e NEO4J_PLUGINS='["apoc"]' \
-    -e NEO4J_dbms_security_procedures_unrestricted='apoc.*' \
     -e NEO4J_server_memory_heap_initial_size=512M \
     -e NEO4J_server_memory_heap_max_size=1G \
     -e NEO4J_server_memory_pagecache_size=512M \
@@ -70,7 +68,12 @@ docker run -d \
     -e NEO4J_server_bolt_advertised_address=neo4j.staging.keboola.dev:443 \
     -e NEO4J_server_bolt_tls_level=DISABLED \
     -e NEO4J_server_http_allowed_origins="*" \
-    neo4j:5.26-community
+    neo4j:5.26-community 2>&1 | tee /tmp/docker-run.log
 
 echo "Neo4j staging server started successfully"
 echo "Bolt endpoint: bolt://$(hostname -I | awk '{print $1}'):7687"
+
+# Log docker container status for debugging
+sleep 5
+docker logs neo4j-staging > $MOUNT_POINT/neo4j/docker-startup.log 2>&1 || true
+docker inspect neo4j-staging >> $MOUNT_POINT/neo4j/docker-startup.log 2>&1 || true
