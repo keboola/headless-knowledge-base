@@ -40,8 +40,9 @@ apt-get install -y docker.io
 systemctl enable docker
 systemctl start docker
 
-# Retrieve Neo4j password from Secret Manager
-NEO4J_PASSWORD=$(gcloud secrets versions access latest --secret="neo4j-password")
+# Retrieve Neo4j password from metadata server
+NEO4J_PASSWORD=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/neo4j-password" -H "Metadata-Flavor: Google" 2>/dev/null || echo "prod-password")
+echo "NEO4J_PASSWORD set to: ${NEO4J_PASSWORD:0:8}***" # Log first 8 chars for debugging
 
 # Pull and run Neo4j
 docker pull neo4j:5.26-community
