@@ -34,8 +34,6 @@ resource "google_compute_backend_service" "neo4j_prod_ssl" {
 
   protocol      = "TCP"
 
-  port_name     = "http" # Matching the default port 7474 which is usually named http
-
   timeout_sec   = 3600
 
   project       = var.project_id
@@ -65,8 +63,6 @@ resource "google_compute_backend_service" "neo4j_staging_ssl" {
   name          = "neo4j-staging-ssl"
 
   protocol      = "TCP"
-
-  port_name     = "http"
 
   timeout_sec   = 3600
 
