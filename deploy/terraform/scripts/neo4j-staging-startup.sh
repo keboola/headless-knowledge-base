@@ -56,7 +56,7 @@ docker pull neo4j:5.26-community
 docker stop neo4j-staging 2>/dev/null || true
 docker rm neo4j-staging 2>/dev/null || true
 
-# Run Neo4j container - add advertised_address
+# Run Neo4j container - skip advertised_address (incompatible with 5.26), use TLS disabled
 docker run -d \
     --name neo4j-staging \
     --restart always \
@@ -64,7 +64,7 @@ docker run -d \
     -p 7474:7474 \
     -v $MOUNT_POINT/neo4j/data:/data \
     -e NEO4J_AUTH="neo4j/${NEO4J_PASSWORD}" \
-    -e NEO4J_server_bolt_advertised_address=neo4j.staging.keboola.dev:443 \
+    -e NEO4J_server_bolt_tls_level=DISABLED \
     neo4j:5.26-community 2>&1 | tee /tmp/docker-run.log
 
 echo "Neo4j staging server started successfully"
