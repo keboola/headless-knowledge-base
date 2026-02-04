@@ -56,7 +56,8 @@ docker pull neo4j:5.26-community
 docker stop neo4j-staging 2>/dev/null || true
 docker rm neo4j-staging 2>/dev/null || true
 
-# Run Neo4j container
+# Run Neo4j container - minimal configuration for debugging
+# Start with basic settings and no authentication first
 docker run -d \
     --name neo4j-staging \
     --restart always \
@@ -64,16 +65,7 @@ docker run -d \
     -p 7474:7474 \
     -v $MOUNT_POINT/neo4j/data:/data \
     -v $MOUNT_POINT/neo4j/logs:/logs \
-    -v $MOUNT_POINT/neo4j/plugins:/plugins \
-    -e NEO4J_AUTH="neo4j/${NEO4J_PASSWORD}" \
-    -e NEO4J_server_memory_heap_initial_size=512M \
-    -e NEO4J_server_memory_heap_max_size=1G \
-    -e NEO4J_server_memory_pagecache_size=512M \
-    -e NEO4J_server_http_listen_address=0.0.0.0:7474 \
-    -e NEO4J_server_bolt_listen_address=0.0.0.0:7687 \
-    -e NEO4J_server_bolt_advertised_address=neo4j.staging.keboola.dev:443 \
-    -e NEO4J_server_bolt_tls_level=DISABLED \
-    -e NEO4J_server_http_allowed_origins="*" \
+    -e NEO4J_AUTH=none \
     neo4j:5.26-community 2>&1 | tee /tmp/docker-run.log
 
 echo "Neo4j staging server started successfully"
