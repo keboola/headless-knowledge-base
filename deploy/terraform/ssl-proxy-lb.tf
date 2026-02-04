@@ -92,7 +92,7 @@ resource "google_compute_backend_service" "neo4j_staging_ssl" {
 
 
 
-# HTTP Health Check (Checks if HTTP port is responding)
+# TCP Health Check (Checks if Bolt port is responding)
 
 resource "google_compute_health_check" "neo4j_http_health" {
 
@@ -102,11 +102,9 @@ resource "google_compute_health_check" "neo4j_http_health" {
 
 
 
-  http_health_check {
+  tcp_health_check {
 
-    port = 7474
-
-    request_path = "/"
+    port = 7687
 
   }
 
