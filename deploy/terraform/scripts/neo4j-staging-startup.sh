@@ -4,6 +4,11 @@
 
 set -euo pipefail
 
+# Log all output to a file for debugging
+LOG_FILE="/var/log/neo4j-startup.log"
+exec 1> >(tee -a "$LOG_FILE")
+exec 2>&1
+
 # Mount the data disk
 DATA_DISK="/dev/disk/by-id/google-neo4j-staging-data"
 MOUNT_POINT="/data"
@@ -41,7 +46,8 @@ systemctl enable docker
 systemctl start docker
 
 # Get Neo4j password from metadata
-NEO4J_PASSWORD=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/neo4j-password" -H "Metadata-Flavor: Google" || echo "staging-password")
+NEO4J_PASSWORD=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/neo4j-password" -H "Metadata-Flavor: Google" 2>/dev/null || echo "staging-password")
+echo "NEO4J_PASSWORD set to: ${NEO4J_PASSWORD:0:8}***" # Log first 8 chars for debugging
 
 # Pull and run Neo4j
 docker pull neo4j:5.26-community
