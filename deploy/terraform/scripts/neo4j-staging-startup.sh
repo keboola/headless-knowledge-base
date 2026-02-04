@@ -56,14 +56,20 @@ docker pull neo4j:5.26-community
 docker stop neo4j-staging 2>/dev/null || true
 docker rm neo4j-staging 2>/dev/null || true
 
-# Run Neo4j container - minimal working config (verify)
+# Run Neo4j container - staging configuration
+# Note: WebSocket forwarding handled by SSL Proxy Load Balancer
+# advertised_address and tls_level settings removed (incompatible with Neo4j 5.26)
 docker run -d \
     --name neo4j-staging \
     --restart always \
     -p 7687:7687 \
     -p 7474:7474 \
     -v $MOUNT_POINT/neo4j/data:/data \
+    -v $MOUNT_POINT/neo4j/logs:/logs \
     -e NEO4J_AUTH="neo4j/${NEO4J_PASSWORD}" \
+    -e NEO4J_server_memory_heap_initial_size=512M \
+    -e NEO4J_server_memory_heap_max_size=1G \
+    -e NEO4J_server_memory_pagecache_size=512M \
     neo4j:5.26-community 2>&1 | tee /tmp/docker-run.log
 
 echo "Neo4j staging server started successfully"
