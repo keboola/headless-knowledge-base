@@ -64,14 +64,14 @@ docker run -d \
     -e NEO4J_AUTH="neo4j/${NEO4J_PASSWORD}" \
     -e NEO4J_PLUGINS='["apoc"]' \
     -e NEO4J_dbms_security_procedures_unrestricted='apoc.*' \
-    -e NEO4J_server_memory_heap_initial__size=2G \
-    -e NEO4J_server_memory_heap_max__size=4G \
+    -e NEO4J_server_memory_heap_initial_size=2G \
+    -e NEO4J_server_memory_heap_max_size=4G \
     -e NEO4J_server_memory_pagecache_size=2G \
-    -e NEO4J_server_bolt_listen__address=0.0.0.0:7687 \
-    -e NEO4J_server_bolt_advertised__address=neo4j.internal.keboola.com:443 \
-    -e NEO4J_server_bolt_tls__level=DISABLED \
-    -e NEO4J_server_http_listen__address=0.0.0.0:7474 \
-    -e NEO4J_server_http_allowed__origins="*" \
+    -e NEO4J_server_bolt_listen_address=0.0.0.0:7687 \
+    -e NEO4J_server_bolt_advertised_address=neo4j.internal.keboola.com:443 \
+    -e NEO4J_server_bolt_tls_level=DISABLED \
+    -e NEO4J_server_http_listen_address=0.0.0.0:7474 \
+    -e NEO4J_server_http_allowed_origins="*" \
     neo4j:5.26-community
 
 echo "Neo4j production server started successfully"
