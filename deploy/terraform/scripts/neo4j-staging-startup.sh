@@ -67,9 +67,6 @@ docker run -d \
     -v $MOUNT_POINT/neo4j/data:/data \
     -v $MOUNT_POINT/neo4j/logs:/logs \
     -e NEO4J_AUTH="neo4j/${NEO4J_PASSWORD}" \
-    -e NEO4J_server_memory_heap_initial_size=512M \
-    -e NEO4J_server_memory_heap_max_size=1G \
-    -e NEO4J_server_memory_pagecache_size=512M \
     neo4j:5.26-community 2>&1 | tee /tmp/docker-run.log
 
 echo "Neo4j staging server started successfully"
