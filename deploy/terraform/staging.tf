@@ -337,6 +337,11 @@ resource "google_secret_manager_secret_iam_member" "slack_bot_staging_anthropic_
   member    = "serviceAccount:${google_service_account.slack_bot_staging.email}"
 }
 
+# Reference existing Neo4j password secret (created in secret-manager.tf)
+data "google_secret_manager_secret" "neo4j_password_secret" {
+  secret_id = "neo4j-password"
+}
+
 # Grant Vertex AI permissions to staging bot for embeddings
 resource "google_project_iam_member" "slack_bot_staging_vertex_ai" {
   project = var.project_id
@@ -539,7 +544,12 @@ resource "google_cloud_run_v2_service" "neodash_staging" {
 
       env {
         name  = "standalonePassword"
-        value = random_password.neo4j_staging_password.result
+        value_source {
+          secret_key_ref {
+            secret  = data.google_secret_manager_secret.neo4j_password_secret.secret_id
+            version = "latest"
+          }
+        }
       }
 
       env {
