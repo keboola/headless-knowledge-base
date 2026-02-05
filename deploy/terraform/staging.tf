@@ -509,7 +509,7 @@ resource "google_cloud_run_v2_service" "neodash_staging" {
 
       env {
         name  = "ssoEnabled"
-        value = "false"
+        value = "true"
       }
 
       env {
