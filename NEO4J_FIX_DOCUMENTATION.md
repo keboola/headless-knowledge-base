@@ -15,7 +15,8 @@
 4. [Implementation Details](#implementation-details)
 5. [Testing & Verification](#testing--verification)
 6. [Operational Guidelines](#operational-guidelines)
-7. [Troubleshooting](#troubleshooting)
+7. [Neodash SSO Configuration](#neodash-sso-configuration)
+8. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -401,6 +402,129 @@ Database Connection ✓
 
 ---
 
+## Neodash SSO Configuration
+
+### Background
+
+**Security Warning**: When Neodash connects to Neo4j with service account credentials configured in `config.json`, a security warning is displayed:
+```
+⚠️ NeoDash is running with a plaintext password in config.json
+```
+
+This warning appears even though:
+- Users are already authenticated via OAuth at the application level
+- Neodash uses service account credentials for database access (not user credentials)
+- The configuration is appropriate for an application-managed database connection
+
+### Solution: Enable SSO Flag
+
+**Configuration Change**: Set `ssoEnabled=true` in Neodash environment configuration
+
+This tells Neodash that user authentication is handled externally (via OAuth), suppressing the warning about plaintext passwords.
+
+**Why This Works**:
+- OAuth authentication handles user access to the application
+- Neodash doesn't perform authentication on behalf of users
+- Service account credentials are for application-to-database communication
+- Setting `ssoEnabled=true` signals that auth is managed externally, suppressing the warning
+
+### Implementation
+
+**Files Modified**:
+- `deploy/terraform/staging.tf` (line 511-513)
+- `deploy/terraform/cloudrun-neodash.tf` (line 29-32)
+
+**Changes Made**:
+```terraform
+# Before
+env {
+  name  = "ssoEnabled"
+  value = "false"
+}
+
+# After
+env {
+  name  = "ssoEnabled"
+  value = "true"
+}
+```
+
+**All Other Configuration Unchanged**:
+- `standalone = "true"` (Neodash connects directly to Neo4j)
+- `standalonePassword` (Service account credentials from Secret Manager)
+- `standaloneHost`, `standalonePort`, `standaloneUser` (connection details)
+
+### Authentication Flow
+
+```
+User Journey:
+┌─────────────────────────────────────────┐
+│ 1. User accesses application            │
+│    → OAuth authentication required      │
+│    → User identity established          │
+└─────────────────────────────────────────┘
+                ↓
+┌─────────────────────────────────────────┐
+│ 2. User opens Neodash dashboard         │
+│    → ssoEnabled=true                    │
+│    → No warning displayed               │
+└─────────────────────────────────────────┘
+                ↓
+┌─────────────────────────────────────────┐
+│ 3. Neodash connects to Neo4j            │
+│    → Uses service account credentials   │
+│    → Connection successful              │
+│    → Dashboards load                    │
+└─────────────────────────────────────────┘
+```
+
+### Benefits
+
+✅ **No security warning displayed** - Users see clean interface
+✅ **No user action required** - Automatic connection maintained
+✅ **Authentication preserved** - OAuth still protects application access
+✅ **Proper security pattern** - Service accounts for app-to-database
+✅ **No credential prompt** - Users don't need to enter Neo4j credentials
+
+### Related Configuration Parameters
+
+| Parameter | Value | Purpose |
+|-----------|-------|---------|
+| `ssoEnabled` | `true` | Signals external auth handling (OAuth) |
+| `standalone` | `true` | Neodash connects directly to Neo4j |
+| `standaloneUser` | `neo4j` | Service account username |
+| `standalonePassword` | (from Secret Manager) | Service account password |
+| `standaloneHost` | `neo4j.staging.keboola.dev` | Neo4j host |
+| `standalonePort` | `443` | HTTPS port for TLS |
+| `standaloneProtocol` | `bolt+s` | Bolt over SSL |
+
+### Verification
+
+After deploying the SSO flag change:
+
+```bash
+# 1. Verify the configuration was applied
+gcloud run services describe neodash-staging --region=us-central1 \
+  --format='value(spec.template.spec.containers[0].env[?name=ssoEnabled].value)'
+
+# Expected output: true
+
+# 2. Access Neodash in browser
+# → No warning message should appear
+# → Dashboards should load automatically
+# → Queries should execute successfully
+
+# 3. Verify authentication still required
+# → Try accessing without OAuth → Should be denied
+# → OAuth authentication required to access application
+```
+
+### Related Commits
+
+- `1a0c57b` - Suppress Neodash password warning by enabling SSO flag
+
+---
+
 ## Troubleshooting
 
 ### Common Issues
@@ -563,13 +687,14 @@ gcloud compute ssh neo4j-staging --zone=us-central1-a --command="curl -v bolt://
 
 **Related Commits**:
 
-1. `a460b19` - Fix Neodash staging to use Neo4j password from Secret Manager
-2. `db4295f` - Improve Neo4j password retrieval in test script
-3. `86cf9b3` - Update NEG default_port from 7474 to 7687 for Bolt protocol
-4. `42a3379` - Fix Neo4j Bolt connection: Update backend service port to 7687
-5. `10ff96d` - Fix Neo4j backend service routing: Update port from 80 to 7474
-6. `d0cc8ed` - Fix SSL Proxy Load Balancer: Remove port_name from Neo4j backend services
-7. `f2ded87` - CRITICAL FIX: Change SSL Proxy LB from HTTP port 7474 to Bolt port 7687
+1. `1a0c57b` - Suppress Neodash password warning by enabling SSO flag
+2. `a460b19` - Fix Neodash staging to use Neo4j password from Secret Manager
+3. `db4295f` - Improve Neo4j password retrieval in test script
+4. `86cf9b3` - Update NEG default_port from 7474 to 7687 for Bolt protocol
+5. `42a3379` - Fix Neo4j Bolt connection: Update backend service port to 7687
+6. `10ff96d` - Fix Neo4j backend service routing: Update port from 80 to 7474
+7. `d0cc8ed` - Fix SSL Proxy Load Balancer: Remove port_name from Neo4j backend services
+8. `f2ded87` - CRITICAL FIX: Change SSL Proxy LB from HTTP port 7474 to Bolt port 7687
 
 **View All Changes**:
 ```bash
