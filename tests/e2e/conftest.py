@@ -44,9 +44,16 @@ def chromadb_available():
         # Create a new client instance (don't use singleton to avoid polluting other tests)
         client = GraphitiClient()
 
-        # Try to actually connect - this will fail if Neo4j is not reachable
+        # Try to actually connect using the session event loop
+        # IMPORTANT: Do NOT create a new event loop here — it conflicts with
+        # pytest-asyncio's session loop and causes "Future attached to a different loop"
+        # errors in downstream async tests.
         import asyncio
-        loop = asyncio.new_event_loop()
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
         try:
             # Use a short timeout to fail fast if Neo4j is not reachable
             async def test_connection():
@@ -63,7 +70,8 @@ def chromadb_available():
 
             loop.run_until_complete(test_connection())
         finally:
-            loop.close()
+            # Do NOT close the loop — it's shared with the test session
+            pass
 
         return True
 

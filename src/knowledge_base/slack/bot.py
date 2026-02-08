@@ -347,7 +347,7 @@ async def _search_chunks(query: str, limit: int = 5) -> list[SearchResult]:
         return results
 
     except Exception as e:
-        logger.warning(f"Hybrid search failed: {e}", exc_info=True)
+        logger.error(f"Hybrid search FAILED (returning 0 results): {e}", exc_info=True)
 
     return []
 

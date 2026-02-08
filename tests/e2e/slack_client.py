@@ -415,9 +415,16 @@ class SlackTestClient:
         Returns:
             Signature in format "v0=<hex>"
         """
-        signing_secret = os.environ.get("SLACK_SIGNING_SECRET", "")
+        signing_secret = (
+            os.environ.get("SLACK_STAGING_SIGNING_SECRET")
+            or os.environ.get("SLACK_SIGNING_SECRET", "")
+        )
         if not signing_secret:
-            raise ValueError("SLACK_SIGNING_SECRET not set")
+            raise ValueError(
+                "SLACK_STAGING_SIGNING_SECRET or SLACK_SIGNING_SECRET not set. "
+                "Fetch from Secret Manager: gcloud secrets versions access latest "
+                "--secret=slack-signing-secret-staging --project=ai-knowledge-base-42"
+            )
 
         sig_basestring = f"v0:{timestamp}:{body}"
         signature = hmac.new(

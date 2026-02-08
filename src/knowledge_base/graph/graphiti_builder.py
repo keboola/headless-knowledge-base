@@ -30,9 +30,11 @@ from knowledge_base.graph.entity_schemas import (
 from knowledge_base.graph.graphiti_client import get_graphiti_client, GraphitiClientError
 from knowledge_base.graph.models import ExtractedEntity, EntityType
 
+from graphiti_core.nodes import EpisodeType
+from graphiti_core.utils.bulk_utils import RawEpisode
+
 if TYPE_CHECKING:
     from graphiti_core import Graphiti
-    from graphiti_core.nodes import EpisodeType
     from knowledge_base.vectorstore.indexer import ChunkData
 
 logger = logging.getLogger(__name__)
@@ -410,6 +412,52 @@ class GraphitiBuilder:
     # =========================================================================
     # New methods for Graphiti-only architecture (ChromaDB eliminated)
     # =========================================================================
+
+    def prepare_raw_episode(
+        self,
+        chunk_data: "ChunkData | dict[str, Any]",
+    ) -> RawEpisode | None:
+        """Convert a ChunkData into a RawEpisode for bulk ingestion.
+
+        This separates data preparation from the API call so that
+        add_episode_bulk() can process many episodes in one batch.
+
+        Returns None if the chunk has no usable content.
+        """
+        if hasattr(chunk_data, 'to_metadata'):
+            metadata = chunk_data.to_metadata()
+            chunk_id = chunk_data.chunk_id
+            content = chunk_data.content
+            updated_at = chunk_data.updated_at
+        else:
+            metadata = dict(chunk_data)
+            chunk_id = metadata.get('chunk_id', '')
+            content = metadata.pop('content', '')
+            updated_at = metadata.get('updated_at', '')
+
+        if not content or not content.strip():
+            return None
+
+        metadata['chunk_id'] = chunk_id
+
+        # Determine reference time
+        if updated_at:
+            try:
+                ref_time = datetime.fromisoformat(
+                    updated_at.replace('Z', '+00:00')
+                )
+            except (ValueError, AttributeError):
+                ref_time = datetime.utcnow()
+        else:
+            ref_time = datetime.utcnow()
+
+        return RawEpisode(
+            name=chunk_id,
+            content=content,
+            source_description=json.dumps(metadata, default=str),
+            source=EpisodeType.text,
+            reference_time=ref_time,
+        )
 
     async def add_chunk_episode(
         self,

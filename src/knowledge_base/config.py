@@ -108,9 +108,6 @@ class Settings(BaseSettings):
     # GCP Deployment Settings
     GCP_PROJECT_ID: str = ""  # GCP project ID (e.g., ai-knowledge-base-42)
     GCP_REGION: str = "us-central1"  # GCP region for services
-    DUCKDB_HOST: str = ""  # DuckDB server host (for GCP deployment)
-    DUCKDB_PORT: int = 8080  # DuckDB server port
-    DUCKDB_PATH: str = "data/analytics.duckdb"  # Local DuckDB file path
 
     # Vertex AI Settings
     VERTEX_AI_PROJECT: str = ""  # Falls back to GCP_PROJECT_ID if empty
@@ -130,6 +127,11 @@ class Settings(BaseSettings):
     GRAPHITI_RATE_LIMIT_THRESHOLD: int = 5  # Circuit breaker threshold
     GRAPHITI_CIRCUIT_BREAKER_COOLDOWN: int = 60  # Cooldown seconds
     GRAPHITI_MAX_CONCURRENCY: int = 10  # Safety limit
+
+    # Graphiti Bulk Indexing (adaptive batch sizing)
+    GRAPHITI_BULK_ENABLED: bool = True  # Use add_episode_bulk() with adaptive batching
+    GRAPHITI_BULK_INITIAL_BATCH: int = 2  # Starting batch size (doubles in slow_start)
+    GRAPHITI_BULK_MAX_BATCH: int = 20  # Maximum batch size cap
 
     @property
     def is_gcp_deployment(self) -> bool:

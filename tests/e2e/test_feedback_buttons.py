@@ -21,10 +21,10 @@ pytestmark = pytest.mark.e2e
 @pytest.fixture
 def has_signing_secret():
     """Check if signing secret is available for button click tests."""
-    if not os.environ.get("SLACK_SIGNING_SECRET"):
+    if not (os.environ.get("SLACK_STAGING_SIGNING_SECRET") or os.environ.get("SLACK_SIGNING_SECRET")):
         pytest.skip(
-            "SLACK_SIGNING_SECRET not set. "
-            "Add STAGING_SLACK_SIGNING_SECRET to GitHub secrets to enable button click tests."
+            "SLACK_STAGING_SIGNING_SECRET or SLACK_SIGNING_SECRET not set. "
+            "Fetch from Secret Manager or set in .env.e2e"
         )
     return True
 

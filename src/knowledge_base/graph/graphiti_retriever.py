@@ -192,7 +192,7 @@ class GraphitiRetriever:
             List of SearchResult objects with full metadata
         """
         if not self.is_enabled:
-            logger.debug("Graphiti retrieval disabled")
+            logger.warning("Graphiti retrieval DISABLED — returning empty results")
             return []
 
         try:
@@ -206,6 +206,8 @@ class GraphitiRetriever:
                 num_results=fetch_count,
                 group_ids=[self.group_id],
             )
+
+            logger.info(f"Graphiti raw search returned {len(results)} results for: {query[:50]}...")
 
             # Convert and filter results
             search_results = []
@@ -229,14 +231,19 @@ class GraphitiRetriever:
                 if len(search_results) >= num_results:
                     break
 
-            logger.debug(f"Graphiti search_chunks returned {len(search_results)} results for: {query[:50]}...")
+            if len(results) > 0 and len(search_results) == 0:
+                logger.warning(
+                    f"Graphiti returned {len(results)} raw results but ALL were filtered out "
+                    f"(space_key={space_key}, doc_type={doc_type}, min_quality={min_quality_score})"
+                )
+            logger.info(f"Graphiti search_chunks returning {len(search_results)}/{len(results)} results for: {query[:50]}...")
             return search_results
 
         except GraphitiClientError as e:
-            logger.error(f"Graphiti search failed: {e}")
+            logger.error(f"Graphiti search FAILED: {e}", exc_info=True)
             return []
         except Exception as e:
-            logger.error(f"Unexpected error in Graphiti search: {e}")
+            logger.error(f"Unexpected error in Graphiti search: {e}", exc_info=True)
             return []
 
     async def search_with_quality_boost(
