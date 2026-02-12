@@ -23,7 +23,6 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 PROJECT="${GCP_PROJECT_ID:-ai-knowledge-base-42}"
 ZONE="${GCP_ZONE:-us-central1-a}"
-REGION="${GCP_REGION:-us-central1}"
 PROD_DISK="neo4j-prod-data-disk"
 DR_VM="neo4j-dr-test"
 DR_DISK="neo4j-dr-test-disk"
@@ -189,11 +188,11 @@ BACKUP_SA=$(gcloud iam service-accounts list \
     --format="value(email)" \
     --limit=1)
 
+SA_ARGS=()
 if [[ -z "${BACKUP_SA}" ]]; then
     echo "WARNING: backup-ops service account not found, creating VM without explicit SA"
-    SA_FLAG=""
 else
-    SA_FLAG="--service-account=${BACKUP_SA}"
+    SA_ARGS=("--service-account=${BACKUP_SA}")
 fi
 
 gcloud compute instances create "${DR_VM}" \
@@ -210,7 +209,7 @@ gcloud compute instances create "${DR_VM}" \
     --metadata="neo4j-password=${DR_PASSWORD}" \
     --metadata-from-file="startup-script=${DR_STARTUP_SCRIPT}" \
     --no-restart-on-failure \
-    ${SA_FLAG} \
+    "${SA_ARGS[@]}" \
     --quiet
 
 rm -f "${DR_STARTUP_SCRIPT}"
@@ -229,14 +228,12 @@ VM_IP=$(gcloud compute instances describe "${DR_VM}" \
 echo "  VM internal IP: ${VM_IP}"
 echo "  Waiting for Neo4j HTTP API on port 7474 (up to $((MAX_POLL_ATTEMPTS * POLL_INTERVAL))s)..."
 
-NEO4J_READY=false
 for i in $(seq 1 "${MAX_POLL_ATTEMPTS}"); do
     HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
         -u "neo4j:${DR_PASSWORD}" \
         "http://${VM_IP}:7474/" 2>/dev/null || echo "000")
 
     if [[ "${HTTP_STATUS}" == "200" ]]; then
-        NEO4J_READY=true
         echo "  Neo4j is ready (attempt ${i}/${MAX_POLL_ATTEMPTS})"
         break
     fi
