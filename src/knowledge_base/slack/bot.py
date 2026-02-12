@@ -392,9 +392,13 @@ PREVIOUS CONVERSATION:
 (Use this context to understand what the user is asking about and provide continuity)
 """
 
-    prompt = f"""You are Keboola's internal knowledge expert - a knowledgeable colleague who truly understands company processes, policies, and documentation.
+    prompt = f"""You are Keboola's internal knowledge base assistant. Answer questions ONLY based on the provided context documents.
 
-Your role is NOT to just search and cite documents. Your role is to THINK and ADVISE based on your knowledge.
+CRITICAL RULES:
+- ONLY use information explicitly stated in the context documents below.
+- Do NOT make up, assume, or hallucinate any information not in the documents.
+- If the context doesn't contain enough information to answer, say so clearly.
+- When referencing information, mention which source it came from.
 {conversation_section}
 CONTEXT DOCUMENTS:
 {context}
@@ -402,39 +406,12 @@ CONTEXT DOCUMENTS:
 CURRENT QUESTION: {question}
 
 INSTRUCTIONS:
-1. UNDERSTAND THE INTENT: What does the user really want to know? Are they looking for:
-   - A specific answer or fact?
-   - Guidance on how to do something?
-   - An overview or explanation of a topic?
-   - Help finding the right resource?
+- Answer based strictly on the context documents above.
+- Be concise and helpful. Use bullet points for multiple items.
+- If the documents only partially answer the question, share what IS available and note what's missing.
+- Do NOT invent tool names, process steps, or policies not mentioned in the documents.
 
-2. SYNTHESIZE KNOWLEDGE: Don't just list what documents exist. Extract the actual knowledge and insights:
-   - Connect information across multiple sources
-   - Identify the key points that answer their question
-   - Explain relationships and implications
-
-3. BE CONVERSATIONAL AND HELPFUL:
-   - Respond as a knowledgeable colleague would
-   - If the question is broad, provide a helpful overview then offer to dive deeper
-   - If something is unclear or you need more context, ask a clarifying question
-   - Suggest related topics they might find useful
-
-4. WHEN CITING SOURCES:
-   - Only cite when providing specific facts or quotes
-   - Use natural language: "According to our Tool Administrators guide..." or "Our FAQ mentions..."
-   - Don't just list source numbers without context
-
-5. HANDLE UNCERTAINTY:
-   - If the documents don't fully answer the question, say what you DO know and what's missing
-   - Suggest who they might ask or where else to look
-
-RESPONSE FORMAT:
-- Lead with the actual answer or insight, not a list of documents
-- Use bullet points for multiple items, but synthesize don't just list
-- Keep it concise but complete
-- End with a helpful follow-up if appropriate (e.g., "Would you like me to explain any of these in more detail?")
-
-Now provide a thoughtful, knowledge-based response:"""
+Provide your answer:"""
 
     try:
         llm = await get_llm()
@@ -455,6 +432,46 @@ Now provide a thoughtful, knowledge-based response:"""
             f"I found {len(chunks)} relevant documents but couldn't generate "
             f"an answer at this time. Please try again later."
         )
+
+
+def _split_text_into_blocks(text: str, max_chars: int = 3000) -> list[dict]:
+    """Split long text into multiple Slack section blocks.
+
+    Slack section blocks have a 3000 character text limit.
+    This splits at paragraph boundaries to stay within limits.
+    """
+    if len(text) <= max_chars:
+        return [{"type": "section", "text": {"type": "mrkdwn", "text": text}}]
+
+    blocks = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= max_chars:
+            blocks.append(
+                {"type": "section", "text": {"type": "mrkdwn", "text": remaining}}
+            )
+            break
+
+        # Try to split at a paragraph boundary
+        split_pos = remaining.rfind("\n\n", 0, max_chars)
+        if split_pos < max_chars // 2:
+            # No good paragraph break, try single newline
+            split_pos = remaining.rfind("\n", 0, max_chars)
+        if split_pos < max_chars // 2:
+            # No good newline break, split at space
+            split_pos = remaining.rfind(" ", 0, max_chars)
+        if split_pos < 1:
+            # Hard cut as last resort
+            split_pos = max_chars
+
+        chunk = remaining[:split_pos].rstrip()
+        remaining = remaining[split_pos:].lstrip()
+        if chunk:
+            blocks.append(
+                {"type": "section", "text": {"type": "mrkdwn", "text": chunk}}
+            )
+
+    return blocks
 
 
 def _create_feedback_buttons(message_ts: str) -> list[dict]:
@@ -583,13 +600,8 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
     _add_to_conversation(thread_ts, "user", text)
     _add_to_conversation(thread_ts, "assistant", answer)
 
-    # Build response blocks
-    blocks = [
-        {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": answer},
-        }
-    ]
+    # Build response blocks (split long answers to stay within Slack's 3000 char block limit)
+    blocks = _split_text_into_blocks(answer)
 
     # Add source references
     if chunks:
@@ -601,17 +613,34 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
             "elements": [{"type": "mrkdwn", "text": source_text}]
         })
 
+    # Truncate fallback text for Slack's message limit (40k chars)
+    fallback_text = answer[:4000] if len(answer) > 4000 else answer
+
     # Update thinking message with answer
     try:
         response = await async_call(
             client.chat_update,
             channel=channel,
             ts=thinking_msg["ts"],
-            text=answer,
+            text=fallback_text,
             blocks=blocks,
         )
+    except Exception as e:
+        logger.error(f"Failed to update message: {e}")
+        # Fallback: post answer as a new message so the user still gets a response
+        try:
+            await async_call(
+                client.chat_postMessage,
+                channel=channel,
+                thread_ts=thread_ts,
+                text=fallback_text,
+                blocks=blocks,
+            )
+        except Exception as e2:
+            logger.error(f"Failed to post fallback message: {e2}")
 
-        # Always add feedback buttons (even for "no results" responses)
+    # Always add feedback buttons (even for "no results" responses)
+    try:
         feedback_msg = await async_call(
             client.chat_postMessage,
             channel=channel,
@@ -637,9 +666,8 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
             )
         except Exception as be:
             logger.warning(f"Failed to record bot response: {be}")
-
     except Exception as e:
-        logger.error(f"Failed to update message: {e}")
+        logger.error(f"Failed to post feedback buttons: {e}")
 
 
 async def _handle_feedback_action(body: dict, client: WebClient) -> None:

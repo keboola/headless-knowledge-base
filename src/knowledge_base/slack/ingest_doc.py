@@ -552,4 +552,7 @@ async def handle_ingest_doc(ack: Any, command: dict, client: WebClient) -> None:
 
 def register_ingest_handler(app):
     """Register the /ingest-doc command handler."""
-    app.command("/ingest-doc")(handle_ingest_doc)
+    from knowledge_base.config import settings
+    cmd = f"/{settings.SLACK_COMMAND_PREFIX}ingest-doc"
+    app.command(cmd)(handle_ingest_doc)
+    logger.info(f"Registered slash command: {cmd}")

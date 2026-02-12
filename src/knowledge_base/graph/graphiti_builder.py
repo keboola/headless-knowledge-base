@@ -546,6 +546,119 @@ class GraphitiBuilder:
             logger.error(f"Failed to add chunk episode {chunk_id}: {e}")
             return {"success": False, "error": str(e)}
 
+    async def add_correction_episode(
+        self,
+        original_chunk_ids: list[str],
+        correction_text: str,
+        feedback_type: str,
+        issue_description: str,
+        reporter_id: str,
+        reporter_name: str,
+        channel_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Add a correction episode to the knowledge graph from user feedback.
+
+        When a user reports content as "outdated" or "incorrect" and provides
+        a correction, this creates a new Graphiti episode containing the
+        corrected knowledge. The episode is linked to the same entities as
+        the original content so future searches will find it.
+
+        Args:
+            original_chunk_ids: Chunk IDs of the content being corrected
+            correction_text: The corrected/updated information from the user
+            feedback_type: "outdated" or "incorrect"
+            issue_description: What the user reported as wrong
+            reporter_id: Slack user ID of the reporter
+            reporter_name: Slack username of the reporter
+
+        Returns:
+            Dict with success status and episode UUID
+        """
+        if not settings.GRAPH_ENABLE_GRAPHITI:
+            logger.debug("Graphiti disabled, skipping correction episode")
+            return {"success": False, "skipped": True, "reason": "graphiti_disabled"}
+
+        if not correction_text or not correction_text.strip():
+            logger.debug("No correction text provided, skipping")
+            return {"success": False, "skipped": True, "reason": "empty_correction"}
+
+        try:
+            graphiti = await self._get_graphiti()
+
+            # Look up original chunk metadata for context
+            original_page_title = ""
+            original_space_key = ""
+            for chunk_id in original_chunk_ids:
+                episode = await self.get_chunk_episode(chunk_id)
+                if episode and episode.get("metadata"):
+                    original_page_title = episode["metadata"].get("page_title", "")
+                    original_space_key = episode["metadata"].get("space_key", "")
+                    if original_page_title:
+                        break
+
+            # Build episode body with context
+            title_ref = original_page_title or "unknown content"
+            episode_body = (
+                f"[Correction of: {title_ref}]\n\n"
+                f"The following information replaces {feedback_type} content:\n\n"
+                f"{correction_text}\n\n"
+                f"Previously reported issue: {issue_description}"
+            )
+
+            # Build metadata
+            timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            first_chunk_id = original_chunk_ids[0] if original_chunk_ids else "unknown"
+            episode_name = f"correction_{first_chunk_id}_{timestamp}"
+
+            metadata = {
+                "episode_type": "feedback_correction",
+                "source": "user_feedback",
+                "feedback_type": feedback_type,
+                "original_chunk_ids": original_chunk_ids,
+                "original_page_title": original_page_title,
+                "original_space_key": original_space_key,
+                "reporter_id": reporter_id,
+                "reporter_name": reporter_name,
+                "channel_id": channel_id,
+                "corrected_at": datetime.utcnow().isoformat(),
+                "quality_score": 100.0,
+                "page_title": f"Correction by @{reporter_name} ({feedback_type})",
+            }
+
+            ref_time = datetime.utcnow()
+
+            episode = await graphiti.add_episode(
+                name=episode_name,
+                episode_body=episode_body,
+                source_description=json.dumps(metadata, default=str),
+                reference_time=ref_time,
+                group_id=self.group_id,
+            )
+
+            episode_uuid = (
+                episode.episode.uuid
+                if hasattr(episode, "episode")
+                else getattr(episode, "uuid", "unknown")
+            )
+            logger.info(
+                f"Created correction episode: {episode_name} -> {episode_uuid} "
+                f"(type={feedback_type}, reporter={reporter_name})"
+            )
+
+            return {
+                "success": True,
+                "episode_name": episode_name,
+                "episode_uuid": str(episode_uuid),
+                "feedback_type": feedback_type,
+            }
+
+        except GraphitiClientError as e:
+            logger.error(f"Graphiti client error creating correction episode: {e}")
+            return {"success": False, "error": str(e)}
+        except Exception as e:
+            logger.error(f"Failed to create correction episode: {e}")
+            return {"success": False, "error": str(e)}
+
     async def get_chunk_episode(self, chunk_id: str) -> dict[str, Any] | None:
         """Get a chunk episode by chunk_id.
 

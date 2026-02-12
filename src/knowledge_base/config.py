@@ -79,6 +79,7 @@ class Settings(BaseSettings):
     SLACK_BOT_TOKEN: str = ""  # xoxb-...
     SLACK_SIGNING_SECRET: str = ""
     SLACK_APP_TOKEN: str = ""  # xapp-... (for socket mode, optional)
+    SLACK_COMMAND_PREFIX: str = ""  # "staging-" for staging app, "" for prod
     KNOWLEDGE_ADMIN_CHANNEL: str = "#knowledge-admins"  # Channel for admin escalations
 
     # Web UI Admin

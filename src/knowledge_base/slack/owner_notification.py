@@ -142,7 +142,7 @@ async def lookup_slack_user_by_email(client: WebClient, email: str) -> str | Non
         Slack user ID if found, None otherwise
     """
     try:
-        result = client.users_lookupByEmail(email=email)
+        result = await client.users_lookupByEmail(email=email)
         if result.get("ok") and result.get("user"):
             return result["user"]["id"]
     except SlackApiError as e:
@@ -194,7 +194,7 @@ async def send_owner_dm(
     )
 
     try:
-        client.chat_postMessage(
+        await client.chat_postMessage(
             channel=owner_slack_id,  # DM by sending to user ID
             blocks=blocks,
             text=f"Your content received {feedback_type} feedback",
@@ -252,7 +252,7 @@ async def send_to_admin_channel(
     )
 
     try:
-        client.chat_postMessage(
+        await client.chat_postMessage(
             channel=admin_channel_id,
             blocks=blocks,
             text=f"Knowledge feedback: {feedback_type} from <@{reporter_id}>",
@@ -578,7 +578,7 @@ async def _get_admin_channel_id(client: WebClient) -> str | None:
 
     # Otherwise, look up by name
     try:
-        result = client.conversations_list(types="public_channel,private_channel")
+        result = await client.conversations_list(types="public_channel,private_channel")
 
         for channel in result.get("channels", []):
             if channel.get("name") == channel_value:
@@ -620,7 +620,7 @@ async def confirm_feedback_to_reporter(
         )
 
     try:
-        client.chat_postEphemeral(
+        await client.chat_postEphemeral(
             channel=channel_id,
             user=reporter_id,
             text=message,
