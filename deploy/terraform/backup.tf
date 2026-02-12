@@ -67,6 +67,13 @@ resource "google_project_iam_member" "backup_ops_run_invoker" {
   member  = "serviceAccount:${google_service_account.backup_ops.email}"
 }
 
+# Grant iam.serviceAccountUser to operate VMs that use other service accounts
+resource "google_project_iam_member" "backup_ops_sa_user" {
+  project = var.project_id
+  role    = "roles/iam.serviceAccountUser"
+  member  = "serviceAccount:${google_service_account.backup_ops.email}"
+}
+
 # =============================================================================
 # Nightly Production-to-Staging Data Refresh
 # =============================================================================
