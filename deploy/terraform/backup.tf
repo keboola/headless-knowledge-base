@@ -126,3 +126,69 @@ resource "google_cloud_scheduler_job" "staging_data_refresh" {
     retry_count = 1
   }
 }
+
+# =============================================================================
+# Monthly DR Recovery Test
+# =============================================================================
+# Creates a temporary VM from the latest production disk snapshot, validates
+# Neo4j data integrity via HTTP REST API, and reports PASS/FAIL.
+# All temporary resources (VM + disk) are cleaned up automatically.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Cloud Run Job — DR Recovery Test
+# -----------------------------------------------------------------------------
+resource "google_cloud_run_v2_job" "dr_recovery_test" {
+  name     = "dr-recovery-test"
+  location = var.region
+
+  template {
+    template {
+      containers {
+        image   = "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+        command = ["bash", "-c"]
+        args    = [file("${path.module}/../scripts/dr-recovery-test.sh")]
+
+        resources {
+          limits = {
+            cpu    = "1"
+            memory = "512Mi"
+          }
+        }
+      }
+
+      timeout         = "3600s"
+      max_retries     = 0
+      service_account = google_service_account.backup_ops.email
+
+      vpc_access {
+        connector = google_vpc_access_connector.connector.id
+        egress    = "PRIVATE_RANGES_ONLY"
+      }
+    }
+  }
+}
+
+# -----------------------------------------------------------------------------
+# Cloud Scheduler — Monthly on the 1st at 4 AM UTC
+# -----------------------------------------------------------------------------
+resource "google_cloud_scheduler_job" "dr_recovery_test" {
+  name        = "dr-recovery-test-monthly"
+  description = "Monthly automated DR recovery test — creates temp VM from prod snapshot and validates Neo4j data"
+  schedule    = "0 4 1 * *"
+  time_zone   = "UTC"
+  region      = var.region
+
+  http_target {
+    http_method = "POST"
+    uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project_id}/jobs/${google_cloud_run_v2_job.dr_recovery_test.name}:run"
+
+    oauth_token {
+      service_account_email = google_service_account.scheduler.email
+    }
+  }
+
+  retry_config {
+    retry_count = 0
+  }
+}
