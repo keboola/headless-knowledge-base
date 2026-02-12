@@ -60,7 +60,7 @@ resource "google_cloud_run_v2_job" "confluence_sync" {
 
         env {
           name  = "NEO4J_URI"
-          value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j.uri, "https://", "")}:443"
+          value = "bolt://${google_compute_instance.neo4j_prod.network_interface[0].network_ip}:7687"
         }
 
         env {
@@ -69,13 +69,8 @@ resource "google_cloud_run_v2_job" "confluence_sync" {
         }
 
         env {
-          name = "NEO4J_PASSWORD"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.neo4j_password.secret_id
-              version = "latest"
-            }
-          }
+          name  = "NEO4J_PASSWORD"
+          value = random_password.neo4j_prod_password.result
         }
 
       }
@@ -95,8 +90,6 @@ resource "google_cloud_run_v2_job" "confluence_sync" {
   depends_on = [
     google_secret_manager_secret_version.confluence_email,
     google_secret_manager_secret_version.confluence_api_token,
-    google_secret_manager_secret_version.neo4j_password,
-    google_cloud_run_v2_service.neo4j,
   ]
 }
 
@@ -166,7 +159,7 @@ resource "google_cloud_run_v2_job" "index_rebuild" {
 
         env {
           name  = "NEO4J_URI"
-          value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j.uri, "https://", "")}:443"
+          value = "bolt://${google_compute_instance.neo4j_prod.network_interface[0].network_ip}:7687"
         }
 
         env {
@@ -175,13 +168,8 @@ resource "google_cloud_run_v2_job" "index_rebuild" {
         }
 
         env {
-          name = "NEO4J_PASSWORD"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.neo4j_password.secret_id
-              version = "latest"
-            }
-          }
+          name  = "NEO4J_PASSWORD"
+          value = random_password.neo4j_prod_password.result
         }
 
         env {
@@ -216,11 +204,6 @@ resource "google_cloud_run_v2_job" "index_rebuild" {
       service_account = google_service_account.jobs.email
     }
   }
-
-  depends_on = [
-    google_secret_manager_secret_version.neo4j_password,
-    google_cloud_run_v2_service.neo4j,
-  ]
 }
 
 # Quality Scoring Job
@@ -421,7 +404,7 @@ resource "google_cloud_run_v2_job" "pipeline" {
 
         env {
           name  = "NEO4J_URI"
-          value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j.uri, "https://", "")}:443"
+          value = "bolt://${google_compute_instance.neo4j_prod.network_interface[0].network_ip}:7687"
         }
 
         env {
@@ -430,13 +413,8 @@ resource "google_cloud_run_v2_job" "pipeline" {
         }
 
         env {
-          name = "NEO4J_PASSWORD"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.neo4j_password.secret_id
-              version = "latest"
-            }
-          }
+          name  = "NEO4J_PASSWORD"
+          value = random_password.neo4j_prod_password.result
         }
 
         env {
@@ -475,8 +453,6 @@ resource "google_cloud_run_v2_job" "pipeline" {
   depends_on = [
     google_secret_manager_secret_version.confluence_email,
     google_secret_manager_secret_version.confluence_api_token,
-    google_secret_manager_secret_version.neo4j_password,
-    google_cloud_run_v2_service.neo4j,
   ]
 }
 
