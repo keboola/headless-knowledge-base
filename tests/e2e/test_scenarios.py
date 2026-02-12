@@ -69,10 +69,10 @@ class TestKnowledgeDiscovery:
         )
 
         # Wait for bot to respond in thread
-        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=60)
+        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=90)
 
-        assert reply is not None, "Bot did not respond to onboarding question"
-        assert len(reply.get("text", "")) > 50, "Response too short to be helpful"
+        # Bot must return a substantive answer from the knowledge base, not a fallback
+        slack_client.assert_substantive_response(reply)
 
     @pytest.mark.asyncio
     async def test_follow_up_question_in_thread(self, slack_client, e2e_config):
@@ -88,8 +88,9 @@ class TestKnowledgeDiscovery:
             f"<@{e2e_config['bot_user_id']}> {initial_q}"
         )
 
-        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=60)
-        assert reply is not None
+        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=90)
+        # First reply must be substantive
+        slack_client.assert_substantive_response(reply)
 
         # Follow-up in the same thread (thread is identified by original msg_ts)
         follow_up = "How do I request time off?"
@@ -106,7 +107,8 @@ class TestKnowledgeDiscovery:
             timeout=60
         )
 
-        assert follow_up_reply is not None, "Bot did not respond to follow-up"
+        # Follow-up reply must also be substantive
+        slack_client.assert_substantive_response(follow_up_reply)
 
     @pytest.mark.asyncio
     async def test_question_with_no_relevant_content(self, slack_client, e2e_config):
@@ -806,18 +808,19 @@ class TestRealisticUserJourneys:
             f"<@{e2e_config['bot_user_id']}> {q1}"
         )
 
-        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=60)
-        if reply:
-            thread_ts = reply["ts"]
+        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=90)
+        # Bot must provide a real answer about laptop setup, not a fallback
+        slack_client.assert_substantive_response(reply)
+        thread_ts = reply["ts"]
 
-            # Step 2: Say thanks
-            await slack_client.send_message("Thanks!", thread_ts=thread_ts)
+        # Step 2: Say thanks
+        await slack_client.send_message("Thanks!", thread_ts=thread_ts)
 
-            # Step 3: Ask follow-up
-            await slack_client.send_message(
-                f"<@{e2e_config['bot_user_id']}> What software should I install?",
-                thread_ts=thread_ts
-            )
+        # Step 3: Ask follow-up
+        await slack_client.send_message(
+            f"<@{e2e_config['bot_user_id']}> What software should I install?",
+            thread_ts=thread_ts
+        )
 
         # Step 4: Create knowledge about something missing
         unique_id = uuid.uuid4().hex[:8]

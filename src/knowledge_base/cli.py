@@ -997,7 +997,7 @@ async def _pipeline(
     click.echo("STEP 1: Downloading from Confluence")
     click.echo("=" * 60)
 
-    downloader = ConfluenceDownloader()
+    downloader = ConfluenceDownloader(index_to_chromadb=False)  # STEP 3 handles bulk indexing
     try:
         download_stats = await downloader.sync_all_spaces(
             space_keys=space_list,
@@ -1052,22 +1052,27 @@ async def _pipeline(
             progress = indexed / total * 100
             click.echo(f"\rProgress: {progress:.1f}% ({indexed}/{total})", nl=False)
 
-    async with async_session_maker() as session:
-        try:
-            if reindex:
-                click.echo("Reindexing (overwriting existing data)...")
+    # Query chunks inside a session, then close it before indexing.
+    # This avoids SQLite "database is locked" errors when the indexer
+    # opens its own session for checkpoint writes.
+    try:
+        if reindex:
+            click.echo("Reindexing (overwriting existing data)...")
 
-            click.echo("Indexing chunks to Graphiti...")
+        click.echo("Indexing chunks to Graphiti...")
 
-            # Get chunks from parser and index them
-            from sqlalchemy import func, select
-            from knowledge_base.db.models import Chunk, RawPage, IndexingCheckpoint
-            from knowledge_base.vectorstore.indexer import ChunkData
-            import json
+        from sqlalchemy import func, select
+        from sqlalchemy.orm import selectinload
+        from knowledge_base.db.models import Chunk, RawPage, IndexingCheckpoint
+        from knowledge_base.vectorstore.indexer import ChunkData
+        import json
 
+        chunk_data_list = []
+        async with async_session_maker() as session:
             query = (
                 select(Chunk)
                 .join(RawPage, Chunk.page_id == RawPage.page_id)
+                .options(selectinload(Chunk.page))
                 .where(RawPage.status == "active")
             )
             if space_key:
@@ -1082,7 +1087,6 @@ async def _pipeline(
                 )
                 query = query.where(Chunk.chunk_id.notin_(indexed_subquery))
 
-                # Log resume stats
                 indexed_count_result = await session.execute(
                     select(func.count()).select_from(IndexingCheckpoint).where(
                         IndexingCheckpoint.status == "indexed"
@@ -1096,7 +1100,6 @@ async def _pipeline(
             result = await session.execute(query)
             chunks = result.scalars().all()
 
-            chunk_data_list = []
             for chunk in chunks:
                 chunk_data = ChunkData(
                     chunk_id=chunk.chunk_id,
@@ -1113,23 +1116,24 @@ async def _pipeline(
                     parent_headers=json.dumps(chunk.parent_headers) if chunk.parent_headers else "[]",
                 )
                 chunk_data_list.append(chunk_data)
+        # Session closed — indexer can freely write checkpoints
 
-            count = await indexer.index_chunks_direct(chunk_data_list, progress_callback)
+        count = await indexer.index_chunks_direct(chunk_data_list, progress_callback)
 
-            if not verbose:
-                click.echo()  # New line after progress
+        if not verbose:
+            click.echo()  # New line after progress
 
-            click.echo(f"\nIndexing complete!")
-            click.echo(f"  Chunks indexed: {count}")
+        click.echo(f"\nIndexing complete!")
+        click.echo(f"  Chunks indexed: {count}")
 
-            # Show stats
-            stats_count = await indexer.get_chunk_count()
-            click.echo(f"  Total in index: {stats_count}")
+        # Show stats
+        stats_count = await indexer.get_chunk_count()
+        click.echo(f"  Total in index: {stats_count}")
 
-        except Exception as e:
-            logger.error(f"Indexing failed: {e}")
-            click.echo(f"\nError: {e}", err=True)
-            sys.exit(1)
+    except Exception as e:
+        logger.error(f"Indexing failed: {e}")
+        click.echo(f"\nError: {e}", err=True)
+        sys.exit(1)
 
     # Final summary
     click.echo("\n" + "=" * 60)

@@ -58,50 +58,150 @@ class SlackTestClient:
                 logger.error(f"Error adding reaction: {e}")
                 raise
 
+    # Status messages the bot posts before the real answer
+    STATUS_MESSAGES = {"Searching the knowledge base...", "Thinking..."}
+
+    # Feedback prompt prefixes (posted as separate messages, not the answer)
+    FEEDBACK_PREFIXES = ("was this helpful", "thanks!", "thanks for your feedback")
+
+    def _is_bot_message(self, msg: dict) -> bool:
+        """Check if a message is from the bot (by user ID or bot_id)."""
+        if msg.get("user") == self.bot_user_id:
+            return True
+        # Fallback: some bot messages use bot_id instead of user
+        if msg.get("bot_id") and not msg.get("user"):
+            return True
+        return False
+
+    def _is_substantive_bot_message(self, text: str) -> bool:
+        """Check if a bot message text is a real answer (not status/feedback)."""
+        if text in self.STATUS_MESSAGES:
+            return False
+        text_lower = text.strip().lower()
+        for prefix in self.FEEDBACK_PREFIXES:
+            if text_lower.startswith(prefix):
+                return False
+        # Very short messages are UI elements (feedback buttons, etc.)
+        if len(text) < 20:
+            return False
+        return True
+
     async def wait_for_bot_reply(
-        self, 
-        parent_ts: Optional[str] = None, 
-        after_ts: Optional[str] = None, 
-        timeout: int = 10
+        self,
+        parent_ts: Optional[str] = None,
+        after_ts: Optional[str] = None,
+        timeout: int = 90
     ) -> Optional[dict]:
-        """Wait for the bot to post a message in the channel or thread."""
+        """Wait for the bot to post a substantive message in the channel or thread.
+
+        Handles the bot's message flow:
+        1. Bot posts "Thinking..." status message
+        2. Bot edits "Thinking..." to the real answer
+        3. Bot posts "Was this helpful?" feedback buttons (separate message)
+
+        This method waits for step 2 (the edited real answer) and returns it.
+        Skips status messages, feedback prompts, and other short UI messages.
+        """
         start_time = time.time()
-        
+        poll_count = 0
+
         while time.time() - start_time < timeout:
             try:
                 if parent_ts:
                     # Check thread replies
-                    history = self.bot_client.conversations_replies(
+                    history = self.user_client.conversations_replies(
                         channel=self.channel_id,
                         ts=parent_ts
                     )
                     messages = history["messages"]
                 else:
                     # Check channel history
-                    history = self.bot_client.conversations_history(
+                    history = self.user_client.conversations_history(
                         channel=self.channel_id,
                         oldest=after_ts or 0
                     )
                     messages = history["messages"]
 
-                # Look for message from bot
+                # Look for substantive bot message
                 for msg in messages:
-                    # Skip the message we just sent (if we passed after_ts, that's handled)
-                    if msg.get("user") == self.bot_user_id:
-                        if after_ts and float(msg["ts"]) <= float(after_ts):
-                            continue
-                        # Skip status messages - keep waiting for real response
-                        text = msg.get("text", "")
-                        if text in ("Searching the knowledge base...", "Thinking..."):
-                            continue
+                    if not self._is_bot_message(msg):
+                        continue
+                    if after_ts and float(msg["ts"]) <= float(after_ts):
+                        continue
+
+                    text = msg.get("text", "")
+                    if self._is_substantive_bot_message(text):
+                        logger.debug(
+                            f"Found bot reply after {poll_count} polls "
+                            f"({time.time() - start_time:.1f}s): {text[:80]}..."
+                        )
                         return msg
-                        
+
+                if poll_count % 10 == 0 and poll_count > 0:
+                    bot_texts = [
+                        m.get("text", "")[:50]
+                        for m in messages
+                        if self._is_bot_message(m)
+                    ]
+                    logger.debug(
+                        f"Poll {poll_count} ({time.time() - start_time:.0f}s): "
+                        f"bot messages={bot_texts}"
+                    )
+
             except SlackApiError as e:
                 logger.warning(f"Error polling Slack: {e}")
-            
-            await asyncio.sleep(1)
-            
+
+            poll_count += 1
+            await asyncio.sleep(2)
+
+        logger.warning(
+            f"Timed out after {timeout}s waiting for bot reply "
+            f"(parent_ts={parent_ts}, after_ts={after_ts})"
+        )
         return None
+
+    # Phrases that indicate the bot failed to find real information
+    NO_INFO_PHRASES = [
+        "couldn't find relevant",
+        "don't have any information",
+        "no relevant information",
+        "unable to find",
+        "no results found",
+        "i don't have enough",
+        "i couldn't find any",
+    ]
+
+    @staticmethod
+    def assert_substantive_response(reply: dict, min_length: int = 100) -> str:
+        """Assert that a bot reply contains a substantive, useful answer.
+
+        Fails if the response is a "no information" fallback or too short.
+
+        Args:
+            reply: The bot reply message dict
+            min_length: Minimum expected response length for a real answer
+
+        Returns:
+            The response text (for further assertions if needed)
+        """
+        assert reply is not None, "Bot did not respond at all"
+        text = reply.get("text", "")
+
+        # Check for "no information" fallback responses
+        text_lower = text.lower()
+        for phrase in SlackTestClient.NO_INFO_PHRASES:
+            assert phrase not in text_lower, (
+                f"Bot returned a 'no information' fallback instead of a real answer: "
+                f"{text[:200]}..."
+            )
+
+        # Check minimum length - a real answer should be substantive
+        assert len(text) >= min_length, (
+            f"Bot response too short ({len(text)} chars, expected >= {min_length}). "
+            f"Response: {text[:200]}..."
+        )
+
+        return text
 
     def get_messages(self, limit: int = 10) -> List[dict]:
         """Get recent messages from the channel."""
@@ -415,9 +515,16 @@ class SlackTestClient:
         Returns:
             Signature in format "v0=<hex>"
         """
-        signing_secret = os.environ.get("SLACK_SIGNING_SECRET", "")
+        signing_secret = (
+            os.environ.get("SLACK_STAGING_SIGNING_SECRET")
+            or os.environ.get("SLACK_SIGNING_SECRET", "")
+        )
         if not signing_secret:
-            raise ValueError("SLACK_SIGNING_SECRET not set")
+            raise ValueError(
+                "SLACK_STAGING_SIGNING_SECRET or SLACK_SIGNING_SECRET not set. "
+                "Fetch from Secret Manager: gcloud secrets versions access latest "
+                "--secret=slack-signing-secret-staging --project=ai-knowledge-base-42"
+            )
 
         sig_basestring = f"v0:{timestamp}:{body}"
         signature = hmac.new(

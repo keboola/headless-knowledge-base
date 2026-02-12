@@ -14,7 +14,7 @@
 
 resource "google_compute_instance" "neo4j_staging" {
   name         = "neo4j-staging"
-  machine_type = "e2-small" # 2 vCPU, 2GB RAM - sufficient for staging
+  machine_type = "e2-standard-2" # 2 vCPU, 8GB RAM - handles Graphiti intake at full speed
   zone         = var.zone
 
   boot_disk {
@@ -58,7 +58,7 @@ resource "google_compute_disk" "neo4j_staging_data" {
   name = "neo4j-staging-data-disk"
   type = "pd-ssd"
   zone = var.zone
-  size = 20
+  size = 50 # Match production size (required for prod snapshot restores)
 
   labels = {
     environment = "staging"
@@ -102,7 +102,7 @@ resource "google_compute_firewall" "neo4j_staging_lb" {
   }
 
   # Google Load Balancer & Health Check IP ranges
-  source_ranges = ["130.211.0.0/22", "35.191.0.0/16"] 
+  source_ranges = ["130.211.0.0/22", "35.191.0.0/16"]
   target_tags   = ["neo4j-staging"]
 }
 
@@ -192,7 +192,7 @@ resource "google_cloud_run_v2_service" "slack_bot_staging" {
       }
 
       env {
-        name  = "NEO4J_URI"
+        name = "NEO4J_URI"
         # Direct Bolt connection to VM (no TLS for internal traffic)
         value = "bolt://${google_compute_instance.neo4j_staging.network_interface[0].network_ip}:7687"
       }
@@ -205,11 +205,6 @@ resource "google_cloud_run_v2_service" "slack_bot_staging" {
       env {
         name  = "NEO4J_PASSWORD"
         value = random_password.neo4j_staging_password.result
-      }
-
-      env {
-        name  = "DUCKDB_HOST"
-        value = "" # Empty - use local ephemeral DuckDB in staging
       }
 
       env {
@@ -413,7 +408,7 @@ resource "google_cloud_run_v2_job" "confluence_sync_staging" {
         }
 
         env {
-          name  = "NEO4J_URI"
+          name = "NEO4J_URI"
           # Direct Bolt connection to VM (no TLS for internal traffic)
           value = "bolt://${google_compute_instance.neo4j_staging.network_interface[0].network_ip}:7687"
         }
@@ -460,6 +455,12 @@ resource "google_cloud_run_v2_job" "confluence_sync_staging" {
           value = "true"
         }
 
+        # Adaptive bulk indexing (TCP-style congestion control)
+        env {
+          name  = "GRAPHITI_BULK_ENABLED"
+          value = "true"
+        }
+
         # Keep Anthropic key as fallback (optional)
         env {
           name = "ANTHROPIC_API_KEY"
@@ -472,7 +473,7 @@ resource "google_cloud_run_v2_job" "confluence_sync_staging" {
         }
       }
 
-      timeout     = "21600s"  # 6 hours for full KI space intake (was 4h, increased for optimization testing)
+      timeout     = "21600s" # 6 hours for full KI space intake (was 4h, increased for optimization testing)
       max_retries = 1
 
       vpc_access {
@@ -516,7 +517,7 @@ resource "google_cloud_run_v2_service" "neodash_staging" {
         name  = "standalone"
         value = "true"
       }
-      
+
       env {
         name  = "standaloneProtocol"
         value = "bolt+s"
@@ -543,7 +544,7 @@ resource "google_cloud_run_v2_service" "neodash_staging" {
       }
 
       env {
-        name  = "standalonePassword"
+        name = "standalonePassword"
         value_source {
           secret_key_ref {
             secret  = data.google_secret_manager_secret.neo4j_password_secret.secret_id
@@ -563,10 +564,10 @@ resource "google_cloud_run_v2_service" "neodash_staging" {
     # needed to fetch something. It doesn't strictly need it for browser connectivity.
     # However, good practice to keep it consistent.
     vpc_access {
-        connector = google_vpc_access_connector.connector.id
-        egress    = "PRIVATE_RANGES_ONLY"
+      connector = google_vpc_access_connector.connector.id
+      egress    = "PRIVATE_RANGES_ONLY"
     }
-    
+
     service_account = google_service_account.neodash.email # Reuse prod SA for simplicity or create new
   }
 }

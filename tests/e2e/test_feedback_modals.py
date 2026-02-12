@@ -394,7 +394,7 @@ class TestOwnerNotification:
     @pytest.mark.asyncio
     async def test_lookup_slack_user_by_email_success(self):
         """Should find Slack user ID from email."""
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_client.users_lookupByEmail.return_value = {
             "ok": True,
             "user": {"id": "U_OWNER_123"},
@@ -410,7 +410,7 @@ class TestOwnerNotification:
         """Should return None if user not found."""
         from slack_sdk.errors import SlackApiError
 
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         error_response = MagicMock()
         error_response.get.return_value = "users_not_found"
         mock_client.users_lookupByEmail.side_effect = SlackApiError(
@@ -425,12 +425,11 @@ class TestOwnerNotification:
     @pytest.mark.asyncio
     async def test_notify_owner_success_sends_dm(self):
         """Should send DM to owner when found, AND send to admin channel."""
-        mock_client = MagicMock()
+        mock_client = AsyncMock()
         mock_client.users_lookupByEmail.return_value = {
             "ok": True,
             "user": {"id": "U_OWNER_123"},
         }
-        mock_client.chat_postMessage = MagicMock()
 
         with patch("knowledge_base.slack.owner_notification.get_owner_email_for_chunks", new_callable=AsyncMock) as mock_get_email:
             with patch("knowledge_base.slack.owner_notification._get_feedback_context", new_callable=AsyncMock) as mock_context:
@@ -464,8 +463,7 @@ class TestOwnerNotification:
     @pytest.mark.asyncio
     async def test_notify_owner_fallback_to_admin_channel(self):
         """Should send to admin channel when owner not found."""
-        mock_client = MagicMock()
-        mock_client.chat_postMessage = MagicMock()
+        mock_client = AsyncMock()
 
         with patch("knowledge_base.slack.owner_notification.get_owner_email_for_chunks", new_callable=AsyncMock) as mock_get_email:
             with patch("knowledge_base.slack.owner_notification._get_feedback_context", new_callable=AsyncMock) as mock_context:
@@ -489,6 +487,362 @@ class TestOwnerNotification:
         mock_client.chat_postMessage.assert_called_once()
         call_kwargs = mock_client.chat_postMessage.call_args.kwargs
         assert call_kwargs["channel"] == "C_ADMIN"  # Admin channel
+
+
+class TestCorrectionEpisodeCreation:
+    """Tests that correction episodes are created when users provide corrections."""
+
+    @pytest.mark.asyncio
+    async def test_incorrect_modal_creates_correction_episode(self, test_db_session):
+        """Submitting incorrect modal with correction should create a correction episode."""
+        chunk_id = f"test_chunk_{uuid.uuid4().hex[:8]}"
+
+        view = {
+            "private_metadata": json.dumps({
+                "message_ts": "1234567890.123456",
+                "chunk_ids": [chunk_id],
+                "channel_id": "C_TEST",
+                "reporter_id": "U_TEST_USER",
+            }),
+            "state": {
+                "values": {
+                    "incorrect_block": {
+                        "incorrect_input": {"value": "The date is wrong"}
+                    },
+                    "correction_block": {
+                        "correction_input": {"value": "The correct date is 2024-01-01"}
+                    },
+                    "evidence_block": {
+                        "evidence_select": {
+                            "selected_option": {"value": "official_docs", "text": {"text": "Official docs"}}
+                        }
+                    },
+                }
+            },
+        }
+
+        mock_client = MagicMock()
+        mock_client.users_info = AsyncMock(return_value={"ok": True, "user": {"name": "test_user"}})
+
+        mock_builder = MagicMock()
+        mock_builder.add_correction_episode = AsyncMock(return_value={"episode_id": "ep_123"})
+
+        ack = AsyncMock()
+
+        with patch("knowledge_base.slack.feedback_modals.init_db", new_callable=AsyncMock):
+            with patch("knowledge_base.slack.feedback_modals.submit_feedback", new_callable=AsyncMock):
+                with patch("knowledge_base.slack.feedback_modals.notify_content_owner", new_callable=AsyncMock) as mock_notify:
+                    with patch("knowledge_base.slack.feedback_modals.confirm_feedback_to_reporter", new_callable=AsyncMock):
+                        with patch("knowledge_base.slack.feedback_modals.get_graphiti_builder", return_value=mock_builder):
+                            mock_notify.return_value = True
+                            await handle_incorrect_modal_submit(ack, {}, mock_client, view)
+
+        mock_builder.add_correction_episode.assert_called_once_with(
+            original_chunk_ids=[chunk_id],
+            correction_text="The correct date is 2024-01-01",
+            feedback_type="incorrect",
+            issue_description="The date is wrong",
+            reporter_id="U_TEST_USER",
+            reporter_name="test_user",
+            channel_id="C_TEST",
+        )
+
+    @pytest.mark.asyncio
+    async def test_outdated_modal_creates_correction_episode(self, test_db_session):
+        """Submitting outdated modal with current info should create a correction episode."""
+        chunk_id = f"test_chunk_{uuid.uuid4().hex[:8]}"
+
+        view = {
+            "private_metadata": json.dumps({
+                "message_ts": "1234567890.123456",
+                "chunk_ids": [chunk_id],
+                "channel_id": "C_TEST",
+                "reporter_id": "U_TEST_USER",
+            }),
+            "state": {
+                "values": {
+                    "outdated_block": {
+                        "outdated_input": {"value": "The API endpoint changed"}
+                    },
+                    "current_block": {
+                        "current_input": {"value": "New endpoint is /api/v2"}
+                    },
+                    "when_block": {
+                        "when_input": {"value": "Last week"}
+                    },
+                }
+            },
+        }
+
+        mock_client = MagicMock()
+        mock_client.users_info = AsyncMock(return_value={"ok": True, "user": {"name": "test_user"}})
+
+        mock_builder = MagicMock()
+        mock_builder.add_correction_episode = AsyncMock(return_value={"episode_id": "ep_456"})
+
+        ack = AsyncMock()
+
+        with patch("knowledge_base.slack.feedback_modals.init_db", new_callable=AsyncMock):
+            with patch("knowledge_base.slack.feedback_modals.submit_feedback", new_callable=AsyncMock):
+                with patch("knowledge_base.slack.feedback_modals.notify_content_owner", new_callable=AsyncMock) as mock_notify:
+                    with patch("knowledge_base.slack.feedback_modals.confirm_feedback_to_reporter", new_callable=AsyncMock):
+                        with patch("knowledge_base.slack.feedback_modals.get_graphiti_builder", return_value=mock_builder):
+                            mock_notify.return_value = True
+                            await handle_outdated_modal_submit(ack, {}, mock_client, view)
+
+        mock_builder.add_correction_episode.assert_called_once_with(
+            original_chunk_ids=[chunk_id],
+            correction_text="New endpoint is /api/v2",
+            feedback_type="outdated",
+            issue_description="The API endpoint changed",
+            reporter_id="U_TEST_USER",
+            reporter_name="test_user",
+            channel_id="C_TEST",
+        )
+
+    @pytest.mark.asyncio
+    async def test_incorrect_modal_no_correction_skips_episode(self, test_db_session):
+        """Submitting incorrect modal WITHOUT correction should NOT create an episode."""
+        chunk_id = f"test_chunk_{uuid.uuid4().hex[:8]}"
+
+        view = {
+            "private_metadata": json.dumps({
+                "message_ts": "1234567890.123456",
+                "chunk_ids": [chunk_id],
+                "channel_id": "C_TEST",
+                "reporter_id": "U_TEST_USER",
+            }),
+            "state": {
+                "values": {
+                    "incorrect_block": {
+                        "incorrect_input": {"value": "Something is wrong"}
+                    },
+                    "correction_block": {
+                        "correction_input": {"value": None}
+                    },
+                    "evidence_block": {
+                        "evidence_select": {
+                            "selected_option": {"value": "colleague", "text": {"text": "Colleague"}}
+                        }
+                    },
+                }
+            },
+        }
+
+        mock_client = MagicMock()
+        mock_client.users_info.return_value = {"ok": True, "user": {"name": "test_user"}}
+
+        mock_builder = MagicMock()
+        mock_builder.add_correction_episode = AsyncMock()
+
+        ack = AsyncMock()
+
+        with patch("knowledge_base.slack.feedback_modals.init_db", new_callable=AsyncMock):
+            with patch("knowledge_base.slack.feedback_modals.submit_feedback", new_callable=AsyncMock):
+                with patch("knowledge_base.slack.feedback_modals.notify_content_owner", new_callable=AsyncMock) as mock_notify:
+                    with patch("knowledge_base.slack.feedback_modals.confirm_feedback_to_reporter", new_callable=AsyncMock):
+                        with patch("knowledge_base.slack.feedback_modals.get_graphiti_builder", return_value=mock_builder):
+                            mock_notify.return_value = True
+                            await handle_incorrect_modal_submit(ack, {}, mock_client, view)
+
+        mock_builder.add_correction_episode.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_outdated_modal_empty_correction_skips_episode(self, test_db_session):
+        """Submitting outdated modal with empty/whitespace current info should NOT create an episode."""
+        chunk_id = f"test_chunk_{uuid.uuid4().hex[:8]}"
+
+        view = {
+            "private_metadata": json.dumps({
+                "message_ts": "1234567890.123456",
+                "chunk_ids": [chunk_id],
+                "channel_id": "C_TEST",
+                "reporter_id": "U_TEST_USER",
+            }),
+            "state": {
+                "values": {
+                    "outdated_block": {
+                        "outdated_input": {"value": "Content is old"}
+                    },
+                    "current_block": {
+                        "current_input": {"value": "   "}
+                    },
+                    "when_block": {
+                        "when_input": {"value": None}
+                    },
+                }
+            },
+        }
+
+        mock_client = MagicMock()
+        mock_client.users_info.return_value = {"ok": True, "user": {"name": "test_user"}}
+
+        mock_builder = MagicMock()
+        mock_builder.add_correction_episode = AsyncMock()
+
+        ack = AsyncMock()
+
+        with patch("knowledge_base.slack.feedback_modals.init_db", new_callable=AsyncMock):
+            with patch("knowledge_base.slack.feedback_modals.submit_feedback", new_callable=AsyncMock):
+                with patch("knowledge_base.slack.feedback_modals.notify_content_owner", new_callable=AsyncMock) as mock_notify:
+                    with patch("knowledge_base.slack.feedback_modals.confirm_feedback_to_reporter", new_callable=AsyncMock):
+                        with patch("knowledge_base.slack.feedback_modals.get_graphiti_builder", return_value=mock_builder):
+                            mock_notify.return_value = True
+                            await handle_outdated_modal_submit(ack, {}, mock_client, view)
+
+        mock_builder.add_correction_episode.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_confusing_modal_does_not_create_correction_episode(self, test_db_session):
+        """Confusing feedback should NEVER create a correction episode."""
+        chunk_id = f"test_chunk_{uuid.uuid4().hex[:8]}"
+
+        view = {
+            "private_metadata": json.dumps({
+                "message_ts": "1234567890.123456",
+                "chunk_ids": [chunk_id],
+                "channel_id": "C_TEST",
+                "reporter_id": "U_TEST_USER",
+            }),
+            "state": {
+                "values": {
+                    "confusion_block": {
+                        "confusion_select": {
+                            "selected_option": {
+                                "value": "too_technical",
+                                "text": {"text": "Too technical"}
+                            }
+                        }
+                    },
+                    "clarification_block": {
+                        "clarification_input": {"value": "Please simplify"}
+                    },
+                }
+            },
+        }
+
+        mock_client = MagicMock()
+        mock_client.users_info.return_value = {"ok": True, "user": {"name": "test_user"}}
+
+        mock_builder = MagicMock()
+        mock_builder.add_correction_episode = AsyncMock()
+
+        ack = AsyncMock()
+
+        with patch("knowledge_base.slack.feedback_modals.init_db", new_callable=AsyncMock):
+            with patch("knowledge_base.slack.feedback_modals.submit_feedback", new_callable=AsyncMock):
+                with patch("knowledge_base.slack.feedback_modals.notify_content_owner", new_callable=AsyncMock) as mock_notify:
+                    with patch("knowledge_base.slack.feedback_modals.confirm_feedback_to_reporter", new_callable=AsyncMock):
+                        with patch("knowledge_base.slack.feedback_modals.get_graphiti_builder", return_value=mock_builder):
+                            mock_notify.return_value = False
+                            await handle_confusing_modal_submit(ack, {}, mock_client, view)
+
+        mock_builder.add_correction_episode.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_correction_episode_failure_does_not_break_flow(self, test_db_session):
+        """If add_correction_episode raises, notification and confirmation still happen."""
+        chunk_id = f"test_chunk_{uuid.uuid4().hex[:8]}"
+
+        view = {
+            "private_metadata": json.dumps({
+                "message_ts": "1234567890.123456",
+                "chunk_ids": [chunk_id],
+                "channel_id": "C_TEST",
+                "reporter_id": "U_TEST_USER",
+            }),
+            "state": {
+                "values": {
+                    "incorrect_block": {
+                        "incorrect_input": {"value": "Wrong info"}
+                    },
+                    "correction_block": {
+                        "correction_input": {"value": "Correct info here"}
+                    },
+                    "evidence_block": {
+                        "evidence_select": {
+                            "selected_option": {"value": "tested_myself", "text": {"text": "Tested"}}
+                        }
+                    },
+                }
+            },
+        }
+
+        mock_client = MagicMock()
+        mock_client.users_info.return_value = {"ok": True, "user": {"name": "test_user"}}
+
+        mock_builder = MagicMock()
+        mock_builder.add_correction_episode = AsyncMock(side_effect=RuntimeError("Neo4j connection failed"))
+
+        ack = AsyncMock()
+
+        with patch("knowledge_base.slack.feedback_modals.init_db", new_callable=AsyncMock):
+            with patch("knowledge_base.slack.feedback_modals.submit_feedback", new_callable=AsyncMock):
+                with patch("knowledge_base.slack.feedback_modals.notify_content_owner", new_callable=AsyncMock) as mock_notify:
+                    with patch("knowledge_base.slack.feedback_modals.confirm_feedback_to_reporter", new_callable=AsyncMock) as mock_confirm:
+                        with patch("knowledge_base.slack.feedback_modals.get_graphiti_builder", return_value=mock_builder):
+                            mock_notify.return_value = True
+                            await handle_incorrect_modal_submit(ack, {}, mock_client, view)
+
+        # Episode creation was attempted but failed
+        mock_builder.add_correction_episode.assert_called_once()
+
+        # Notification and confirmation still happened despite the failure
+        mock_notify.assert_called_once()
+        mock_confirm.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_correction_episode_with_multiple_chunks(self, test_db_session):
+        """Correction episode should receive all chunk IDs when multiple chunks are involved."""
+        chunk_ids = [f"test_chunk_{uuid.uuid4().hex[:8]}" for _ in range(3)]
+
+        view = {
+            "private_metadata": json.dumps({
+                "message_ts": "1234567890.123456",
+                "chunk_ids": chunk_ids,
+                "channel_id": "C_TEST",
+                "reporter_id": "U_TEST_USER",
+            }),
+            "state": {
+                "values": {
+                    "incorrect_block": {
+                        "incorrect_input": {"value": "All three sections are wrong"}
+                    },
+                    "correction_block": {
+                        "correction_input": {"value": "Here is the corrected content"}
+                    },
+                    "evidence_block": {
+                        "evidence_select": {
+                            "selected_option": {"value": "official_docs", "text": {"text": "Docs"}}
+                        }
+                    },
+                }
+            },
+        }
+
+        mock_client = MagicMock()
+        mock_client.users_info.return_value = {"ok": True, "user": {"name": "test_user"}}
+
+        mock_builder = MagicMock()
+        mock_builder.add_correction_episode = AsyncMock(return_value={"episode_id": "ep_multi"})
+
+        ack = AsyncMock()
+
+        with patch("knowledge_base.slack.feedback_modals.init_db", new_callable=AsyncMock):
+            with patch("knowledge_base.slack.feedback_modals.submit_feedback", new_callable=AsyncMock) as mock_submit:
+                with patch("knowledge_base.slack.feedback_modals.notify_content_owner", new_callable=AsyncMock) as mock_notify:
+                    with patch("knowledge_base.slack.feedback_modals.confirm_feedback_to_reporter", new_callable=AsyncMock):
+                        with patch("knowledge_base.slack.feedback_modals.get_graphiti_builder", return_value=mock_builder):
+                            mock_notify.return_value = True
+                            await handle_incorrect_modal_submit(ack, {}, mock_client, view)
+
+        # submit_feedback called once per chunk
+        assert mock_submit.call_count == 3
+
+        # Correction episode called once with ALL chunk IDs
+        mock_builder.add_correction_episode.assert_called_once()
+        call_kwargs = mock_builder.add_correction_episode.call_args.kwargs
+        assert call_kwargs["original_chunk_ids"] == chunk_ids
 
 
 class TestFullFeedbackModalFlow:

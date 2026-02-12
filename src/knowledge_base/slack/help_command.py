@@ -7,107 +7,115 @@ from slack_sdk import WebClient
 
 logger = logging.getLogger(__name__)
 
-# Help content organized by category
-HELP_SECTIONS = {
-    "ask": {
-        "title": "Asking Questions",
-        "icon": "mag",
-        "commands": [
-            {
-                "usage": "@KnowledgeBot <question>",
-                "description": "Ask any question - I'll search the knowledge base and provide an answer with sources.",
-                "examples": [
-                    "How do I request vacation time?",
-                    "What's the deployment process?",
-                    "Who manages the Snowflake account?",
-                ],
-            },
-            {
-                "usage": "DM the bot",
-                "description": "Send me a direct message for private conversations.",
-                "examples": ["Just open a DM and ask away!"],
-            },
-        ],
-    },
-    "create": {
-        "title": "Creating Knowledge",
-        "icon": "bulb",
-        "commands": [
-            {
-                "usage": "/create-knowledge <fact>",
-                "description": "Add a quick fact to the knowledge base. Great for tribal knowledge!",
-                "examples": [
-                    "/create-knowledge The admin of Snowflake is @sarah",
-                    "/create-knowledge To request AWS access, ask in #platform-access",
-                    "/create-knowledge Weekly standup is at 9am in #engineering-standup",
-                ],
-            },
-            {
-                "usage": "/create-doc",
-                "description": "Create a formal document with AI assistance. Opens a form to fill out.",
-                "examples": ["Use for policies, procedures, guidelines"],
-            },
-            {
-                "usage": "Save as Doc (message shortcut)",
-                "description": "Convert a Slack thread into documentation. Right-click a message → More actions → Save as Doc",
-                "examples": ["Great for preserving troubleshooting sessions or decisions"],
-            },
-        ],
-    },
-    "ingest": {
-        "title": "Importing External Docs",
-        "icon": "inbox_tray",
-        "commands": [
-            {
-                "usage": "/ingest-doc <url>",
-                "description": "Import external documents into the knowledge base.",
-                "examples": [
-                    "/ingest-doc https://docs.company.com/guide.pdf",
-                    "/ingest-doc https://docs.google.com/document/d/xxx",
-                    "/ingest-doc https://wiki.company.com/runbooks",
-                ],
-                "supported": ["Web pages", "PDFs", "Google Docs (public)", "Notion (public)"],
-            },
-        ],
-    },
-    "feedback": {
-        "title": "Improving Answers",
-        "icon": "chart_with_upwards_trend",
-        "commands": [
-            {
-                "usage": "Feedback buttons",
-                "description": "After each answer, use the buttons to rate it:",
-                "options": [
-                    ("thumbsup", "Helpful - The answer was accurate and useful"),
-                    ("hourglass", "Outdated - Information is no longer current"),
-                    ("x", "Incorrect - The answer contains errors"),
-                    ("question", "Confusing - The answer is unclear"),
-                ],
-            },
-            {
-                "usage": "Emoji reactions",
-                "description": "React to bot messages with thumbsup/thumbsdown for quick feedback.",
-                "examples": [],
-            },
-            {
-                "usage": "Say thanks!",
-                "description": "When an answer helps, saying 'Thanks!' in the thread lets me know it was useful.",
-                "examples": [],
-            },
-        ],
-    },
-    "tips": {
-        "title": "Pro Tips",
-        "icon": "star2",
-        "tips": [
-            "Be specific in your questions for better answers",
-            "Ask follow-up questions in the same thread for context",
-            "Use /create-knowledge for those 'I wish someone told me this' moments",
-            "Feedback helps improve rankings - the more you rate, the smarter I get!",
-            "Negative feedback? I'll offer to bring in an admin to help improve the content",
-        ],
-    },
-}
+def _get_help_sections() -> dict:
+    """Build help content with correct command prefix for the environment."""
+    from knowledge_base.config import settings
+    p = settings.SLACK_COMMAND_PREFIX
+
+    return {
+        "ask": {
+            "title": "Asking Questions",
+            "icon": "mag",
+            "commands": [
+                {
+                    "usage": "@KnowledgeBot <question>",
+                    "description": "Ask any question - I'll search the knowledge base and provide an answer with sources.",
+                    "examples": [
+                        "How do I request vacation time?",
+                        "What's the deployment process?",
+                        "Who manages the Snowflake account?",
+                    ],
+                },
+                {
+                    "usage": "DM the bot",
+                    "description": "Send me a direct message for private conversations.",
+                    "examples": ["Just open a DM and ask away!"],
+                },
+            ],
+        },
+        "create": {
+            "title": "Creating Knowledge",
+            "icon": "bulb",
+            "commands": [
+                {
+                    "usage": f"/{p}create-knowledge <fact>",
+                    "description": "Add a quick fact to the knowledge base. Great for tribal knowledge!",
+                    "examples": [
+                        f"/{p}create-knowledge The admin of Snowflake is @sarah",
+                        f"/{p}create-knowledge To request AWS access, ask in #platform-access",
+                        f"/{p}create-knowledge Weekly standup is at 9am in #engineering-standup",
+                    ],
+                },
+                {
+                    "usage": f"/{p}create-doc",
+                    "description": "Create a formal document with AI assistance. Opens a form to fill out.",
+                    "examples": ["Use for policies, procedures, guidelines"],
+                },
+                {
+                    "usage": "Save as Doc (message shortcut)",
+                    "description": "Convert a Slack thread into documentation. Right-click a message → More actions → Save as Doc",
+                    "examples": ["Great for preserving troubleshooting sessions or decisions"],
+                },
+            ],
+        },
+        "ingest": {
+            "title": "Importing External Docs",
+            "icon": "inbox_tray",
+            "commands": [
+                {
+                    "usage": f"/{p}ingest-doc <url>",
+                    "description": "Import external documents into the knowledge base.",
+                    "examples": [
+                        f"/{p}ingest-doc https://docs.company.com/guide.pdf",
+                        f"/{p}ingest-doc https://docs.google.com/document/d/xxx",
+                        f"/{p}ingest-doc https://wiki.company.com/runbooks",
+                    ],
+                    "supported": ["Web pages", "PDFs", "Google Docs (public)", "Notion (public)"],
+                },
+            ],
+        },
+        "feedback": {
+            "title": "Improving Answers",
+            "icon": "chart_with_upwards_trend",
+            "commands": [
+                {
+                    "usage": "Feedback buttons",
+                    "description": "After each answer, use the buttons to rate it:",
+                    "options": [
+                        ("thumbsup", "Helpful - The answer was accurate and useful"),
+                        ("hourglass", "Outdated - Information is no longer current"),
+                        ("x", "Incorrect - The answer contains errors"),
+                        ("question", "Confusing - The answer is unclear"),
+                    ],
+                },
+                {
+                    "usage": "Emoji reactions",
+                    "description": "React to bot messages with thumbsup/thumbsdown for quick feedback.",
+                    "examples": [],
+                },
+                {
+                    "usage": "Say thanks!",
+                    "description": "When an answer helps, saying 'Thanks!' in the thread lets me know it was useful.",
+                    "examples": [],
+                },
+            ],
+        },
+        "tips": {
+            "title": "Pro Tips",
+            "icon": "star2",
+            "tips": [
+                "Be specific in your questions for better answers",
+                "Ask follow-up questions in the same thread for context",
+                f"Use /{p}create-knowledge for those 'I wish someone told me this' moments",
+                "Feedback helps improve rankings - the more you rate, the smarter I get!",
+                "Negative feedback? I'll offer to bring in an admin to help improve the content",
+            ],
+        },
+    }
+
+
+# Keep module-level reference for backward compatibility
+HELP_SECTIONS = _get_help_sections()
 
 
 def build_help_blocks(section: str | None = None) -> list[dict]:
@@ -197,13 +205,15 @@ def build_help_blocks(section: str | None = None) -> list[dict]:
         # Footer with commands list
         blocks.append({"type": "divider"})
 
+        from knowledge_base.config import settings
+        p = settings.SLACK_COMMAND_PREFIX
         blocks.append({
             "type": "context",
             "elements": [
                 {
                     "type": "mrkdwn",
                     "text": (
-                        "*Commands:* `/help` • `/create-knowledge` • `/create-doc` • `/ingest-doc`\n"
+                        f"*Commands:* `/{p}help` • `/{p}create-knowledge` • `/{p}create-doc` • `/{p}ingest-doc`\n"
                         "*Shortcuts:* `@bot <question>` • `Save as Doc` (message menu)"
                     ),
                 },
@@ -354,6 +364,9 @@ def register_help_handlers(app):
     """Register help command and action handlers."""
     import re
 
-    app.command("/help")(handle_help_command)
+    from knowledge_base.config import settings
+    cmd = f"/{settings.SLACK_COMMAND_PREFIX}help"
+    app.command(cmd)(handle_help_command)
     app.action(re.compile(r"help_section_.*"))(handle_help_section_click)
     app.action("help_back_overview")(handle_help_back)
+    logger.info(f"Registered slash command: {cmd}")

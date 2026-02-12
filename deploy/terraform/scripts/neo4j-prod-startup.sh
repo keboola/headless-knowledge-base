@@ -62,6 +62,11 @@ docker run -d \
     -v $MOUNT_POINT/neo4j/data:/data \
     -v $MOUNT_POINT/neo4j/logs:/logs \
     -e NEO4J_AUTH="neo4j/${NEO4J_PASSWORD}" \
+    -e NEO4J_server_memory_heap_initial__size=2G \
+    -e NEO4J_server_memory_heap_max__size=4G \
+    -e NEO4J_server_memory_pagecache_size=1G \
+    -e NEO4J_PLUGINS='["apoc"]' \
+    -e NEO4J_dbms_security_procedures_unrestricted='apoc.*' \
     neo4j:5.26-community 2>&1 | tee /tmp/docker-run.log
 
 echo "Neo4j production server started successfully"

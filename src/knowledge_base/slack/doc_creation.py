@@ -508,7 +508,10 @@ def register_doc_handlers(app: App) -> None:
         app: Slack Bolt App instance
     """
     # Slash Commands
-    app.command("/create-doc")(handle_create_doc_command)
+    from knowledge_base.config import settings
+    cmd = f"/{settings.SLACK_COMMAND_PREFIX}create-doc"
+    app.command(cmd)(handle_create_doc_command)
+    logger.info(f"Registered slash command: {cmd}")
 
     # Shortcuts
     app.shortcut("save_as_doc")(handle_save_as_doc)

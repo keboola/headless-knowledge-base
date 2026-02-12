@@ -21,10 +21,10 @@ pytestmark = pytest.mark.e2e
 @pytest.fixture
 def has_signing_secret():
     """Check if signing secret is available for button click tests."""
-    if not os.environ.get("SLACK_SIGNING_SECRET"):
+    if not (os.environ.get("SLACK_STAGING_SIGNING_SECRET") or os.environ.get("SLACK_SIGNING_SECRET")):
         pytest.skip(
-            "SLACK_SIGNING_SECRET not set. "
-            "Add STAGING_SLACK_SIGNING_SECRET to GitHub secrets to enable button click tests."
+            "SLACK_STAGING_SIGNING_SECRET or SLACK_SIGNING_SECRET not set. "
+            "Fetch from Secret Manager or set in .env.e2e"
         )
     return True
 
@@ -55,9 +55,9 @@ class TestFeedbackButtonClicks:
         msg_ts = await slack_client.send_message(question)
         logger.info(f"Sent question, message_ts: {msg_ts}")
 
-        # 2. Wait for bot reply
+        # 2. Wait for bot reply and verify it's substantive
         reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=90)
-        assert reply is not None, "Bot did not respond to question"
+        slack_client.assert_substantive_response(reply)
         logger.info(f"Got bot reply: {reply.get('text', '')[:100]}...")
 
         # 3. Wait for feedback buttons message
@@ -91,9 +91,9 @@ class TestFeedbackButtonClicks:
         question = f"<@{bot_user_id}> Tell me about data pipelines"
         msg_ts = await slack_client.send_message(question)
 
-        # 2. Wait for bot reply
+        # 2. Wait for bot reply and verify it's substantive
         reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=90)
-        assert reply is not None, "Bot did not respond"
+        slack_client.assert_substantive_response(reply)
 
         # 3. Wait for feedback buttons
         feedback_msg = await slack_client.wait_for_message_with_buttons(
@@ -124,9 +124,9 @@ class TestFeedbackButtonsPresent:
         question = f"<@{bot_user_id}> What is the knowledge base?"
         msg_ts = await slack_client.send_message(question)
 
-        # Wait for reply
+        # Wait for reply and verify it's substantive
         reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=90)
-        assert reply is not None, "Bot did not respond"
+        slack_client.assert_substantive_response(reply)
 
         # Check for feedback buttons message
         feedback_msg = await slack_client.wait_for_message_with_buttons(

@@ -77,7 +77,7 @@ class HybridRetriever:
         retriever = self._get_retriever()
 
         if not retriever.is_enabled:
-            logger.warning("Graphiti is disabled, returning empty results")
+            logger.error("Graphiti is DISABLED — check GRAPH_ENABLE_GRAPHITI setting. Returning empty results.")
             return []
 
         try:
@@ -101,7 +101,7 @@ class HybridRetriever:
             return results
 
         except Exception as e:
-            logger.error(f"Hybrid search failed: {e}")
+            logger.error(f"Hybrid search FAILED (returning 0 results): {e}", exc_info=True)
             return []
 
     async def search_bm25_only(

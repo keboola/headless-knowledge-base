@@ -57,7 +57,7 @@ class TestAdminEscalationLive:
         # Wait for bot to respond
         reply = await slack_client.wait_for_bot_reply(
             parent_ts=msg_ts,
-            timeout=60
+            timeout=90
         )
 
         # The reply might be "I don't have information" which is fine
@@ -450,7 +450,7 @@ class TestFeedbackButtonsLive:
         # Wait for bot response (the answer)
         reply = await slack_client.wait_for_bot_reply(
             parent_ts=msg_ts,
-            timeout=60
+            timeout=90
         )
 
         assert reply is not None, "Bot did not respond"
@@ -515,7 +515,7 @@ class TestFeedbackButtonsLive:
         # Wait for bot response
         reply = await slack_client.wait_for_bot_reply(
             parent_ts=msg_ts,
-            timeout=60
+            timeout=90
         )
 
         assert reply is not None, "Bot did not respond"
@@ -602,7 +602,7 @@ class TestFeedbackFlowLive:
         # Wait for bot to respond
         reply = await slack_client.wait_for_bot_reply(
             parent_ts=msg_ts,
-            timeout=60
+            timeout=90
         )
 
         assert reply is not None, "Bot did not respond"
@@ -662,7 +662,7 @@ class TestFeedbackFlowLive:
         # Wait for bot to respond
         reply = await slack_client.wait_for_bot_reply(
             parent_ts=msg_ts,
-            timeout=60
+            timeout=90
         )
 
         assert reply is not None, "Bot did not respond"
@@ -733,7 +733,7 @@ class TestFeedbackFlowLive:
         # Wait for bot to respond
         reply = await slack_client.wait_for_bot_reply(
             parent_ts=msg_ts,
-            timeout=60
+            timeout=90
         )
 
         assert reply is not None, "Bot did not respond"
@@ -810,7 +810,7 @@ class TestInformationGuardianLive:
 
             reply = await slack_client.wait_for_bot_reply(
                 parent_ts=msg_ts,
-                timeout=60
+                timeout=90
             )
 
             assert reply is not None, f"Bot did not respond to: {question}"
@@ -858,7 +858,7 @@ class TestInformationGuardianLive:
 
         reply = await slack_client.wait_for_bot_reply(
             parent_ts=msg_ts,
-            timeout=60
+            timeout=90
         )
 
         assert reply is not None, "Bot did not respond"

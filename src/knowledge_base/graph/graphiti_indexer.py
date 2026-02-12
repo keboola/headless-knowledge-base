@@ -307,7 +307,9 @@ class GraphitiIndexer:
             settings.GRAPHITI_MAX_CONCURRENCY,
         )
 
-        if concurrency > 1:
+        if settings.GRAPHITI_BULK_ENABLED:
+            return await self._index_chunks_adaptive_bulk(chunks, progress_callback)
+        elif concurrency > 1:
             return await self._index_chunks_parallel(chunks, progress_callback)
         else:
             return await self._index_chunks_sequential(chunks, progress_callback)
@@ -514,6 +516,203 @@ class GraphitiIndexer:
             f"{results['errors']} errors ({results['rate_limits']} rate limit errors)"
         )
         return results["indexed"]
+
+    async def _index_chunks_adaptive_bulk(
+        self,
+        chunks: list["ChunkData | dict[str, Any]"],
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> int:
+        """Index chunks using adaptive bulk batching (TCP congestion-control style).
+
+        Starts with a small batch, doubles on success (slow start), switches to
+        linear growth after hitting the threshold, and halves on any error with
+        exponential backoff.  This finds the optimal batch size automatically.
+
+        Args:
+            chunks: List of ChunkData objects or dicts
+            progress_callback: Optional progress callback
+
+        Returns:
+            Number of successfully indexed chunks
+        """
+        self._session_id = str(uuid.uuid4())[:8]
+
+        builder = self._get_builder()
+        graphiti = await builder._get_graphiti()
+
+        total = len(chunks)
+        indexed = 0
+        errors = 0
+        skipped = 0
+
+        # Adaptive parameters
+        batch_size = settings.GRAPHITI_BULK_INITIAL_BATCH
+        max_batch_size = settings.GRAPHITI_BULK_MAX_BATCH
+        ssthresh = max_batch_size  # slow-start threshold
+        phase = "slow_start"
+        consecutive_failures = 0
+        base_delay = BASE_DELAY
+        processed = 0  # total chunks dispatched (success + error + skip)
+
+        logger.info(
+            f"Indexing {total} chunks via adaptive bulk "
+            f"(initial_batch={batch_size}, max_batch={max_batch_size})"
+        )
+
+        # Prepare all RawEpisodes up front, tracking which chunks mapped to which
+        episodes_with_chunks: list[tuple[Any, Any]] = []  # (raw_episode, chunk)
+        for chunk in chunks:
+            chunk_id = (
+                chunk.chunk_id
+                if hasattr(chunk, "chunk_id")
+                else chunk.get("chunk_id", "unknown")
+            )
+            page_id = (
+                chunk.page_id
+                if hasattr(chunk, "page_id")
+                else chunk.get("page_id", "unknown")
+            )
+            ep = builder.prepare_raw_episode(chunk)
+            if ep is None:
+                skipped += 1
+                processed += 1
+                await self._write_checkpoint(chunk_id, page_id, "skipped")
+                if progress_callback:
+                    progress_callback(processed, total)
+                continue
+            episodes_with_chunks.append((ep, chunk))
+
+        if skipped:
+            logger.info(f"Skipped {skipped} empty chunks")
+
+        remaining = list(episodes_with_chunks)
+
+        while remaining:
+            # Take the next batch
+            current_batch_size = min(batch_size, len(remaining))
+            batch = remaining[:current_batch_size]
+
+            try:
+                batch_episodes = [ep for ep, _ in batch]
+
+                result = await graphiti.add_episode_bulk(
+                    batch_episodes,
+                    group_id=builder.group_id,
+                )
+
+                # Success — checkpoint all chunks in batch
+                for ep, chunk in batch:
+                    chunk_id = (
+                        chunk.chunk_id
+                        if hasattr(chunk, "chunk_id")
+                        else chunk.get("chunk_id", "unknown")
+                    )
+                    page_id = (
+                        chunk.page_id
+                        if hasattr(chunk, "page_id")
+                        else chunk.get("page_id", "unknown")
+                    )
+                    indexed += 1
+                    processed += 1
+                    await self._write_checkpoint(chunk_id, page_id, "indexed")
+                    if progress_callback:
+                        progress_callback(processed, total)
+
+                # Remove processed batch from queue
+                remaining = remaining[current_batch_size:]
+
+                # Ramp up batch size
+                if phase == "slow_start":
+                    batch_size *= 2
+                    if batch_size >= ssthresh:
+                        batch_size = ssthresh
+                        phase = "congestion_avoidance"
+                else:
+                    batch_size += 1
+
+                batch_size = min(batch_size, max_batch_size)
+                consecutive_failures = 0
+
+                logger.info(
+                    f"Bulk batch OK: {current_batch_size} episodes | "
+                    f"progress={processed}/{total} | "
+                    f"next_batch={batch_size} ({phase})"
+                )
+
+                # Flush checkpoints periodically
+                if processed % self.batch_size == 0 or not remaining:
+                    await self._flush_checkpoints()
+
+            except Exception as e:
+                error_str = str(e)
+                is_rate_limit = _is_rate_limit_error(e)
+                consecutive_failures += 1
+
+                # Halve batch size
+                ssthresh = max(batch_size // 2, 1)
+                batch_size = max(batch_size // 2, 1)
+                phase = "congestion_avoidance"
+
+                # Exponential backoff
+                delay = min(base_delay * (2 ** (consecutive_failures - 1)), MAX_DELAY)
+                jitter = random.uniform(0, delay * 0.1)
+                wait = delay + jitter
+
+                logger.warning(
+                    f"Bulk batch FAILED ({current_batch_size} episodes): "
+                    f"{error_str[:200]} | "
+                    f"backoff={wait:.1f}s | next_batch={batch_size} | "
+                    f"failures={consecutive_failures}"
+                )
+
+                # Circuit breaker: too many consecutive failures
+                if consecutive_failures >= self.circuit_breaker.threshold:
+                    logger.error(
+                        f"Circuit breaker: {consecutive_failures} consecutive failures, "
+                        f"cooling down {self.circuit_breaker.cooldown}s"
+                    )
+                    await asyncio.sleep(self.circuit_breaker.cooldown)
+                    consecutive_failures = 0  # reset after cooldown
+                else:
+                    await asyncio.sleep(wait)
+
+                # If batch_size is 1 and still failing, mark chunk as failed and move on
+                if current_batch_size == 1 and consecutive_failures >= MAX_RETRIES:
+                    ep, chunk = remaining[0]
+                    chunk_id = (
+                        chunk.chunk_id
+                        if hasattr(chunk, "chunk_id")
+                        else chunk.get("chunk_id", "unknown")
+                    )
+                    page_id = (
+                        chunk.page_id
+                        if hasattr(chunk, "page_id")
+                        else chunk.get("page_id", "unknown")
+                    )
+                    errors += 1
+                    processed += 1
+                    await self._write_checkpoint(
+                        chunk_id, page_id, "failed", error_str[:500]
+                    )
+                    if progress_callback:
+                        progress_callback(processed, total)
+                    remaining = remaining[1:]
+                    consecutive_failures = 0
+                    logger.error(
+                        f"Giving up on chunk {chunk_id} after {MAX_RETRIES} failures"
+                    )
+
+                # Do NOT remove the batch from remaining — it will be retried
+                # with the smaller batch_size on the next iteration
+
+        # Final flush
+        await self._flush_checkpoints()
+
+        logger.info(
+            f"Completed adaptive bulk indexing: "
+            f"{indexed}/{total} indexed, {errors} errors, {skipped} skipped"
+        )
+        return indexed
 
     async def index_single_chunk(
         self,

@@ -138,26 +138,35 @@ class GraphitiRetriever:
 
         return metadata
 
-    def _to_search_result(self, graphiti_result: Any) -> SearchResult:
+    def _to_search_result(self, graphiti_result: Any, episode_data: dict | None = None) -> SearchResult:
         """Convert a Graphiti search result to SearchResult.
 
         Args:
-            graphiti_result: Result from Graphiti search
+            graphiti_result: Result from Graphiti search (edge or entity)
+            episode_data: Optional episode data (content + metadata) looked up
+                from the edge's episode references
 
         Returns:
             SearchResult object
         """
-        # Parse metadata from source_description
-        source_desc = getattr(graphiti_result, 'source_description', None)
-        metadata = self._parse_metadata(source_desc)
+        # If we have episode data, use it (much richer than edge facts)
+        if episode_data:
+            metadata = episode_data.get('metadata', {})
+            content = episode_data.get('content', '')
+            chunk_id = metadata.get('chunk_id', episode_data.get('name', ''))
+        else:
+            # Fallback: parse from the result itself
+            source_desc = getattr(graphiti_result, 'source_description', None)
+            metadata = self._parse_metadata(source_desc)
+            chunk_id = metadata.get('chunk_id', '')
+            if not chunk_id and hasattr(graphiti_result, 'name'):
+                chunk_id = graphiti_result.name
+            content = getattr(graphiti_result, 'content', '') or ''
 
-        # Get chunk_id from metadata or episode name
-        chunk_id = metadata.get('chunk_id', '')
-        if not chunk_id and hasattr(graphiti_result, 'name'):
-            chunk_id = graphiti_result.name
-
-        # Get content
-        content = getattr(graphiti_result, 'content', '') or ''
+        # For edges, prepend the fact as a summary if we have episode content
+        fact = getattr(graphiti_result, 'fact', None)
+        if fact and episode_data and content:
+            content = f"Key fact: {fact}\n\n{content}"
 
         # Get score
         score = getattr(graphiti_result, 'score', 1.0)
@@ -168,6 +177,50 @@ class GraphitiRetriever:
             score=score,
             metadata=metadata,
         )
+
+    async def _lookup_episodes(self, episode_uuids: list[str]) -> dict[str, dict]:
+        """Look up episode content and metadata from Neo4j by UUID.
+
+        Args:
+            episode_uuids: List of episode UUIDs to look up
+
+        Returns:
+            Dict mapping episode UUID to {content, metadata, name}
+        """
+        if not episode_uuids:
+            return {}
+
+        try:
+            graphiti = await self._get_graphiti()
+            driver = graphiti.driver
+
+            records, _, _ = await driver.execute_query(
+                """
+                MATCH (ep:Episodic)
+                WHERE ep.uuid IN $uuids
+                RETURN ep.uuid as uuid, ep.name as name,
+                       ep.content as content,
+                       ep.source_description as source_desc
+                """,
+                uuids=episode_uuids,
+            )
+
+            result = {}
+            for record in records:
+                uuid = record["uuid"]
+                source_desc = record.get("source_desc")
+                metadata = self._parse_metadata(source_desc)
+                result[uuid] = {
+                    "name": record.get("name", ""),
+                    "content": record.get("content", "") or "",
+                    "metadata": metadata,
+                }
+
+            return result
+
+        except Exception as e:
+            logger.warning(f"Failed to look up episodes: {e}")
+            return {}
 
     async def search_chunks(
         self,
@@ -192,7 +245,7 @@ class GraphitiRetriever:
             List of SearchResult objects with full metadata
         """
         if not self.is_enabled:
-            logger.debug("Graphiti retrieval disabled")
+            logger.warning("Graphiti retrieval DISABLED — returning empty results")
             return []
 
         try:
@@ -207,10 +260,38 @@ class GraphitiRetriever:
                 group_ids=[self.group_id],
             )
 
+            logger.info(f"Graphiti raw search returned {len(results)} results for: {query[:50]}...")
+
+            # Collect all episode UUIDs from edge results for batch lookup
+            all_episode_uuids = []
+            for result in results:
+                episodes = getattr(result, 'episodes', None) or []
+                all_episode_uuids.extend(episodes)
+
+            # Batch lookup episode content and metadata
+            episode_data = {}
+            if all_episode_uuids:
+                unique_uuids = list(set(all_episode_uuids))
+                episode_data = await self._lookup_episodes(unique_uuids)
+                logger.info(
+                    f"Looked up {len(episode_data)}/{len(unique_uuids)} episodes "
+                    f"for {len(results)} search results"
+                )
+
             # Convert and filter results
             search_results = []
+            seen_episodes = set()  # Deduplicate by episode
             for result in results:
-                sr = self._to_search_result(result)
+                # Get episode data for this result (use first episode)
+                episodes = getattr(result, 'episodes', None) or []
+                ep_data = None
+                for ep_uuid in episodes:
+                    if ep_uuid in episode_data and ep_uuid not in seen_episodes:
+                        ep_data = episode_data[ep_uuid]
+                        seen_episodes.add(ep_uuid)
+                        break
+
+                sr = self._to_search_result(result, episode_data=ep_data)
 
                 # Skip deleted chunks
                 if sr.metadata.get('deleted'):
@@ -229,14 +310,19 @@ class GraphitiRetriever:
                 if len(search_results) >= num_results:
                     break
 
-            logger.debug(f"Graphiti search_chunks returned {len(search_results)} results for: {query[:50]}...")
+            if len(results) > 0 and len(search_results) == 0:
+                logger.warning(
+                    f"Graphiti returned {len(results)} raw results but ALL were filtered out "
+                    f"(space_key={space_key}, doc_type={doc_type}, min_quality={min_quality_score})"
+                )
+            logger.info(f"Graphiti search_chunks returning {len(search_results)}/{len(results)} results for: {query[:50]}...")
             return search_results
 
         except GraphitiClientError as e:
-            logger.error(f"Graphiti search failed: {e}")
+            logger.error(f"Graphiti search FAILED: {e}", exc_info=True)
             return []
         except Exception as e:
-            logger.error(f"Unexpected error in Graphiti search: {e}")
+            logger.error(f"Unexpected error in Graphiti search: {e}", exc_info=True)
             return []
 
     async def search_with_quality_boost(

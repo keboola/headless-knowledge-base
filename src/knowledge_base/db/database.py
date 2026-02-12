@@ -1,9 +1,8 @@
 """Database connection and session management.
 
 ARCHITECTURE NOTE (per docs/ARCHITECTURE.md):
-- ChromaDB is the SOURCE OF TRUTH for knowledge data
-- SQLite stores legacy models (being phased out)
-- DuckDB stores analytics data (UserFeedback, BehavioralSignal, etc.)
+- Graphiti/Neo4j is the SOURCE OF TRUTH for knowledge data
+- SQLite stores local models (RawPage, GovernanceMetadata, feedback, etc.)
 """
 
 from sqlalchemy import event
@@ -47,23 +46,11 @@ async_session_maker = async_sessionmaker(
 
 
 async def init_db() -> None:
-    """Initialize database and create all tables.
-
-    Initializes both SQLite (for legacy models) and DuckDB (for analytics).
-    """
+    """Initialize database and create all tables."""
     from knowledge_base.db.models import Base
 
-    # Initialize SQLite tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-
-    # Initialize DuckDB tables for analytics
-    try:
-        from knowledge_base.db.duckdb_schema import init_duckdb_schema
-        init_duckdb_schema()
-    except ImportError:
-        # DuckDB not installed - analytics will be unavailable
-        pass
 
 
 async def get_session() -> AsyncSession:

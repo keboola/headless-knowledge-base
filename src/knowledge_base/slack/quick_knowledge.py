@@ -27,7 +27,10 @@ async def handle_create_knowledge(ack: Any, command: dict, client: WebClient) ->
     in Cloud Run deployments. The indexing operation (embedding generation + Graphiti upload)
     can take 2-4 seconds, which would cause "operation_timeout" errors.
     """
-    # CRITICAL: Acknowledge immediately to avoid timeout
+    # CRITICAL: Acknowledge immediately to avoid timeout.
+    # In Slack Bolt async HTTP mode, the HTTP 200 is only sent when this
+    # handler returns. Any await calls after ack() delay the response.
+    # ALL post-ack work MUST go into a background task.
     await ack()
 
     text = command.get("text", "").strip()
@@ -35,25 +38,23 @@ async def handle_create_knowledge(ack: Any, command: dict, client: WebClient) ->
     user_name = command.get("user_name", "unknown")
     channel_id = command.get("channel_id")
 
-    if not text:
-        await client.chat_postEphemeral(
-            channel=channel_id,
-            user=user_id,
-            text="Please provide the information you want to save. Usage: `/create-knowledge <fact>`",
-        )
-        return
-
-    # Send immediate response to user - don't wait for indexing
-    await client.chat_postEphemeral(
-        channel=channel_id,
-        user=user_id,
-        text="⏳ Saving knowledge... (this may take a few seconds)",
-    )
-
-    # Process the indexing in a background task to avoid blocking
-    async def process_indexing():
-        """Background task to handle the actual indexing work."""
+    async def process_command():
+        """Background task — runs after HTTP 200 is sent to Slack."""
         try:
+            if not text:
+                await client.chat_postEphemeral(
+                    channel=channel_id,
+                    user=user_id,
+                    text="Please provide the information you want to save. Usage: `/create-knowledge <fact>`",
+                )
+                return
+
+            await client.chat_postEphemeral(
+                channel=channel_id,
+                user=user_id,
+                text="⏳ Saving knowledge... (this may take a few seconds)",
+            )
+
             # Create unique IDs
             page_id = f"quick_{uuid.uuid4().hex[:16]}"
             chunk_id = f"{page_id}_0"
@@ -88,13 +89,11 @@ async def handle_create_knowledge(ack: Any, command: dict, client: WebClient) ->
             )
 
             # Index directly to Graphiti (source of truth)
-            # VectorIndexer is now an alias for GraphitiIndexer
             indexer = VectorIndexer()
             await indexer.index_single_chunk(chunk_data)
 
             logger.info(f"Created and indexed quick knowledge: {chunk_id}")
 
-            # Send success message
             await client.chat_postEphemeral(
                 channel=channel_id,
                 user=user_id,
@@ -109,9 +108,12 @@ async def handle_create_knowledge(ack: Any, command: dict, client: WebClient) ->
                 text=f"❌ Error saving knowledge: {str(e)}",
             )
 
-    # Start the background task and return immediately
-    asyncio.create_task(process_indexing())
+    # Start background task and return immediately so HTTP 200 is sent
+    asyncio.create_task(process_command())
 
 def register_quick_knowledge_handler(app):
     """Register the command handler with the Slack app."""
-    app.command("/create-knowledge")(handle_create_knowledge)
+    from knowledge_base.config import settings
+    cmd = f"/{settings.SLACK_COMMAND_PREFIX}create-knowledge"
+    app.command(cmd)(handle_create_knowledge)
+    logger.info(f"Registered slash command: {cmd}")

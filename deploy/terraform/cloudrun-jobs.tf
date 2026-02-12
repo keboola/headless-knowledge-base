@@ -78,10 +78,6 @@ resource "google_cloud_run_v2_job" "confluence_sync" {
           }
         }
 
-        env {
-          name  = "DUCKDB_HOST"
-          value = google_compute_instance.duckdb.network_interface[0].network_ip
-        }
       }
 
       timeout     = "3600s"
@@ -123,10 +119,6 @@ resource "google_cloud_run_v2_job" "parse" {
           }
         }
 
-        env {
-          name  = "DUCKDB_HOST"
-          value = google_compute_instance.duckdb.network_interface[0].network_ip
-        }
       }
 
       timeout     = "3600s"
@@ -190,11 +182,6 @@ resource "google_cloud_run_v2_job" "index_rebuild" {
               version = "latest"
             }
           }
-        }
-
-        env {
-          name  = "DUCKDB_HOST"
-          value = google_compute_instance.duckdb.network_interface[0].network_ip
         }
 
         env {
@@ -276,11 +263,6 @@ resource "google_cloud_run_v2_job" "quality_scoring" {
         }
 
         env {
-          name  = "DUCKDB_HOST"
-          value = google_compute_instance.duckdb.network_interface[0].network_ip
-        }
-
-        env {
           name  = "GCP_PROJECT_ID"
           value = var.project_id
         }
@@ -346,11 +328,6 @@ resource "google_cloud_run_v2_job" "metadata_generation" {
         env {
           name  = "VERTEX_AI_CLAUDE_MODEL"
           value = "claude-sonnet-4@20250514"
-        }
-
-        env {
-          name  = "DUCKDB_HOST"
-          value = google_compute_instance.duckdb.network_interface[0].network_ip
         }
 
         env {
@@ -460,11 +437,6 @@ resource "google_cloud_run_v2_job" "pipeline" {
               version = "latest"
             }
           }
-        }
-
-        env {
-          name  = "DUCKDB_HOST"
-          value = google_compute_instance.duckdb.network_interface[0].network_ip
         }
 
         env {

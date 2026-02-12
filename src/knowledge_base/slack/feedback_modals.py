@@ -11,6 +11,7 @@ from typing import Any
 from slack_sdk import WebClient
 
 from knowledge_base.db.database import init_db
+from knowledge_base.graph.graphiti_builder import get_graphiti_builder
 from knowledge_base.lifecycle.feedback import submit_feedback
 from knowledge_base.slack.owner_notification import (
     confirm_feedback_to_reporter,
@@ -70,7 +71,7 @@ async def handle_incorrect_modal_submit(
 
         # Get user info
         try:
-            user_info = client.users_info(user=reporter_id)
+            user_info = await client.users_info(user=reporter_id)
             username = user_info["user"]["name"]
         except Exception:
             username = reporter_id
@@ -87,6 +88,22 @@ async def handle_incorrect_modal_submit(
                 suggested_correction=correct_info,
                 conversation_thread_ts=message_ts,
             )
+
+        # Create correction episode if user provided corrected info
+        if correct_info and correct_info.strip():
+            try:
+                builder = get_graphiti_builder()
+                await builder.add_correction_episode(
+                    original_chunk_ids=chunk_ids,
+                    correction_text=correct_info,
+                    feedback_type="incorrect",
+                    issue_description=what_incorrect,
+                    reporter_id=reporter_id,
+                    reporter_name=username,
+                    channel_id=channel_id,
+                )
+            except Exception as e:
+                logger.error(f"Failed to create correction episode: {e}", exc_info=True)
 
         # Notify content owner
         owner_notified = await notify_content_owner(
@@ -167,7 +184,7 @@ async def handle_outdated_modal_submit(
 
         # Get user info
         try:
-            user_info = client.users_info(user=reporter_id)
+            user_info = await client.users_info(user=reporter_id)
             username = user_info["user"]["name"]
         except Exception:
             username = reporter_id
@@ -184,6 +201,22 @@ async def handle_outdated_modal_submit(
                 suggested_correction=current_info,
                 conversation_thread_ts=message_ts,
             )
+
+        # Create correction episode if user provided updated info
+        if current_info and current_info.strip():
+            try:
+                builder = get_graphiti_builder()
+                await builder.add_correction_episode(
+                    original_chunk_ids=chunk_ids,
+                    correction_text=current_info,
+                    feedback_type="outdated",
+                    issue_description=what_outdated,
+                    reporter_id=reporter_id,
+                    reporter_name=username,
+                    channel_id=channel_id,
+                )
+            except Exception as e:
+                logger.error(f"Failed to create correction episode: {e}", exc_info=True)
 
         # Notify content owner
         owner_notified = await notify_content_owner(
@@ -261,7 +294,7 @@ async def handle_confusing_modal_submit(
 
         # Get user info
         try:
-            user_info = client.users_info(user=reporter_id)
+            user_info = await client.users_info(user=reporter_id)
             username = user_info["user"]["name"]
         except Exception:
             username = reporter_id

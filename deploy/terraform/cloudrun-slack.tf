@@ -84,11 +84,6 @@ resource "google_cloud_run_v2_service" "slack_bot" {
       }
 
       env {
-        name  = "DUCKDB_HOST"
-        value = google_compute_instance.duckdb.network_interface[0].network_ip
-      }
-
-      env {
         name  = "LLM_PROVIDER"
         value = "gemini"
       }
