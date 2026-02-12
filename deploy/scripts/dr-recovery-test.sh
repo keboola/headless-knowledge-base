@@ -30,8 +30,6 @@ DR_DISK="neo4j-dr-test-disk"
 DR_PASSWORD="dr-test-$(date +%Y%m%d)"
 NETWORK="knowledge-base-vpc"
 SUBNET="knowledge-base-subnet"
-STARTUP_SCRIPT_PATH="${STARTUP_SCRIPT_PATH:-$(dirname "$0")/../terraform/scripts/neo4j-dr-startup.sh}"
-
 # Polling configuration
 MAX_POLL_ATTEMPTS=30
 POLL_INTERVAL=10
@@ -121,12 +119,68 @@ echo "  Disk created."
 # ---------------------------------------------------------------------------
 echo "[3/6] Creating temporary VM ${DR_VM}..."
 
-# Resolve the startup script path
-if [[ ! -f "${STARTUP_SCRIPT_PATH}" ]]; then
-    echo "ERROR: Startup script not found at ${STARTUP_SCRIPT_PATH}"
-    echo "Set STARTUP_SCRIPT_PATH to the path of neo4j-dr-startup.sh"
-    exit 1
+# Write the DR startup script to a temp file (since this script runs inlined
+# in a Cloud Run Job container, we cannot reference external files)
+DR_STARTUP_SCRIPT=$(mktemp)
+cat > "${DR_STARTUP_SCRIPT}" << 'STARTUP_EOF'
+#!/bin/bash
+set -euo pipefail
+
+DATA_DISK="/dev/disk/by-id/google-neo4j-dr-data"
+MOUNT_POINT="/data"
+
+mkdir -p $MOUNT_POINT
+
+if ! blkid $DATA_DISK; then
+    echo "Formatting data disk..."
+    mkfs.ext4 -F $DATA_DISK
 fi
+
+if ! mountpoint -q $MOUNT_POINT; then
+    mount $DATA_DISK $MOUNT_POINT
+else
+    echo "Data disk already mounted at $MOUNT_POINT"
+fi
+
+if ! grep -q "$DATA_DISK" /etc/fstab; then
+    echo "$DATA_DISK $MOUNT_POINT ext4 defaults 0 2" >> /etc/fstab
+fi
+
+mkdir -p $MOUNT_POINT/neo4j/data $MOUNT_POINT/neo4j/logs $MOUNT_POINT/neo4j/plugins
+
+# Reset auth files so the new NEO4J_AUTH takes effect on restored data
+rm -f $MOUNT_POINT/neo4j/data/dbms/auth.ini $MOUNT_POINT/neo4j/data/dbms/auth 2>/dev/null || true
+
+apt-get update
+apt-get install -y docker.io
+systemctl enable docker
+systemctl start docker
+
+NEO4J_PASSWORD=$(curl -sf "http://metadata.google.internal/computeMetadata/v1/instance/attributes/neo4j-password" -H "Metadata-Flavor: Google" 2>/dev/null || echo "dr-test-password")
+
+docker pull neo4j:5.26-community
+docker stop neo4j-dr 2>/dev/null || true
+docker rm neo4j-dr 2>/dev/null || true
+
+docker run -d \
+    --name neo4j-dr \
+    --restart always \
+    -p 7687:7687 \
+    -p 7474:7474 \
+    -v $MOUNT_POINT/neo4j/data:/data \
+    -v $MOUNT_POINT/neo4j/logs:/logs \
+    -e NEO4J_AUTH="neo4j/${NEO4J_PASSWORD}" \
+    -e NEO4J_server_memory_heap_initial__size=2G \
+    -e NEO4J_server_memory_heap_max__size=4G \
+    -e NEO4J_server_memory_pagecache_size=1G \
+    -e NEO4J_PLUGINS='["apoc"]' \
+    -e NEO4J_dbms_security_procedures_unrestricted='apoc.*' \
+    neo4j:5.26-community 2>&1 | tee /tmp/docker-run.log
+
+echo "Neo4j DR test server started successfully"
+sleep 5
+docker logs neo4j-dr > $MOUNT_POINT/neo4j/docker-startup.log 2>&1 || true
+STARTUP_EOF
 
 # Look up the backup-ops service account email
 BACKUP_SA=$(gcloud iam service-accounts list \
@@ -154,11 +208,12 @@ gcloud compute instances create "${DR_VM}" \
     --tags="neo4j-dr-test" \
     --disk="name=${DR_DISK},device-name=neo4j-dr-data,mode=rw,auto-delete=no" \
     --metadata="neo4j-password=${DR_PASSWORD}" \
-    --metadata-from-file="startup-script=${STARTUP_SCRIPT_PATH}" \
+    --metadata-from-file="startup-script=${DR_STARTUP_SCRIPT}" \
     --no-restart-on-failure \
     ${SA_FLAG} \
     --quiet
 
+rm -f "${DR_STARTUP_SCRIPT}"
 echo "  VM created."
 
 # ---------------------------------------------------------------------------
