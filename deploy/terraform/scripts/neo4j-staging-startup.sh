@@ -39,6 +39,10 @@ mkdir -p $MOUNT_POINT/neo4j/data
 mkdir -p $MOUNT_POINT/neo4j/logs
 mkdir -p $MOUNT_POINT/neo4j/plugins
 
+# Reset auth files if present (handles prod->staging snapshot restore)
+# Forces Neo4j to recreate auth from NEO4J_AUTH env var
+rm -f $MOUNT_POINT/neo4j/data/dbms/auth.ini $MOUNT_POINT/neo4j/data/dbms/auth 2>/dev/null || true
+
 # Install Docker
 apt-get update
 apt-get install -y docker.io

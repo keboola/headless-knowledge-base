@@ -58,7 +58,7 @@ resource "google_compute_disk" "neo4j_staging_data" {
   name = "neo4j-staging-data-disk"
   type = "pd-ssd"
   zone = var.zone
-  size = 20
+  size = 50 # Match production size (required for prod snapshot restores)
 
   labels = {
     environment = "staging"
