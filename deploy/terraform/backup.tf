@@ -66,3 +66,63 @@ resource "google_project_iam_member" "backup_ops_run_invoker" {
   role    = "roles/run.invoker"
   member  = "serviceAccount:${google_service_account.backup_ops.email}"
 }
+
+# =============================================================================
+# Nightly Production-to-Staging Data Refresh
+# =============================================================================
+# Restores staging Neo4j from the latest production disk snapshot.
+# Runs as a Cloud Run Job using gcloud CLI (no SSH, no VPC access needed).
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Cloud Run Job — Staging Data Refresh
+# -----------------------------------------------------------------------------
+resource "google_cloud_run_v2_job" "staging_data_refresh" {
+  name     = "staging-data-refresh"
+  location = var.region
+
+  template {
+    template {
+      containers {
+        image   = "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+        command = ["bash", "-c"]
+        args    = [file("${path.module}/../scripts/sync-prod-to-staging.sh")]
+
+        resources {
+          limits = {
+            cpu    = "1"
+            memory = "512Mi"
+          }
+        }
+      }
+
+      timeout         = "1800s"
+      max_retries     = 1
+      service_account = google_service_account.backup_ops.email
+    }
+  }
+}
+
+# -----------------------------------------------------------------------------
+# Cloud Scheduler — Nightly at 3 AM UTC (1 hour after snapshot)
+# -----------------------------------------------------------------------------
+resource "google_cloud_scheduler_job" "staging_data_refresh" {
+  name        = "staging-data-refresh-nightly"
+  description = "Nightly production-to-staging Neo4j data refresh via disk snapshot restore"
+  schedule    = "0 3 * * *"
+  time_zone   = "UTC"
+  region      = var.region
+
+  http_target {
+    http_method = "POST"
+    uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project_id}/jobs/${google_cloud_run_v2_job.staging_data_refresh.name}:run"
+
+    oauth_token {
+      service_account_email = google_service_account.scheduler.email
+    }
+  }
+
+  retry_config {
+    retry_count = 1
+  }
+}
