@@ -191,6 +191,22 @@ resource "google_cloud_run_v2_job" "index_rebuild" {
           name  = "VERTEX_AI_LOCATION"
           value = var.region
         }
+
+        # LLM for Graphiti (matches staging config)
+        env {
+          name  = "LLM_PROVIDER"
+          value = "gemini"
+        }
+
+        env {
+          name  = "GOOGLE_GENAI_USE_VERTEXAI"
+          value = "true"
+        }
+
+        env {
+          name  = "GRAPHITI_BULK_ENABLED"
+          value = "true"
+        }
       }
 
       timeout     = "3600s"
@@ -436,9 +452,25 @@ resource "google_cloud_run_v2_job" "pipeline" {
           name  = "VERTEX_AI_LOCATION"
           value = var.region
         }
+
+        # LLM for Graphiti (matches staging config)
+        env {
+          name  = "LLM_PROVIDER"
+          value = "gemini"
+        }
+
+        env {
+          name  = "GOOGLE_GENAI_USE_VERTEXAI"
+          value = "true"
+        }
+
+        env {
+          name  = "GRAPHITI_BULK_ENABLED"
+          value = "true"
+        }
       }
 
-      timeout     = "14400s" # 4 hours for full pipeline (was 2h, increased for optimization testing)
+      timeout     = "86400s" # 24 hours — Graphiti indexing is slow due to LLM calls per chunk
       max_retries = 1
 
       vpc_access {
