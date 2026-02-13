@@ -39,9 +39,12 @@ mkdir -p $MOUNT_POINT/neo4j/data
 mkdir -p $MOUNT_POINT/neo4j/logs
 mkdir -p $MOUNT_POINT/neo4j/plugins
 
-# Reset auth files if present (handles prod->staging snapshot restore)
-# Forces Neo4j to recreate auth from NEO4J_AUTH env var
-rm -f $MOUNT_POINT/neo4j/data/dbms/auth.ini $MOUNT_POINT/neo4j/data/dbms/auth 2>/dev/null || true
+# Reset auth on every startup (handles prod->staging snapshot restore)
+# Neo4j 5.x stores auth in the system database, not flat files.
+# Delete the system database to force Neo4j to recreate auth from NEO4J_AUTH env var.
+rm -rf $MOUNT_POINT/neo4j/data/dbms/auth.ini $MOUNT_POINT/neo4j/data/dbms/auth 2>/dev/null || true
+rm -rf $MOUNT_POINT/neo4j/data/databases/system $MOUNT_POINT/neo4j/data/transactions/system 2>/dev/null || true
+echo "Auth reset: system database removed, will be recreated from NEO4J_AUTH"
 
 # Install Docker
 apt-get update
