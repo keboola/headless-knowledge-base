@@ -5,9 +5,7 @@ import uuid
 import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
-from sqlalchemy import select
 
-from knowledge_base.db.models import Chunk, ChunkQuality, UserFeedback
 from knowledge_base.slack.quick_knowledge import handle_create_knowledge
 from knowledge_base.slack.bot import _handle_feedback_action, pending_feedback
 from knowledge_base.lifecycle.feedback import get_feedback_for_chunk
@@ -49,7 +47,7 @@ async def test_complete_feedback_lifecycle(slack_client, db_session, e2e_config)
         "channel_id": e2e_config["channel_id"]
     }
     
-    with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_indexer_cls:
+    with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_indexer_cls:
         mock_indexer = mock_indexer_cls.return_value
         mock_indexer.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
         mock_indexer.chroma.upsert = AsyncMock()
@@ -150,7 +148,7 @@ async def test_feedback_on_multiple_chunks(slack_client, db_session, e2e_config)
 
     # Create two chunks via quick_knowledge (indexed to ChromaDB)
     chunk_ids = []
-    with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_indexer_cls:
+    with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_indexer_cls:
         mock_indexer = mock_indexer_cls.return_value
         mock_indexer.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
         mock_indexer.chroma.upsert = AsyncMock()

@@ -11,14 +11,11 @@ from knowledge_base.config import settings
 
 
 @pytest.fixture(scope="session")
-def chromadb_available():
+def graphiti_available():
     """Check if Graphiti is available and skip tests if not.
 
     This fixture attempts to connect to Graphiti and skips the test
     if the connection fails.
-
-    Note: This is still named chromadb_available for backward compatibility
-    but now checks Graphiti.
 
     IMPORTANT: Tests that require this fixture need:
     1. GRAPH_ENABLE_GRAPHITI=true

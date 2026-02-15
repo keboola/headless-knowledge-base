@@ -2,7 +2,7 @@
 
 ARCHITECTURE NOTE (per docs/ARCHITECTURE.md):
 - Graphiti/Neo4j is the SOURCE OF TRUTH for knowledge data
-- SQLite stores local models (RawPage, GovernanceMetadata, feedback, etc.)
+- SQLite stores local models (RawPage, feedback, behavioral signals, etc.)
 """
 
 from sqlalchemy import event

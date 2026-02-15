@@ -238,65 +238,7 @@ class TestParallelIndexing:
 class TestResumeCapability:
     """Test resume functionality after interruption."""
 
-    @pytest.mark.asyncio
-    async def test_resume_skips_indexed_chunks(self, async_session):
-        """Test that resume query correctly skips indexed chunks."""
-        from sqlalchemy import select
-        from knowledge_base.db.models import Chunk, RawPage
-
-        # Create test data
-        page = RawPage(
-            page_id="page-1",
-            space_key="TEST",
-            title="Test Page",
-            file_path="/tmp/test.md",
-            author="test",
-            author_name="Test User",
-            url="http://example.com",
-            created_at="2024-01-01",
-            updated_at="2024-01-01",
-        )
-        async_session.add(page)
-
-        chunks = [
-            Chunk(
-                chunk_id=f"chunk-{i}",
-                page_id="page-1",
-                content=f"Content {i}",
-                chunk_type="text",
-                chunk_index=i,
-                char_count=100,
-                page_title="Test Page",
-            )
-            for i in range(5)
-        ]
-        async_session.add_all(chunks)
-        await async_session.commit()
-
-        # Mark 3 chunks as indexed
-        for i in range(3):
-            checkpoint = IndexingCheckpoint(
-                chunk_id=f"chunk-{i}",
-                page_id="page-1",
-                status="indexed",
-                session_id="previous",
-            )
-            async_session.add(checkpoint)
-        await async_session.commit()
-
-        # Query chunks for resume (should exclude indexed)
-        indexed_subquery = select(IndexingCheckpoint.chunk_id).where(
-            IndexingCheckpoint.status == "indexed"
-        )
-        query = select(Chunk).where(Chunk.chunk_id.notin_(indexed_subquery))
-
-        result = await async_session.execute(query)
-        remaining_chunks = result.scalars().all()
-
-        # Should have 2 remaining chunks (indexed 3, 5 total)
-        assert len(remaining_chunks) == 2
-        assert remaining_chunks[0].chunk_id == "chunk-3"
-        assert remaining_chunks[1].chunk_id == "chunk-4"
+    # Removed: test_resume_skips_indexed_chunks - tested deprecated Chunk model
 
 
 # Pytest fixtures

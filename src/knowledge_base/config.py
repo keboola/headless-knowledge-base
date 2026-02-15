@@ -26,12 +26,6 @@ class Settings(BaseSettings):
     # File Storage
     PAGES_DIR: str = "data/pages"  # Flat directory for .md files with random names
 
-    # ChromaDB (DEPRECATED - Graphiti is now the sole storage layer)
-    CHROMA_HOST: str = "chromadb"  # DEPRECATED: No longer used
-    CHROMA_PORT: int = 8000  # DEPRECATED: No longer used
-    CHROMA_USE_SSL: bool = True  # DEPRECATED: No longer used
-    CHROMA_TOKEN: str = ""  # DEPRECATED: No longer used
-
     # Redis
     REDIS_URL: str = "redis://redis:6379/0"
 
@@ -86,11 +80,8 @@ class Settings(BaseSettings):
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = "changeme"  # MUST be changed in production
 
-    # Hybrid Search (DEPRECATED - Graphiti handles search internally)
-    SEARCH_BM25_WEIGHT: float = 0.3  # DEPRECATED: Graphiti handles weights internally
-    SEARCH_VECTOR_WEIGHT: float = 0.7  # DEPRECATED: Graphiti handles weights internally
+    # Search
     SEARCH_TOP_K: int = 10  # Default number of results (still used)
-    BM25_INDEX_PATH: str = "data/bm25_index.pkl"  # DEPRECATED: No longer used
 
     # Graph Database (Graphiti + Neo4j)
     GRAPH_BACKEND: str = "neo4j"  # "neo4j" for all environments
@@ -102,8 +93,6 @@ class Settings(BaseSettings):
     NEO4J_PASSWORD: str = ""
     # Feature flags for Graphiti-only architecture
     GRAPH_ENABLE_GRAPHITI: bool = True  # Master switch for Graphiti (now required)
-    GRAPH_DUAL_WRITE: bool = False  # DEPRECATED: No longer used
-    GRAPH_COMPARE_MODE: bool = False  # DEPRECATED: No longer used
     GRAPH_EXPANSION_ENABLED: bool = True  # Always enabled with Graphiti-only
 
     # GCP Deployment Settings

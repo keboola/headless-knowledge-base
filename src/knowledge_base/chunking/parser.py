@@ -1,14 +1,14 @@
 """Parser service for processing raw pages into chunks.
 
 DEPRECATED: This module uses SQLite Chunk model which is deprecated.
-Use ConfluenceDownloader._index_page_to_chromadb() for new code.
+Use ConfluenceDownloader._index_page_to_graphiti() for new code.
 
 The preferred approach is:
 1. Use MarkdownChunker to chunk content
 2. Create ChunkData objects
-3. Index directly to ChromaDB via VectorIndexer.index_chunks_direct()
+3. Index directly to Graphiti via GraphitiIndexer
 
-See docs/adr/0005-chromadb-source-of-truth.md for architecture details.
+See docs/ARCHITECTURE.md for architecture details.
 """
 
 import logging

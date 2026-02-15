@@ -60,12 +60,10 @@ resource "google_cloud_run_v2_service" "slack_bot" {
         value = "true"
       }
 
-      # Neo4j connection - using internal Cloud Run URL
-      # Note: Bolt protocol over HTTPS via Cloud Run's internal networking
-      # Cloud Run exposes services on port 443, so we need bolt+s://...:443
+      # Neo4j connection - using internal GCE VM IP via VPC connector
       env {
         name  = "NEO4J_URI"
-        value = "bolt+s://${replace(google_cloud_run_v2_service.neo4j.uri, "https://", "")}:443"
+        value = "bolt://${google_compute_instance.neo4j_prod.network_interface[0].network_ip}:7687"
       }
 
       env {
@@ -74,13 +72,8 @@ resource "google_cloud_run_v2_service" "slack_bot" {
       }
 
       env {
-        name = "NEO4J_PASSWORD"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.neo4j_password.secret_id
-            version = "latest"
-          }
-        }
+        name  = "NEO4J_PASSWORD"
+        value = random_password.neo4j_prod_password.result
       }
 
       env {
@@ -142,8 +135,6 @@ resource "google_cloud_run_v2_service" "slack_bot" {
     google_secret_manager_secret_version.slack_bot_token,
     google_secret_manager_secret_version.slack_signing_secret,
     google_secret_manager_secret_version.anthropic_api_key,
-    google_secret_manager_secret_version.neo4j_password,
-    google_cloud_run_v2_service.neo4j,
   ]
 }
 

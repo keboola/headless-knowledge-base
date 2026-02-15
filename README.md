@@ -40,7 +40,7 @@ This system:
                                  |
                                  v
                            DATA LAYER
-         ChromaDB (vectors)  |  SQLite (metadata)  |  NetworkX (graph)
+      Neo4j + Graphiti (knowledge graph)  |  SQLite (metadata)  |  Redis (queue)
 ```
 
 ---
@@ -52,15 +52,13 @@ This system:
 | **Language** | Python 3.11+ |
 | **API Framework** | FastAPI |
 | **Primary Interface** | Slack Bot (Bolt) |
-| **Vector Database** | ChromaDB (HTTP mode) |
-| **LLM Provider** | Anthropic Claude (primary), Gemini (alternative) |
+| **Knowledge Graph** | Neo4j 5.26 + Graphiti-core (temporal knowledge graph) |
+| **Graph Protocol** | Bolt (port 7687) |
+| **LLM Provider** | Anthropic Claude (primary), Gemini (alternative via Vertex AI) |
 | **Embeddings** | sentence-transformers / Vertex AI |
-| **Keyword Search** | rank-bm25 |
-| **Knowledge Graph** | NetworkX |
-| **Metadata Storage** | SQLite + SQLAlchemy |
+| **Metadata Storage** | SQLite + SQLAlchemy 2.0 (async) |
 | **Task Queue** | Celery + Redis |
-| **Re-ranking** | cross-encoder (sentence-transformers) |
-| **Web UI** | Streamlit |
+| **Web UI** | Streamlit, Neodash (Neo4j dashboards) |
 
 ---
 
@@ -79,14 +77,14 @@ ai-based-knowledge/
 │   ├── documents/               # Document creation & approval
 │   ├── evaluation/              # LLM-as-Judge quality scoring
 │   ├── governance/              # Gap analysis, obsolete detection
-│   ├── graph/                   # Knowledge graph (NetworkX)
+│   ├── graph/                   # Knowledge graph (Graphiti + Neo4j)
 │   ├── lifecycle/               # Document lifecycle management
 │   ├── main.py                  # FastAPI entry point
 │   ├── metadata/                # AI metadata extraction
 │   ├── rag/                     # RAG pipeline & LLM providers
-│   ├── search/                  # Hybrid search (BM25 + vector)
+│   ├── search/                  # Search integration (Graphiti-powered)
 │   ├── slack/                   # Slack bot integration
-│   ├── vectorstore/             # ChromaDB client & embeddings
+│   ├── vectorstore/             # Embeddings (legacy, deprecated)
 │   └── web/                     # Streamlit web UI
 ├── tests/                       # Test suite
 ├── plan/                        # Implementation planning docs
@@ -111,11 +109,11 @@ ai-based-knowledge/
 - Manual rebase via CLI when refresh needed
 - Preserves user feedback and quality scores across rebases
 
-### 2. Hybrid Search
-- **BM25 keyword search** for exact term matching
-- **Vector search** for semantic similarity
-- **RRF (Reciprocal Rank Fusion)** to combine results
-- **Knowledge graph traversal** for related content
+### 2. Hybrid Search (Graphiti-powered)
+- **Semantic search** via Graphiti embeddings
+- **Graph traversal** via Neo4j for related content and multi-hop queries
+- **Temporal awareness** via Graphiti's bi-temporal model
+- **Entity-based retrieval** for precise knowledge graph queries
 
 ### 3. RAG Pipeline
 - Retrieves relevant chunks from hybrid search
@@ -216,12 +214,14 @@ User Interactions (Slack)  --(real-time)-->  Enrichments
 
 Key decisions documented in `docs/adr/`:
 
-| ADR | Decision | Rationale |
-|-----|----------|-----------|
-| ADR-0001 | DuckDB on GCE | Cost-effective, simple |
-| ADR-0002 | ChromaDB on Cloud Run | Portable, no vendor lock-in |
-| ADR-0003 | Anthropic Claude | Best quality for RAG |
-| ADR-0004 | Slack Bot HTTP Mode | Cloud Run compatible |
+| ADR | Decision | Status |
+|-----|----------|--------|
+| ADR-0001 | DuckDB on GCE | Accepted |
+| ADR-0002 | ChromaDB on Cloud Run | Superseded by ADR-0009 |
+| ADR-0003 | Anthropic Claude | Accepted |
+| ADR-0004 | Slack Bot HTTP Mode | Accepted |
+| ADR-0005 | ChromaDB as Source of Truth | Superseded by ADR-0009 |
+| ADR-0009 | Neo4j + Graphiti as Knowledge Store | Accepted |
 
 ---
 
@@ -268,8 +268,8 @@ See `plan/PROGRESS.md` for detailed changelog.
 - `src/knowledge_base/rag/` - RAG pipeline and LLM providers
 - `src/knowledge_base/search/` - Hybrid search implementation
 - `src/knowledge_base/slack/` - Slack bot integration
-- `src/knowledge_base/vectorstore/` - ChromaDB and embeddings
-- `src/knowledge_base/graph/` - Knowledge graph
+- `src/knowledge_base/vectorstore/` - Embeddings (legacy, deprecated)
+- `src/knowledge_base/graph/` - Knowledge graph (Graphiti + Neo4j)
 
 **Configuration:**
 - `src/knowledge_base/config.py` - All settings with env var overrides
@@ -321,4 +321,4 @@ See `docs/AGENT-REPORTS/SECURITY.md` for full security review.
 
 ## License
 
-Proprietary - Keboola
+GPL-3.0-or-later - See [LICENSE](LICENSE)

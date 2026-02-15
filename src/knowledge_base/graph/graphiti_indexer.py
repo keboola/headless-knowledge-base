@@ -553,6 +553,7 @@ class GraphitiIndexer:
         consecutive_failures = 0
         base_delay = BASE_DELAY
         processed = 0  # total chunks dispatched (success + error + skip)
+        chunk_attempts = 0  # total attempts on current leading chunk
 
         logger.info(
             f"Indexing {total} chunks via adaptive bulk "
@@ -632,6 +633,7 @@ class GraphitiIndexer:
 
                 batch_size = min(batch_size, max_batch_size)
                 consecutive_failures = 0
+                chunk_attempts = 0
 
                 logger.info(
                     f"Bulk batch OK: {current_batch_size} episodes | "
@@ -647,6 +649,7 @@ class GraphitiIndexer:
                 error_str = str(e)
                 is_rate_limit = _is_rate_limit_error(e)
                 consecutive_failures += 1
+                chunk_attempts += 1
 
                 # Halve batch size
                 ssthresh = max(batch_size // 2, 1)
@@ -677,7 +680,7 @@ class GraphitiIndexer:
                     await asyncio.sleep(wait)
 
                 # If batch_size is 1 and still failing, mark chunk as failed and move on
-                if current_batch_size == 1 and consecutive_failures >= MAX_RETRIES:
+                if current_batch_size == 1 and chunk_attempts >= MAX_RETRIES:
                     ep, chunk = remaining[0]
                     chunk_id = (
                         chunk.chunk_id
@@ -698,6 +701,7 @@ class GraphitiIndexer:
                         progress_callback(processed, total)
                     remaining = remaining[1:]
                     consecutive_failures = 0
+                    chunk_attempts = 0
                     logger.error(
                         f"Giving up on chunk {chunk_id} after {MAX_RETRIES} failures"
                     )

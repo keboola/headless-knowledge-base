@@ -1,7 +1,9 @@
 # ADR-0005: ChromaDB as Source of Truth for Knowledge Data
 
 ## Status
-Accepted
+Superseded by [ADR-0009](0009-neo4j-graphiti-knowledge-store.md)
+
+> **Note**: This ADR has been superseded. Graphiti + Neo4j replaced ChromaDB as the source of truth for all knowledge data. See ADR-0009 for details.
 
 ## Date
 2026-01-03

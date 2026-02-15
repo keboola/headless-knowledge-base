@@ -2,7 +2,6 @@
 
 Graphiti is now the SOURCE OF TRUTH for all knowledge data.
 This module provides the ChunkData dataclass for chunk indexing.
-VectorIndexer is now an alias for GraphitiIndexer.
 """
 
 import logging
@@ -82,21 +81,3 @@ class ChunkData:
             "complexity": self.complexity,
             "summary": self.summary[:500] if self.summary else "",
         }
-
-
-# VectorIndexer is now an alias for GraphitiIndexer
-def get_vector_indexer():
-    """Get a vector indexer (now uses Graphiti).
-
-    DEPRECATED: Use GraphitiIndexer directly instead.
-    """
-    from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
-    return GraphitiIndexer()
-
-
-# Backward compatibility - VectorIndexer is now GraphitiIndexer
-try:
-    from knowledge_base.graph.graphiti_indexer import GraphitiIndexer as VectorIndexer
-except ImportError:
-    # Fallback if circular import
-    VectorIndexer = None

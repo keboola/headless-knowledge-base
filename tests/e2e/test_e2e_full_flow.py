@@ -10,9 +10,7 @@ import uuid
 import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
-from sqlalchemy import select
 
-from knowledge_base.db.models import Chunk, ChunkQuality, BehavioralSignal, UserFeedback
 from knowledge_base.slack.quick_knowledge import handle_create_knowledge
 
 logger = logging.getLogger(__name__)

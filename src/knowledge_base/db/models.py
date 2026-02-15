@@ -1,18 +1,16 @@
 """SQLAlchemy models for the knowledge base.
 
 ARCHITECTURE NOTE (per docs/ARCHITECTURE.md):
-- ChromaDB is the SOURCE OF TRUTH for knowledge data (chunks, metadata, quality scores)
-- SQLite/DuckDB stores ONLY analytics and feedback data
+- Graphiti + Neo4j is the source of truth for knowledge data (entities, relationships)
+- SQLite stores page sync metadata, user feedback, and behavioral signals
+- Chunk/ChunkQuality/ChunkMetadata are used by lifecycle management (quality scoring, archival)
 
-DEPRECATED MODELS (data now in ChromaDB):
-- Chunk, ChunkMetadata, ChunkQuality, GovernanceMetadata
-- These are kept for backward compatibility during migration but should not be used
-
-ACTIVE MODELS (analytics/workflow):
+ACTIVE MODELS:
+- RawPage (Confluence sync tracking)
+- Chunk, ChunkMetadata, ChunkQuality (lifecycle management)
 - UserFeedback, BehavioralSignal, BotResponse, ChunkAccessLog
 - Document, DocumentVersion, AreaApprover
 - UserConfluenceLink, QueryRecord, EvalResult, QualityReport
-- RawPage (kept for Confluence sync tracking)
 """
 
 from datetime import datetime
@@ -25,13 +23,6 @@ class Base(DeclarativeBase):
     """Base class for all models."""
 
     pass
-
-
-# =============================================================================
-# DEPRECATED MODELS - Data now stored in ChromaDB
-# These models are kept for backward compatibility during migration.
-# Do not use these for new code - use ChromaDB directly via vectorstore.client
-# =============================================================================
 
 
 class RawPage(Base):
@@ -71,9 +62,6 @@ class RawPage(Base):
     staleness_reason: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     # Relationships
-    governance: Mapped["GovernanceMetadata | None"] = relationship(
-        "GovernanceMetadata", back_populates="page", uselist=False, cascade="all, delete-orphan"
-    )
     chunks: Mapped[list["Chunk"]] = relationship(
         "Chunk", back_populates="page", cascade="all, delete-orphan"
     )
@@ -82,40 +70,11 @@ class RawPage(Base):
         return f"<RawPage(page_id={self.page_id}, title={self.title[:30]}...)>"
 
 
-class GovernanceMetadata(Base):
-    """DEPRECATED: Governance metadata extracted from Confluence labels.
-
-    NOTE: Governance data (owner, classification, etc.) is now stored in ChromaDB metadata.
-    See docs/adr/0005-chromadb-source-of-truth.md
-    """
-
-    __tablename__ = "governance_metadata"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    page_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("raw_pages.page_id"), unique=True, index=True
-    )
-
-    # Governance fields (extracted from labels)
-    owner: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    reviewed_by: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    classification: Mapped[str] = mapped_column(String(32), default="internal")
-    doc_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
-
-    # Relationships
-    page: Mapped["RawPage"] = relationship("RawPage", back_populates="governance")
-
-    def __repr__(self) -> str:
-        return f"<GovernanceMetadata(page_id={self.page_id}, owner={self.owner})>"
-
-
 class Chunk(Base):
-    """DEPRECATED: Parsed content chunk from a Confluence page.
+    """Parsed content chunk from a Confluence page.
 
-    NOTE: Chunk data is now stored directly in ChromaDB (source of truth).
-    Use vectorstore.indexer.ChunkData and index_chunks_direct() for new code.
-    See docs/adr/0005-chromadb-source-of-truth.md
+    Used by lifecycle management (quality scoring, archival) and CLI commands.
+    New chunk data is indexed via GraphitiIndexer to Neo4j/Graphiti.
     """
 
     __tablename__ = "chunks"
@@ -153,10 +112,9 @@ class Chunk(Base):
 
 
 class ChunkMetadata(Base):
-    """DEPRECATED: AI-generated metadata for a chunk.
+    """AI-generated metadata for a chunk.
 
-    NOTE: Metadata (topics, doc_type, summary, etc.) is now stored in ChromaDB metadata.
-    See docs/adr/0005-chromadb-source-of-truth.md
+    Used by lifecycle management and metadata CLI commands.
     """
 
     __tablename__ = "chunk_metadata"
@@ -206,7 +164,6 @@ def calculate_staleness(updated_at: datetime) -> tuple[bool, str | None]:
 
 # =============================================================================
 # Knowledge Lifecycle Management Models
-# NOTE: ChunkQuality is DEPRECATED - quality data now in ChromaDB
 # =============================================================================
 
 
@@ -241,14 +198,9 @@ class IndexingCheckpoint(Base):
 
 
 class ChunkQuality(Base):
-    """DEPRECATED: Quality tracking for chunks with usage-based decay.
+    """Quality tracking for chunks with usage-based decay.
 
-    NOTE: Quality scores (quality_score, access_count, feedback_count) are now stored
-    in ChromaDB metadata (source of truth). Use vectorstore.client methods:
-    - update_quality_score() - Update quality score
-    - get_quality_score() - Read current score
-    - update_single_metadata() - Update access_count, feedback_count
-    See docs/adr/0005-chromadb-source-of-truth.md
+    Used by lifecycle management (scorer, archival, governance).
     """
 
     __tablename__ = "chunk_quality"
@@ -491,76 +443,6 @@ class BotResponse(Base):
 
     def __repr__(self) -> str:
         return f"<BotResponse(ts={self.response_ts}, chunks={len(self.chunk_ids)})>"
-
-
-# =============================================================================
-# Knowledge Graph Models (Phase 04.5)
-# =============================================================================
-
-
-class Entity(Base):
-    """Extracted entities for knowledge graph.
-
-    Entities include people, teams, products, locations, and topics
-    extracted from documents for multi-hop reasoning.
-    """
-
-    __tablename__ = "entities"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    entity_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
-    name: Mapped[str] = mapped_column(String(256), index=True)
-    entity_type: Mapped[str] = mapped_column(String(32), index=True)
-    # Types: person, team, product, location, topic
-
-    # Alternative names for entity resolution
-    aliases: Mapped[str] = mapped_column(Text, default="[]")  # JSON array
-
-    # Metadata
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    source_count: Mapped[int] = mapped_column(Integer, default=1)  # How many docs mention this
-
-    # Timestamps
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
-
-    def __repr__(self) -> str:
-        return f"<Entity(id={self.entity_id}, name={self.name}, type={self.entity_type})>"
-
-
-class Relationship(Base):
-    """Relationships between entities and documents in the knowledge graph.
-
-    Links documents to entities they mention, authors, and spaces.
-    """
-
-    __tablename__ = "relationships"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-
-    # Source can be a page_id or entity_id
-    source_id: Mapped[str] = mapped_column(String(128), index=True)
-    source_type: Mapped[str] = mapped_column(String(32))  # page, entity
-
-    # Target is always an entity
-    target_id: Mapped[str] = mapped_column(String(128), index=True)
-
-    # Relationship type
-    relation_type: Mapped[str] = mapped_column(String(64), index=True)
-    # Types: mentions_person, mentions_team, mentions_product, mentions_location,
-    #        authored_by, belongs_to_space, related_to_topic
-
-    # Relationship strength (for ranking)
-    weight: Mapped[float] = mapped_column(Float, default=1.0)
-
-    # Context where relationship was found
-    context: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    # Timestamps
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-
-    def __repr__(self) -> str:
-        return f"<Relationship(source={self.source_id}, rel={self.relation_type}, target={self.target_id})>"
 
 
 # =============================================================================

@@ -9,11 +9,7 @@ the Confluence API and file system operations.
 
 import pytest
 import uuid
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
-from sqlalchemy import select
 
-from knowledge_base.db.models import RawPage, Chunk, ChunkQuality, UserFeedback
 
 
 pytestmark = pytest.mark.integration
@@ -58,99 +54,13 @@ class TestSyncStateTransitions:
         assert expected_chunk["chunk_type"] == "text"
         assert expected_chunk["chunk_index"] >= 0
 
-    @pytest.mark.asyncio
-    async def test_sync_creates_quality_scores(self, test_db_session):
-        """Verify that synced chunks get initial quality scores."""
-        unique_id = uuid.uuid4().hex[:8]
-        chunk_id = f"chunk_{unique_id}"
-
-        # Create a chunk directly (simulating post-sync state)
-        chunk = Chunk(
-            chunk_id=chunk_id,
-            page_id=f"page_{unique_id}",
-            page_title=f"Test Page {unique_id}",
-            content=f"Test content {unique_id}",
-            chunk_type="text",
-            chunk_index=0,
-            char_count=len(f"Test content {unique_id}"),
-        )
-        test_db_session.add(chunk)
-
-        # Create quality score (simulating what sync does)
-        quality = ChunkQuality(
-            chunk_id=chunk_id,
-            quality_score=100.0,
-        )
-        test_db_session.add(quality)
-        await test_db_session.commit()
-
-        # Verify quality score
-        stmt = select(ChunkQuality).where(ChunkQuality.chunk_id == chunk_id)
-        result = await test_db_session.execute(stmt)
-        quality_record = result.scalar_one()
-
-        assert quality_record.quality_score == 100.0
+    # Removed: test_sync_creates_quality_scores - tested deprecated Chunk/ChunkQuality models
 
 
 class TestRebasePreservesFeedback:
     """Test that rebase preserves feedback scores."""
 
-    @pytest.mark.asyncio
-    async def test_rebase_maintains_feedback_on_page_update(self, test_db_session):
-        """
-        Scenario: Page content updates but feedback should be preserved.
-
-        1. Create page with chunks and feedback
-        2. Simulate rebase with updated content
-        3. Verify feedback is still linked to page_id
-        """
-        unique_id = uuid.uuid4().hex[:8]
-        page_id = f"page_{unique_id}"
-        chunk_id = f"chunk_{unique_id}"
-
-        # Step 1: Create chunk with feedback
-        chunk = Chunk(
-            chunk_id=chunk_id,
-            page_id=page_id,
-            page_title=f"Original Title {unique_id}",
-            content="Original content that will be updated.",
-            chunk_type="text",
-            chunk_index=0,
-            char_count=50,
-        )
-        test_db_session.add(chunk)
-
-        quality = ChunkQuality(
-            chunk_id=chunk_id,
-            quality_score=85.0,  # Score modified by feedback
-        )
-        test_db_session.add(quality)
-
-        # Add feedback linked to this chunk
-        feedback = UserFeedback(
-            chunk_id=chunk_id,
-            slack_user_id="U_TESTER",
-            slack_username="test_user",
-            feedback_type="helpful",
-        )
-        test_db_session.add(feedback)
-        await test_db_session.commit()
-
-        # Step 2: Verify feedback is recorded
-        stmt = select(UserFeedback).where(UserFeedback.chunk_id == chunk_id)
-        result = await test_db_session.execute(stmt)
-        preserved_feedback = result.scalars().all()
-
-        assert len(preserved_feedback) == 1
-        assert preserved_feedback[0].feedback_type == "helpful"
-
-        # Step 3: Verify chunk is linked to page_id
-        stmt = select(Chunk).where(Chunk.page_id == page_id)
-        result = await test_db_session.execute(stmt)
-        linked_chunks = result.scalars().all()
-
-        assert len(linked_chunks) >= 1
-        assert all(c.page_id == page_id for c in linked_chunks)
+    # Removed: test_rebase_maintains_feedback_on_page_update - tested deprecated Chunk/ChunkQuality models
 
     @pytest.mark.asyncio
     async def test_rebase_detects_changed_content(self, test_db_session):
