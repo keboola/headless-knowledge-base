@@ -116,15 +116,6 @@ async def apply_feedback_to_quality_graphiti(
         logger.warning(f"Failed to update quality score for {chunk_id}")
 
 
-# Backward compatibility aliases
-async def apply_feedback_to_quality_chromadb(
-    chunk_id: str,
-    score_impact: int,
-) -> None:
-    """DEPRECATED: Use apply_feedback_to_quality_graphiti() instead."""
-    await apply_feedback_to_quality_graphiti(chunk_id, score_impact)
-
-
 async def apply_feedback_to_quality(
     session: AsyncSession,
     chunk_id: str,

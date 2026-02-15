@@ -1155,15 +1155,6 @@ def search() -> None:
     pass
 
 
-@search.command(name="rebuild-bm25")
-@click.option("--verbose", "-v", is_flag=True, help="Show detailed progress")
-def rebuild_bm25(verbose: bool) -> None:
-    """DEPRECATED: BM25 is now handled by Graphiti's built-in hybrid search."""
-    click.echo("NOTE: This command is deprecated.")
-    click.echo("Graphiti now provides built-in BM25+vector hybrid search.")
-    click.echo("No separate BM25 index is needed.")
-
-
 @search.command(name="query")
 @click.argument("query_text")
 @click.option("--method", "-m", type=click.Choice(["hybrid", "bm25", "vector"]), default="hybrid", help="Search method (all use Graphiti now)")

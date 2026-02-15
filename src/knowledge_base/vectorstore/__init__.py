@@ -19,11 +19,6 @@ def __getattr__(name: str):
         from knowledge_base.vectorstore.indexer import ChunkData
         return ChunkData
 
-    # Backward compatibility: VectorIndexer now wraps GraphitiIndexer
-    if name == "VectorIndexer":
-        from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
-        return GraphitiIndexer
-
     # SearchResult is now in search.models
     if name == "SearchResult":
         from knowledge_base.search.models import SearchResult
@@ -37,6 +32,5 @@ __all__ = [
     "SentenceTransformerEmbeddings",
     "get_embeddings",
     "ChunkData",
-    "VectorIndexer",  # Alias for GraphitiIndexer
     "SearchResult",
 ]

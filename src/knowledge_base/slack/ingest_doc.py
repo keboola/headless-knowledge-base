@@ -1,7 +1,6 @@
 """Handler for /ingest-doc slash command - ingest external documents.
 
 Uses Graphiti as the source of truth for indexed chunks.
-VectorIndexer is now an alias for GraphitiIndexer.
 """
 
 import asyncio
@@ -22,7 +21,8 @@ from knowledge_base.db.database import async_session_maker
 # RawPage kept for sync tracking only
 from knowledge_base.db.models import RawPage
 from knowledge_base.chunking.markdown_chunker import MarkdownChunker, ChunkConfig
-from knowledge_base.vectorstore.indexer import VectorIndexer, ChunkData
+from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
+from knowledge_base.vectorstore.indexer import ChunkData
 
 logger = logging.getLogger(__name__)
 
@@ -345,9 +345,9 @@ class DocumentIngester:
         created_by: str,
         source_type: str,
     ) -> dict:
-        """Create RawPage record and index content directly to ChromaDB.
+        """Create RawPage record and index content directly to Graphiti.
 
-        ChromaDB is the source of truth for chunk data. RawPage is kept
+        Graphiti is the source of truth for chunk data. RawPage is kept
         in SQLite only for sync tracking purposes.
         """
         page_id = f"ingest_{uuid.uuid4().hex[:16]}"
@@ -384,7 +384,7 @@ class DocumentIngester:
                 "parent_headers": [],
             }]
 
-        # Build ChunkData objects for direct ChromaDB indexing
+        # Build ChunkData objects for direct Graphiti indexing
         chunks_to_index: list[ChunkData] = []
         for i, raw_chunk in enumerate(raw_chunks):
             chunk_id = f"{page_id}_{i}"
@@ -399,7 +399,7 @@ class DocumentIngester:
                 chunk_type = "text"
                 parent_headers = []
 
-            # Create ChunkData for direct ChromaDB indexing
+            # Create ChunkData for direct Graphiti indexing
             chunk_data = ChunkData(
                 chunk_id=chunk_id,
                 content=chunk_content,
@@ -422,15 +422,15 @@ class DocumentIngester:
             )
             chunks_to_index.append(chunk_data)
 
-        # Index directly to ChromaDB (source of truth)
+        # Index directly to Graphiti (source of truth)
         try:
-            indexer = VectorIndexer()
+            indexer = GraphitiIndexer()
             await indexer.index_chunks_direct(chunks_to_index)
             logger.info(f"Ingested and indexed {len(chunks_to_index)} chunks from {url}")
 
         except Exception as e:
             logger.error(f"Failed to index ingested content: {e}")
-            raise  # Don't silently fail - ChromaDB is source of truth
+            raise  # Don't silently fail - Graphiti is source of truth
 
         return {
             "status": "success",

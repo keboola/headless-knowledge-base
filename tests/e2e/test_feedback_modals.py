@@ -3,16 +3,8 @@
 import json
 import pytest
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch, call
-from sqlalchemy import select
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from knowledge_base.db.models import (
-    Chunk,
-    ChunkQuality,
-    RawPage,
-    UserFeedback,
-    GovernanceMetadata,
-)
 from knowledge_base.slack.bot import _handle_feedback_action, pending_feedback
 from knowledge_base.slack.feedback_modals import (
     handle_incorrect_modal_submit,

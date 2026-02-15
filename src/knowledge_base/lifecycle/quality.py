@@ -171,12 +171,6 @@ async def record_chunk_access_graphiti(chunk_id: str) -> None:
         logger.warning(f"Failed to update access count in Graphiti: {e}")
 
 
-# Backward compatibility alias
-async def record_chunk_access_chromadb(chunk_id: str) -> None:
-    """DEPRECATED: Use record_chunk_access_graphiti() instead."""
-    await record_chunk_access_graphiti(chunk_id)
-
-
 async def update_rolling_access_counts() -> dict:
     """Update 30-day rolling access counts for all chunks."""
     stats = {"updated": 0}
@@ -280,12 +274,6 @@ async def recalculate_quality_scores_graphiti() -> dict:
         logger.error(f"Failed to recalculate quality scores in Graphiti: {e}")
 
     return stats
-
-
-# Backward compatibility alias
-async def recalculate_quality_scores_chromadb() -> dict:
-    """DEPRECATED: Use recalculate_quality_scores_graphiti() instead."""
-    return await recalculate_quality_scores_graphiti()
 
 
 def calculate_decay_from_access(access_count: int) -> float:

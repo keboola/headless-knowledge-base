@@ -78,7 +78,7 @@ class TestKnowledgeCreationLive:
     async def test_create_knowledge_chunk_directly(
         self,
         unique_test_id,
-        chromadb_available,
+        graphiti_available,
     ):
         """
         Verify: Knowledge can be created and indexed in Graphiti.
@@ -122,7 +122,7 @@ class TestKnowledgeCreationLive:
         slack_client,
         e2e_config,
         unique_test_id,
-        chromadb_available,  # Requires Neo4j access to index knowledge
+        graphiti_available,  # Requires Neo4j access to index knowledge
     ):
         """
         Verify: Created knowledge is returned by the bot when asked.
@@ -184,7 +184,7 @@ class TestKnowledgeCreationLive:
     async def test_multiple_knowledge_chunks_searchable(
         self,
         unique_test_id,
-        chromadb_available,
+        graphiti_available,
     ):
         """
         Verify: Multiple related knowledge chunks are all indexed and searchable.
@@ -235,7 +235,7 @@ class TestKnowledgeCreationLive:
     async def test_knowledge_has_correct_metadata(
         self,
         unique_test_id,
-        chromadb_available,
+        graphiti_available,
     ):
         """
         Verify: Created knowledge chunks have correct metadata stored.
@@ -279,7 +279,7 @@ class TestKnowledgeCreationLive:
     async def test_knowledge_quality_score_initialized(
         self,
         unique_test_id,
-        chromadb_available,
+        graphiti_available,
     ):
         """
         Verify: New knowledge starts with quality score of 100.0.

@@ -22,8 +22,7 @@ from knowledge_base.confluence.markdown_converter import (
 from knowledge_base.confluence.models import GovernanceInfo, PageContent
 from knowledge_base.config import settings
 from knowledge_base.db.database import async_session_maker
-# NOTE: GovernanceMetadata is DEPRECATED - governance data now in Graphiti metadata
-from knowledge_base.db.models import GovernanceMetadata, RawPage, calculate_staleness
+from knowledge_base.db.models import RawPage, calculate_staleness
 
 logger = logging.getLogger(__name__)
 
@@ -34,22 +33,22 @@ class ConfluenceDownloader:
     After downloading, pages are automatically indexed to Graphiti (source of truth).
     """
 
-    def __init__(self, client: ConfluenceClient | None = None, index_to_chromadb: bool = True):
+    def __init__(self, client: ConfluenceClient | None = None, index_to_graphiti: bool = True):
         """Initialize the downloader.
 
         Args:
             client: Confluence API client
-            index_to_chromadb: If True, index chunks directly to ChromaDB after download
+            index_to_graphiti: If True, index chunks directly to Graphiti after download
         """
         self.client = client or ConfluenceClient()
-        self.index_to_chromadb = index_to_chromadb
+        self.index_to_graphiti = index_to_graphiti
         self._indexer = None
 
     def _get_indexer(self):
         """Lazy-load the vector indexer."""
         if self._indexer is None:
-            from knowledge_base.vectorstore.indexer import VectorIndexer
-            self._indexer = VectorIndexer()
+            from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
+            self._indexer = GraphitiIndexer()
         return self._indexer
 
     async def sync_space(
@@ -102,17 +101,17 @@ class ConfluenceDownloader:
                         if verbose:
                             logger.info(f"Downloaded: {content.title}")
 
-                    # Index to ChromaDB (source of truth)
-                    if self.index_to_chromadb:
+                    # Index to Graphiti (source of truth)
+                    if self.index_to_graphiti:
                         try:
                             governance_info = GovernanceInfo.from_labels(content.labels)
-                            await self._index_page_to_chromadb(
+                            await self._index_page_to_graphiti(
                                 content, markdown_content, governance_info
                             )
                             if verbose:
-                                logger.debug(f"Indexed to ChromaDB: {content.title}")
+                                logger.debug(f"Indexed to Graphiti: {content.title}")
                         except Exception as idx_err:
-                            logger.warning(f"ChromaDB indexing failed for {content.id}: {idx_err}")
+                            logger.warning(f"Graphiti indexing failed for {content.id}: {idx_err}")
 
                 except Exception as e:
                     stats["errors"] += 1
@@ -193,18 +192,6 @@ class ConfluenceDownloader:
         )
         session.add(page)
 
-        # Extract and store governance metadata
-        governance_info = GovernanceInfo.from_labels(content.labels)
-        governance = GovernanceMetadata(
-            page_id=content.id,
-            owner=governance_info.owner,
-            reviewed_by=governance_info.reviewed_by,
-            reviewed_at=governance_info.reviewed_at,
-            classification=governance_info.classification,
-            doc_type=governance_info.doc_type,
-        )
-        session.add(governance)
-
     async def _update_page(
         self, session: AsyncSession, existing: RawPage, content: PageContent, markdown_content: str
     ) -> None:
@@ -246,32 +233,13 @@ class ConfluenceDownloader:
         existing.is_potentially_stale = is_stale
         existing.staleness_reason = stale_reason
 
-        # Update governance metadata
-        governance_info = GovernanceInfo.from_labels(content.labels)
-        if existing.governance:
-            existing.governance.owner = governance_info.owner
-            existing.governance.reviewed_by = governance_info.reviewed_by
-            existing.governance.reviewed_at = governance_info.reviewed_at
-            existing.governance.classification = governance_info.classification
-            existing.governance.doc_type = governance_info.doc_type
-        else:
-            governance = GovernanceMetadata(
-                page_id=content.id,
-                owner=governance_info.owner,
-                reviewed_by=governance_info.reviewed_by,
-                reviewed_at=governance_info.reviewed_at,
-                classification=governance_info.classification,
-                doc_type=governance_info.doc_type,
-            )
-            session.add(governance)
-
-    async def _index_page_to_chromadb(
+    async def _index_page_to_graphiti(
         self,
         content: PageContent,
         markdown_content: str,
         governance_info: GovernanceInfo,
     ) -> int:
-        """Index a page's chunks directly to ChromaDB (source of truth).
+        """Index a page's chunks directly to Graphiti (source of truth).
 
         Args:
             content: Page content from Confluence
@@ -291,7 +259,7 @@ class ConfluenceDownloader:
         if not chunks:
             return 0
 
-        # Build ChunkData objects for direct ChromaDB indexing
+        # Build ChunkData objects for direct Graphiti indexing
         chunk_data_list = []
         for i, chunk in enumerate(chunks):
             chunk_id = f"{content.id}_{i}"
@@ -324,7 +292,7 @@ class ConfluenceDownloader:
             )
             chunk_data_list.append(chunk_data)
 
-        # Index to ChromaDB
+        # Index to Graphiti
         indexer = self._get_indexer()
         await indexer.index_chunks_direct(chunk_data_list)
 

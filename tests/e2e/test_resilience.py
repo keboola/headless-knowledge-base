@@ -8,9 +8,6 @@ import pytest
 import uuid
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from sqlalchemy import select
-
-from knowledge_base.db.models import Chunk, ChunkQuality
 
 
 pytestmark = pytest.mark.e2e

@@ -16,7 +16,7 @@ IMPORTANT ARCHITECTURAL NOTE (Post-Migration):
 - Chunks are stored in ChromaDB (source of truth)
 - Quality scores are stored in ChromaDB metadata
 - Feedback records are stored in DuckDB (analytics only)
-- Tests mock VectorIndexer for direct ChromaDB indexing
+- Tests mock GraphitiIndexer for direct Graphiti indexing
 """
 
 import pytest
@@ -163,7 +163,7 @@ class TestKnowledgeCreation:
             "channel_id": e2e_config["channel_id"]
         }
 
-        with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_idx:
+        with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_idx:
             mock_idx.return_value.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
             mock_idx.return_value.chroma.upsert = AsyncMock()
             mock_idx.return_value.build_metadata = MagicMock(return_value={})
@@ -203,7 +203,7 @@ class TestKnowledgeCreation:
             "channel_id": e2e_config["channel_id"]
         }
 
-        with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_idx:
+        with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_idx:
             mock_idx.return_value.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
             mock_idx.return_value.chroma.upsert = AsyncMock()
             mock_idx.return_value.build_metadata = MagicMock(return_value={})
@@ -241,7 +241,7 @@ class TestKnowledgeCreation:
             "channel_id": e2e_config["channel_id"]
         }
 
-        with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_idx:
+        with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_idx:
             mock_idx.return_value.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
             mock_idx.return_value.chroma.upsert = AsyncMock()
             mock_idx.return_value.build_metadata = MagicMock(return_value={})
@@ -291,7 +291,7 @@ class TestFeedbackLoop:
             "channel_id": e2e_config["channel_id"]
         }
 
-        with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_idx:
+        with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_idx:
             mock_idx.return_value.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
             mock_idx.return_value.chroma.upsert = AsyncMock()
             mock_idx.return_value.build_metadata = MagicMock(return_value={})
@@ -350,7 +350,7 @@ class TestFeedbackLoop:
         fact = f"Outdated content test {unique_id}"
         command = {"text": fact, "user_id": "U1", "user_name": "u1", "channel_id": "C1"}
 
-        with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_idx:
+        with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_idx:
             mock_idx.return_value.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
             mock_idx.return_value.chroma.upsert = AsyncMock()
             mock_idx.return_value.build_metadata = MagicMock(return_value={})
@@ -417,7 +417,7 @@ class TestFeedbackLoop:
         fact = f"Incorrect content test {unique_id}"
         command = {"text": fact, "user_id": "U1", "user_name": "u1", "channel_id": "C1"}
 
-        with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_idx:
+        with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_idx:
             mock_idx.return_value.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
             mock_idx.return_value.chroma.upsert = AsyncMock()
             mock_idx.return_value.build_metadata = MagicMock(return_value={})
@@ -672,7 +672,7 @@ class TestQualityRanking:
         fact = f"Popular content {unique_id}"
         command = {"text": fact, "user_id": "U1", "user_name": "u1", "channel_id": "C1"}
 
-        with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_idx:
+        with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_idx:
             mock_idx.return_value.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
             mock_idx.return_value.chroma.upsert = AsyncMock()
             mock_idx.return_value.build_metadata = MagicMock(return_value={})
@@ -732,7 +732,7 @@ class TestQualityRanking:
         fact = f"Poor quality content {unique_id}"
         command = {"text": fact, "user_id": "U1", "user_name": "u1", "channel_id": "C1"}
 
-        with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_idx:
+        with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_idx:
             mock_idx.return_value.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
             mock_idx.return_value.chroma.upsert = AsyncMock()
             mock_idx.return_value.build_metadata = MagicMock(return_value={})
@@ -830,7 +830,7 @@ class TestRealisticUserJourneys:
         mock_client = MagicMock()
         mock_client.chat_postEphemeral = AsyncMock()
 
-        with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_idx:
+        with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_idx:
             mock_idx.return_value.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
             mock_idx.return_value.chroma.upsert = AsyncMock()
             mock_idx.return_value.build_metadata = MagicMock(return_value={})
@@ -872,7 +872,7 @@ class TestRealisticUserJourneys:
         # Step 1: Initial knowledge
         old_fact = f"The deployment URL is deploy-old-{unique_id}.example.com"
 
-        with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_idx:
+        with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_idx:
             mock_idx.return_value.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
             mock_idx.return_value.chroma.upsert = AsyncMock()
             mock_idx.return_value.build_metadata = MagicMock(return_value={})
@@ -936,7 +936,7 @@ class TestRealisticUserJourneys:
         # Step 4: Create updated knowledge
         new_fact = f"The deployment URL is deploy-new-{unique_id}.keboola.com"
 
-        with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_idx:
+        with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_idx:
             mock_idx.return_value.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
             mock_idx.return_value.chroma.upsert = AsyncMock()
             mock_idx.return_value.build_metadata = MagicMock(return_value={})
@@ -1322,7 +1322,7 @@ class TestKnowledgeAdminEscalation:
         fact = f"Incorrect info that needs admin review {unique_id}"
         command = {"text": fact, "user_id": "U1", "user_name": "u1", "channel_id": "C1"}
 
-        with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_idx:
+        with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_idx:
             mock_idx.return_value.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
             mock_idx.return_value.chroma.upsert = AsyncMock()
             mock_idx.return_value.build_metadata = MagicMock(return_value={})
@@ -1468,7 +1468,7 @@ class TestKnowledgeAdminEscalation:
         fact = f"Widely reported incorrect content {unique_id}"
         command = {"text": fact, "user_id": "U1", "user_name": "u1", "channel_id": "C1"}
 
-        with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_idx:
+        with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_idx:
             mock_idx.return_value.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
             mock_idx.return_value.chroma.upsert = AsyncMock()
             mock_idx.return_value.build_metadata = MagicMock(return_value={})

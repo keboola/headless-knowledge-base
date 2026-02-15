@@ -12,7 +12,8 @@ from typing import Any
 
 from slack_sdk import WebClient
 
-from knowledge_base.vectorstore.indexer import ChunkData, VectorIndexer
+from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
+from knowledge_base.vectorstore.indexer import ChunkData
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ async def handle_create_knowledge(ack: Any, command: dict, client: WebClient) ->
             )
 
             # Index directly to Graphiti (source of truth)
-            indexer = VectorIndexer()
+            indexer = GraphitiIndexer()
             await indexer.index_single_chunk(chunk_data)
 
             logger.info(f"Created and indexed quick knowledge: {chunk_id}")

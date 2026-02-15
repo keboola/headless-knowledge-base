@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 import pytest
 
 from knowledge_base.db.models import (
-    GovernanceMetadata,
     RawPage,
     calculate_staleness,
 )
@@ -59,12 +58,3 @@ def test_raw_page_repr():
     assert "A very long title" in repr_str
 
 
-def test_governance_metadata_repr():
-    """Test GovernanceMetadata string representation."""
-    gov = GovernanceMetadata(
-        page_id="123",
-        owner="john.doe",
-    )
-    repr_str = repr(gov)
-    assert "123" in repr_str
-    assert "john.doe" in repr_str

@@ -7,7 +7,7 @@ quality content in bot responses.
 IMPORTANT ARCHITECTURAL NOTE (Post-Graphiti Migration):
 - Quality scores are stored in Graphiti (source of truth)
 - Feedback records are stored in DuckDB (analytics only)
-- Tests mock the VectorIndexer to verify correct chunk creation
+- Tests mock the GraphitiIndexer to verify correct chunk creation
 - Tests mock Graphiti builder for quality score operations
 
 These tests verify:
@@ -58,7 +58,7 @@ class TestQualityBasedSearchRanking:
         low_quality_marker = f"LOWQ-{unique_topic}"
         low_quality_fact = f"The project codename {unique_topic} uses secret key {low_quality_marker} for legacy systems."
 
-        # Step 1: Create both facts (mock VectorIndexer for direct ChromaDB indexing)
+        # Step 1: Create both facts (mock GraphitiIndexer for direct Graphiti indexing)
         ack = AsyncMock()
         mock_client = MagicMock()
         mock_client.chat_postEphemeral = AsyncMock()
@@ -66,7 +66,7 @@ class TestQualityBasedSearchRanking:
 
         chunk_ids = []
 
-        with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_indexer_cls:
+        with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_indexer_cls:
             mock_indexer = mock_indexer_cls.return_value
             mock_indexer.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
             mock_indexer.chroma.upsert = AsyncMock()
@@ -191,13 +191,13 @@ class TestQualityBasedSearchRanking:
         secret_marker = f"DEMOTED-SECRET-{unique_id}"
         fact = f"The deprecated API key for system {unique_id} is {secret_marker}."
 
-        # Create the fact (mock VectorIndexer)
+        # Create the fact (mock GraphitiIndexer)
         ack = AsyncMock()
         mock_client = MagicMock()
         mock_client.chat_postEphemeral = AsyncMock()
         mock_client.users_info.return_value = {"ok": True, "user": {"name": "test"}}
 
-        with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_indexer_cls:
+        with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_indexer_cls:
             mock_indexer = mock_indexer_cls.return_value
             mock_indexer.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
             mock_indexer.chroma.upsert = AsyncMock()
@@ -306,8 +306,8 @@ class TestQualityBasedSearchRanking:
 
         chunk_ids = []
 
-        # Create both facts (mock VectorIndexer)
-        with patch("knowledge_base.slack.quick_knowledge.VectorIndexer") as mock_indexer_cls:
+        # Create both facts (mock GraphitiIndexer)
+        with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_indexer_cls:
             mock_indexer = mock_indexer_cls.return_value
             mock_indexer.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
             mock_indexer.chroma.upsert = AsyncMock()
