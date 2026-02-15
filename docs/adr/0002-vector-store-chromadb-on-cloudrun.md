@@ -1,7 +1,9 @@
 # ADR-0002: Use ChromaDB on Cloud Run Instead of Vertex AI Vector Search
 
 ## Status
-Accepted
+Superseded by [ADR-0009](0009-neo4j-graphiti-knowledge-store.md)
+
+> **Note**: This ADR has been superseded. The project migrated from ChromaDB to Neo4j + Graphiti as the primary knowledge store. See ADR-0009 for details.
 
 ## Date
 2024-12-24

@@ -1,3 +1,5 @@
+> **Status: COMPLETED** - Migration to Neo4j + Graphiti has been fully implemented. This document is preserved as historical reference for the migration decisions and process.
+
 # Graph Database Integration Plan for Headless Knowledge Base
 
 ## Executive Summary
@@ -101,6 +103,8 @@ The expert review asked: "What queries need 'as of date X' semantics?"
 
 ## Current Architecture
 
+> **Historical Note**: This section describes the architecture BEFORE the migration. The current architecture uses Neo4j + Graphiti. See [ARCHITECTURE.md](ARCHITECTURE.md) for current state.
+
 ```
 ChromaDB (vectors) ← Source of truth for chunks
 NetworkX (in-memory) ← Ephemeral graph, lost on restart
@@ -119,6 +123,8 @@ BM25 + Vector hybrid search ← Primary retrieval
 
 ## Target Architecture
 
+> **Status**: This target architecture has been fully implemented and is the current production architecture.
+
 ```
 ChromaDB (vectors) ← Keep as source of truth for chunks
 Graphiti + Neo4j/Kuzu ← Persistent temporal graph
@@ -130,6 +136,8 @@ Enhanced hybrid search ← BM25 + vector + graph traversal
 ## Implementation Plan
 
 ### Phase 0: Baseline & Spike (MUST DO FIRST)
+
+**Status: COMPLETED**
 
 **0.1 Baseline Current Retrieval Quality**
 Create a test set of 20-30 queries covering:
@@ -169,6 +177,8 @@ Compare:
 
 ### Phase 1: Infrastructure Setup
 
+**Status: COMPLETED**
+
 **1.1 Add Dependencies**
 ```toml
 # pyproject.toml
@@ -200,6 +210,8 @@ Add to `src/knowledge_base/config.py`:
 
 ### Phase 2: Core Graph Module
 
+**Status: COMPLETED**
+
 **2.1 New: `src/knowledge_base/graph/graphiti_client.py`**
 - Factory for creating Graphiti instances
 - Backend selection (Kuzu vs Neo4j) based on config
@@ -227,6 +239,8 @@ Current architecture indexes at chunk level (ChromaDB), but plan focuses on page
 ---
 
 ### Phase 3: Search Integration
+
+**Status: COMPLETED**
 
 **Modify: `src/knowledge_base/search/hybrid.py`**
 - Add `GraphRetriever` dependency injection
@@ -256,6 +270,8 @@ Add a classifier to automatically enable graph expansion for complex queries:
 ---
 
 ### Phase 4: Clean Cutover
+
+**Status: COMPLETED**
 
 **4.1 Delete Old Graph Code**
 - Remove `graph_builder.py` (NetworkX implementation)
@@ -294,6 +310,8 @@ NEO4J_PASSWORD=secret
 ---
 
 ### Phase 5: Testing & Observability
+
+**Status: COMPLETED**
 
 **5.1 Unit Tests**
 - Mock Graphiti client

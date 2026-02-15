@@ -11,10 +11,11 @@ An Architecture Decision Record captures an important architectural decision mad
 | ID | Title | Status | Date |
 |----|-------|--------|------|
 | [ADR-0001](0001-database-duckdb-on-gce.md) | Use DuckDB on GCE for Analytics Data | Accepted | 2024-12-24 (Updated 2026-01-03) |
-| [ADR-0002](0002-vector-store-chromadb-on-cloudrun.md) | Use ChromaDB on Cloud Run Instead of Vertex AI Vector Search | Accepted | 2024-12-24 |
+| [ADR-0002](0002-vector-store-chromadb-on-cloudrun.md) | Use ChromaDB on Cloud Run Instead of Vertex AI Vector Search | Superseded | 2024-12-24 |
 | [ADR-0003](0003-llm-provider-anthropic-claude.md) | Use Anthropic Claude API Instead of Vertex AI | Accepted | 2024-12-24 |
 | [ADR-0004](0004-slack-bot-http-mode-cloudrun.md) | Deploy Slack Bot in HTTP Mode on Cloud Run | Accepted | 2024-12-24 |
-| [ADR-0005](0005-chromadb-source-of-truth.md) | ChromaDB as Source of Truth for Knowledge Data | Accepted | 2026-01-03 |
+| [ADR-0005](0005-chromadb-source-of-truth.md) | ChromaDB as Source of Truth for Knowledge Data | Superseded | 2026-01-03 |
+| [ADR-0009](0009-neo4j-graphiti-knowledge-store.md) | Neo4j + Graphiti as Knowledge Store | Accepted | 2026-02-13 |
 
 ## Key Architecture Document
 
