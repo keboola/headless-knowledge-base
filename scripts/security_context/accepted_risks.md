@@ -35,3 +35,31 @@ repository_context.md and accepted_risks.md contain example credential patterns 
 
 ### Decision
 ACCEPTED - These are documentation examples, not real credentials.
+
+## ADR-004: AI Reviewer Scripts — External API Communication
+
+**Status:** Accepted
+**Date:** 2026-02-19
+
+### Context
+`scripts/ai_reviewer.py` and `scripts/security_reviewer.py` send PR content (diffs, file contents) to external LLM APIs (Google Gemini and Anthropic Claude) for analysis. This is their core purpose.
+
+### Decision
+ACCEPTED - Sending code to external LLM APIs is the fundamental design of AI code review. Both APIs have enterprise data handling policies. The `html.escape()` sanitization and explicit prompt injection defenses are adequate. Pre-scan findings are excluded from reviewer scripts themselves to prevent self-referential false positives.
+
+### Consequence
+The security reviewer should NOT flag:
+- `scripts/ai_reviewer.py` or `scripts/security_reviewer.py` for "sending code to external APIs"
+- `scripts/security_context/sensitive_patterns.py` for "containing credential patterns" (they are regex definitions, not real credentials)
+- Reviewer scripts for "hardcoded credential patterns" (the patterns are regex strings for detection, not actual credentials)
+
+## ADR-005: AI Reviewer Scripts — Credential Validation
+
+**Status:** Accepted
+**Date:** 2026-02-19
+
+### Context
+Both `ai_reviewer.py` (line 266-269) and `security_reviewer.py` (line 356-359) validate their respective API keys at script entry point with `sys.exit(1)` on missing keys. The CI workflow also validates `GEMINI_API_KEY` before running the script.
+
+### Decision
+ACCEPTED - API key validation exists at multiple levels (CI + script). No additional validation needed.

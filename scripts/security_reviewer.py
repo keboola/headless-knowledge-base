@@ -162,12 +162,18 @@ def pre_scan_for_patterns(files: list) -> list:
     """
     findings = []
 
+    # Skip reviewer scripts themselves to avoid self-referential false positives
+    excluded_prefixes = ('scripts/ai_reviewer', 'scripts/security_reviewer', 'scripts/security_context/')
+
     for file_info in files:
         content = file_info.get('full_content', '')
         if not content:
             continue
 
         filename = file_info['filename']
+        if filename.startswith(excluded_prefixes):
+            continue
+
         lines = content.split('\n')
 
         for category, patterns in SECURITY_PATTERNS.items():
