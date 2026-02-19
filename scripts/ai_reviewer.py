@@ -83,6 +83,23 @@ def fetch_linked_issues(repo, pr_body, token):
 
     return "\n\n".join(issues_context)
 
+def list_available_models(api_key):
+    """Lists available Gemini models for diagnostics."""
+    url = "https://generativelanguage.googleapis.com/v1beta/models"
+    params = {"key": api_key}
+    try:
+        response = requests.get(url, params=params, timeout=15)
+        if response.status_code == 200:
+            models = response.json().get("models", [])
+            flash_models = [m["name"] for m in models if "flash" in m.get("name", "").lower()]
+            print(f"Available flash models: {flash_models[:10]}")
+            return flash_models
+        else:
+            print(f"Failed to list models: status={response.status_code}, body={response.text[:200]}")
+    except Exception as e:
+        print(f"Failed to list models: {e}")
+    return []
+
 def analyze_code_with_gemini(pr_details, files_data, issues_context, api_key):
     """Sends the rich context to Gemini for analysis."""
 
@@ -111,8 +128,17 @@ def analyze_code_with_gemini(pr_details, files_data, issues_context, api_key):
         else:
             code_context += " (Binary or Empty File)"
 
-    # 2. Select Model (use full model IDs for generativelanguage.googleapis.com)
-    models_to_try = ["gemini-2.0-flash-001", "gemini-1.5-flash"]
+    # 2. Select Model — list available models first for diagnostics
+    print("Checking available models...")
+    available = list_available_models(api_key)
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash"]
+    if available:
+        # Use the first available flash model that supports generateContent
+        for preferred in models_to_try:
+            full_name = f"models/{preferred}"
+            if full_name in available:
+                models_to_try = [preferred]
+                break
 
     # Sanitize inputs to prevent prompt injection
     safe_title = html.escape(pr_details['title'])
@@ -194,10 +220,12 @@ def analyze_code_with_gemini(pr_details, files_data, issues_context, api_key):
                     continue
 
                 if response.status_code == 404:
-                    print(f"Model {model} not found, trying next...")
+                    error_body = response.text[:200] if response.text else "empty"
+                    print(f"Model {model} not found (404): {error_body}")
                     break # Try next model
 
-                print(f"API Error ({model}): status={response.status_code}")
+                error_body = response.text[:200] if response.text else "empty"
+                print(f"API Error ({model}): status={response.status_code}, body={error_body}")
                 if response.status_code >= 500:
                     time.sleep(5 * (attempt + 1))
                     continue
