@@ -346,22 +346,19 @@ Security Score Guidelines:
 
 
 def call_claude_api(prompt: str) -> dict | None:
-    """Call Claude API via Vertex AI for security analysis."""
+    """Call Claude API for security analysis."""
     try:
         import anthropic
-        from anthropic import AnthropicVertex
     except ImportError:
-        print("Error: anthropic[vertex] package not installed. Run: pip install anthropic[vertex]")
+        print("Error: anthropic package not installed. Run: pip install anthropic")
         sys.exit(1)
 
-    project_id = os.getenv("VERTEX_PROJECT_ID")
-    region = os.getenv("VERTEX_REGION", "europe-west1")
-
-    if not project_id:
-        print("VERTEX_PROJECT_ID not set. Security review cannot proceed.")
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        print("ANTHROPIC_API_KEY not set. Security review cannot proceed.")
         sys.exit(1)
 
-    client = AnthropicVertex(project_id=project_id, region=region)
+    client = anthropic.Anthropic(api_key=api_key)
 
     system_prompt = """You are a security code reviewer. You MUST respond with ONLY valid JSON.
 Do not include any markdown formatting, code blocks, or explanatory text.
@@ -371,7 +368,7 @@ Start your response with { and end with }."""
     try:
         print("Analyzing with Claude for security review...")
         message = client.messages.create(
-            model="claude-haiku-4-5@20251001",
+            model="claude-haiku-4-5-20251001",
             max_tokens=4096,
             system=system_prompt,
             messages=[
