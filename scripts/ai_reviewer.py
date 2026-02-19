@@ -112,7 +112,7 @@ def analyze_code_with_gemini(pr_details, files_data, issues_context, api_key):
             code_context += " (Binary or Empty File)"
 
     # 2. Select Model
-    models_to_try = ["gemini-flash-latest", "gemini-pro-latest"]
+    models_to_try = ["gemini-2.0-flash", "gemini-2.0-flash-lite"]
 
     # Sanitize inputs to prevent prompt injection
     safe_title = html.escape(pr_details['title'])
@@ -184,7 +184,7 @@ def analyze_code_with_gemini(pr_details, files_data, issues_context, api_key):
         for attempt in range(2):
             try:
                 print(f"Analyzing with {model} (Attempt {attempt + 1})...")
-                response = requests.post(url, headers=headers, params=params, json=payload, timeout=30)
+                response = requests.post(url, headers=headers, params=params, json=payload, timeout=120)
 
                 if response.status_code == 200:
                     return response.json()
