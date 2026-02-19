@@ -26,6 +26,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.ref }}
+      - name: Fallback to PR branch if reviewer script missing
+        if: ${{ hashFiles('scripts/ai_reviewer.py') == '' }}
+        uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
