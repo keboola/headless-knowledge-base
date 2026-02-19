@@ -945,14 +945,12 @@ def slack_bot(port: int, socket_mode: bool) -> None:
 )
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed progress")
 @click.option("--force-parse", is_flag=True, help="Re-parse all pages (delete existing chunks)")
-@click.option("--reindex", is_flag=True, help="Delete and rebuild the vector index")
-@click.option("--resume", "-r", is_flag=True, help="Resume from checkpoint (skip indexed chunks)")
+@click.option("--reindex", is_flag=True, help="Clear checkpoints and reindex all chunks from scratch")
 def pipeline(
     spaces: str | None,
     verbose: bool,
     force_parse: bool,
     reindex: bool,
-    resume: bool,
 ) -> None:
     """Run full sync pipeline: download -> parse -> index.
 
@@ -960,10 +958,10 @@ def pipeline(
     database connection. Use this for GCP deployments where separate
     jobs cannot share state.
 
-    Use --resume to skip already-indexed chunks and continue from where
-    the last run failed or timed out.
+    By default, already-indexed chunks are skipped (resume mode).
+    Use --reindex to clear checkpoints and start from scratch.
     """
-    asyncio.run(_pipeline(spaces, verbose, force_parse, reindex, resume))
+    asyncio.run(_pipeline(spaces, verbose, force_parse, reindex))
 
 
 async def _pipeline(
@@ -971,7 +969,6 @@ async def _pipeline(
     verbose: bool,
     force_parse: bool,
     reindex: bool,
-    resume: bool,
 ) -> None:
     """Async implementation of pipeline command."""
     from knowledge_base.chunking.parser import PageParser
@@ -997,7 +994,11 @@ async def _pipeline(
     click.echo("STEP 1: Downloading from Confluence")
     click.echo("=" * 60)
 
-    downloader = ConfluenceDownloader(index_to_chromadb=False)  # STEP 3 handles bulk indexing
+    # index_to_graphiti=False because Step 3 handles indexing separately.
+    # With it True, the downloader holds a SQLAlchemy session open while
+    # simultaneously writing checkpoints via raw aiosqlite, causing
+    # SQLite "database is locked" errors.
+    downloader = ConfluenceDownloader(index_to_graphiti=False)
     try:
         download_stats = await downloader.sync_all_spaces(
             space_keys=space_list,
@@ -1056,16 +1057,33 @@ async def _pipeline(
     # This avoids SQLite "database is locked" errors when the indexer
     # opens its own session for checkpoint writes.
     try:
-        if reindex:
-            click.echo("Reindexing (overwriting existing data)...")
-
         click.echo("Indexing chunks to Graphiti...")
 
-        from sqlalchemy import func, select
+        from sqlalchemy import delete, func, select
         from sqlalchemy.orm import selectinload
         from knowledge_base.db.models import Chunk, RawPage, IndexingCheckpoint
         from knowledge_base.vectorstore.indexer import ChunkData
         import json
+
+        # If reindexing, clear checkpoints first so all chunks are reprocessed
+        if reindex:
+            async with async_session_maker() as session:
+                if space_key:
+                    # Clear checkpoints only for chunks in the target space
+                    space_chunk_ids = (
+                        select(Chunk.chunk_id)
+                        .join(RawPage, Chunk.page_id == RawPage.page_id)
+                        .where(RawPage.space_key == space_key)
+                    )
+                    await session.execute(
+                        delete(IndexingCheckpoint).where(
+                            IndexingCheckpoint.chunk_id.in_(space_chunk_ids)
+                        )
+                    )
+                else:
+                    await session.execute(delete(IndexingCheckpoint))
+                await session.commit()
+            click.echo("Cleared indexing checkpoints for full reindex.")
 
         chunk_data_list = []
         async with async_session_maker() as session:
@@ -1078,21 +1096,21 @@ async def _pipeline(
             if space_key:
                 query = query.where(RawPage.space_key == space_key)
 
-            # If resuming, exclude already-indexed chunks
-            if resume:
-                indexed_subquery = (
-                    select(IndexingCheckpoint.chunk_id).where(
-                        IndexingCheckpoint.status == "indexed"
-                    )
+            # Always skip already-indexed chunks (resume by default)
+            indexed_subquery = (
+                select(IndexingCheckpoint.chunk_id).where(
+                    IndexingCheckpoint.status == "indexed"
                 )
-                query = query.where(Chunk.chunk_id.notin_(indexed_subquery))
+            )
+            query = query.where(Chunk.chunk_id.notin_(indexed_subquery))
 
-                indexed_count_result = await session.execute(
-                    select(func.count()).select_from(IndexingCheckpoint).where(
-                        IndexingCheckpoint.status == "indexed"
-                    )
+            indexed_count_result = await session.execute(
+                select(func.count()).select_from(IndexingCheckpoint).where(
+                    IndexingCheckpoint.status == "indexed"
                 )
-                indexed_count = indexed_count_result.scalar() or 0
+            )
+            indexed_count = indexed_count_result.scalar() or 0
+            if indexed_count > 0:
                 click.echo(
                     f"Resuming: {indexed_count} chunks already indexed, skipping them"
                 )
@@ -1116,8 +1134,6 @@ async def _pipeline(
                     parent_headers=json.dumps(chunk.parent_headers) if chunk.parent_headers else "[]",
                 )
                 chunk_data_list.append(chunk_data)
-        # Session closed — indexer can freely write checkpoints
-
         count = await indexer.index_chunks_direct(chunk_data_list, progress_callback)
 
         if not verbose:

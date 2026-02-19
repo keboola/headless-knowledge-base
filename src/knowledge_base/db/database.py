@@ -7,6 +7,7 @@ ARCHITECTURE NOTE (per docs/ARCHITECTURE.md):
 
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from knowledge_base.config import settings
 
@@ -27,10 +28,13 @@ def _set_sqlite_pragma(dbapi_conn, connection_record):
     cursor.close()
 
 
-# Create async engine
+# Create async engine with NullPool for SQLite.
+# NullPool closes connections immediately when sessions end, preventing
+# idle pooled connections from holding SQLite WAL file locks.
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.DEBUG,
+    poolclass=NullPool,
 )
 
 # Enable WAL mode for SQLite (allows concurrent reads during writes)

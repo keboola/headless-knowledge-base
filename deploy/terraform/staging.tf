@@ -348,6 +348,7 @@ resource "google_project_iam_member" "slack_bot_staging_vertex_ai" {
 # Staging Confluence Sync Job
 # -----------------------------------------------------------------------------
 resource "google_cloud_run_v2_job" "confluence_sync_staging" {
+  provider = google-beta
   name     = "confluence-sync-staging"
   location = var.region
 
@@ -356,13 +357,23 @@ resource "google_cloud_run_v2_job" "confluence_sync_staging" {
       containers {
         image = "${var.region}-docker.pkg.dev/${var.project_id}/knowledge-base/jobs:staging"
 
-        command = ["python", "-m", "knowledge_base.cli", "pipeline", "--spaces", "KI", "--verbose"]
+        # Shell wrapper: restore SQLite DB from GCS FUSE mount at start.
+        # The app continuously persists checkpoints via CHECKPOINT_PERSIST_PATH.
+        command = ["/bin/sh", "-c"]
+        args = [
+          "cp /mnt/pipeline-state/staging-knowledge-base.db ./knowledge_base.db 2>/dev/null && echo 'Restored checkpoint DB from persistent storage' || echo 'No checkpoint DB found, starting fresh'; python -m knowledge_base.cli pipeline --spaces KI --verbose"
+        ]
 
         resources {
           limits = {
             cpu    = "2"
             memory = "2Gi"
           }
+        }
+
+        volume_mounts {
+          name       = "pipeline-state"
+          mount_path = "/mnt/pipeline-state"
         }
 
         # Confluence credentials (reuse production secrets)
@@ -461,6 +472,11 @@ resource "google_cloud_run_v2_job" "confluence_sync_staging" {
           value = "true"
         }
 
+        env {
+          name  = "CHECKPOINT_PERSIST_PATH"
+          value = "/mnt/pipeline-state/staging-knowledge-base.db"
+        }
+
         # Keep Anthropic key as fallback (optional)
         env {
           name = "ANTHROPIC_API_KEY"
@@ -472,6 +488,16 @@ resource "google_cloud_run_v2_job" "confluence_sync_staging" {
           }
         }
       }
+
+      volumes {
+        name = "pipeline-state"
+        gcs {
+          bucket    = google_storage_bucket.pipeline_state.name
+          read_only = false
+        }
+      }
+
+      execution_environment = "EXECUTION_ENVIRONMENT_GEN2" # Required for GCS FUSE volumes
 
       timeout     = "21600s" # 6 hours for full KI space intake (was 4h, increased for optimization testing)
       max_retries = 1
@@ -488,6 +514,13 @@ resource "google_cloud_run_v2_job" "confluence_sync_staging" {
   depends_on = [
     google_compute_instance.neo4j_staging,
   ]
+}
+
+# IAM: staging SA can read/write pipeline state
+resource "google_storage_bucket_iam_member" "staging_pipeline_state" {
+  bucket = google_storage_bucket.pipeline_state.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.slack_bot_staging.email}"
 }
 
 # -----------------------------------------------------------------------------

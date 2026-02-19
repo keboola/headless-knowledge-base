@@ -252,33 +252,66 @@ class GraphitiIndexer:
     async def _flush_checkpoints(self) -> None:
         """Write buffered checkpoints to database in batch.
 
-        Uses SQLite upsert to handle conflicts (chunk already indexed).
+        Uses raw aiosqlite (bypassing SQLAlchemy) to avoid connection pool
+        lock contention with the main application sessions.
         """
         if not self._checkpoint_buffer or not self.enable_checkpoints:
             return
 
         try:
-            from knowledge_base.db.database import async_session_maker
-            from knowledge_base.db.models import IndexingCheckpoint
-            from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+            import aiosqlite
 
-            async with async_session_maker() as session:
-                stmt = sqlite_insert(IndexingCheckpoint).values(self._checkpoint_buffer)
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=["chunk_id"],
-                    set_={
-                        "status": stmt.excluded.status,
-                        "indexed_at": stmt.excluded.indexed_at,
-                        "error_message": stmt.excluded.error_message,
-                        "retry_count": IndexingCheckpoint.retry_count + 1,
-                    },
-                )
-                await session.execute(stmt)
-                await session.commit()
+            # Extract DB path from DATABASE_URL (sqlite+aiosqlite:///./knowledge_base.db)
+            db_url = settings.DATABASE_URL
+            db_path = db_url.split("///")[-1] if "///" in db_url else "./knowledge_base.db"
+
+            async with aiosqlite.connect(db_path) as db:
+                await db.execute("PRAGMA journal_mode=WAL")
+                await db.execute("PRAGMA busy_timeout=30000")
+
+                for cp in self._checkpoint_buffer:
+                    await db.execute(
+                        """INSERT INTO indexing_checkpoints
+                           (chunk_id, page_id, status, error_message, session_id, indexed_at, retry_count)
+                           VALUES (?, ?, ?, ?, ?, ?, 0)
+                           ON CONFLICT(chunk_id) DO UPDATE SET
+                             status=excluded.status,
+                             indexed_at=excluded.indexed_at,
+                             error_message=excluded.error_message,
+                             retry_count=retry_count+1""",
+                        (
+                            cp["chunk_id"],
+                            cp["page_id"],
+                            cp["status"],
+                            cp.get("error_message"),
+                            cp.get("session_id"),
+                            cp["indexed_at"].isoformat() if cp.get("indexed_at") else None,
+                        ),
+                    )
+                await db.commit()
+                # Force WAL checkpoint to merge WAL data into the main DB file.
+                # Without this, shutil.copyfile only copies the main file
+                # (missing data still in the -wal file).
+                await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
             self._checkpoint_buffer.clear()
+            self._persist_db()
         except Exception as e:
             logger.error(f"Failed to flush checkpoints: {e}")
+
+    def _persist_db(self) -> None:
+        """Copy the local SQLite DB to persistent storage (e.g. GCS FUSE mount)."""
+        from knowledge_base.config import settings
+        if not settings.CHECKPOINT_PERSIST_PATH:
+            return
+        try:
+            import shutil
+            db_url = settings.DATABASE_URL
+            local_path = db_url.split("///")[-1] if "///" in db_url else "./knowledge_base.db"
+            shutil.copyfile(local_path, settings.CHECKPOINT_PERSIST_PATH)
+            logger.info(f"Persisted checkpoint DB to {settings.CHECKPOINT_PERSIST_PATH}")
+        except Exception as e:
+            logger.warning(f"Failed to persist DB to {settings.CHECKPOINT_PERSIST_PATH}: {e}")
 
     async def index_chunks_direct(
         self,
@@ -390,14 +423,15 @@ class GraphitiIndexer:
             if progress_callback:
                 progress_callback(i + 1, total)
 
+            # Flush checkpoints after every chunk for crash resilience
+            await self._flush_checkpoints()
+
             # Log batch progress
             if (i + 1) % self.batch_size == 0:
                 logger.info(
                     f"Indexed {i + 1}/{total} chunks "
                     f"({indexed} success, {errors} errors, {rate_limit_count} rate limits)"
                 )
-                # Flush checkpoints periodically
-                await self._flush_checkpoints()
 
             # Inter-chunk delay to avoid rate limits
             # Skip delay for the last chunk
@@ -492,9 +526,9 @@ class GraphitiIndexer:
                 if progress_callback:
                     progress_callback(index + 1, total)
 
-                # Flush checkpoints periodically
+                # Flush checkpoints after every chunk for crash resilience
+                await self._flush_checkpoints()
                 if (index + 1) % self.batch_size == 0:
-                    await self._flush_checkpoints()
                     logger.info(
                         f"Progress: {index + 1}/{total} - "
                         f"indexed={results['indexed']}, errors={results['errors']}"
@@ -641,9 +675,9 @@ class GraphitiIndexer:
                     f"next_batch={batch_size} ({phase})"
                 )
 
-                # Flush checkpoints periodically
-                if processed % self.batch_size == 0 or not remaining:
-                    await self._flush_checkpoints()
+                # Flush checkpoints after every successful Graphiti batch
+                # (not just every INDEX_BATCH_SIZE chunks) for crash resilience
+                await self._flush_checkpoints()
 
             except Exception as e:
                 error_str = str(e)

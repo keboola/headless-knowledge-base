@@ -2,7 +2,7 @@
 
 This document defines the canonical architecture principles for the AI Knowledge Base system. All implementation decisions should align with these principles.
 
-**Last Updated:** 2026-02-13
+**Last Updated:** 2026-02-18
 
 ---
 
@@ -57,9 +57,10 @@ The **Graphiti temporal knowledge graph**, backed by **Neo4j 5.26**, is the prim
 SQLite (via SQLAlchemy 2.0 async) stores **only** data that is local to the application instance and not part of the knowledge graph:
 
 1. **Page sync metadata** - Confluence page tracking (RawPage, sync state)
-2. **Governance metadata** - Ownership and review tracking
-3. **User feedback** - Explicit feedback (helpful, incorrect, outdated, confusing)
-4. **Behavioral signals** - Implicit signals (thanks, frustration, reactions)
+2. **Indexing checkpoints** - Resume state for crash-resilient pipeline (IndexingCheckpoint)
+3. **Governance metadata** - Ownership and review tracking
+4. **User feedback** - Explicit feedback (helpful, incorrect, outdated, confusing)
+5. **Behavioral signals** - Implicit signals (thanks, frustration, reactions)
 
 **SQLite does NOT store:**
 - Document content or chunks (these live in Neo4j as episodes)
@@ -81,6 +82,7 @@ Each piece of data lives in **exactly one place**:
 | Quality scores | Neo4j (episode metadata) | Filter/boost during search |
 | Governance info | Neo4j (episode metadata) | Filter during search |
 | Page sync state | SQLite | Local operational data |
+| Indexing checkpoints | SQLite (persisted to GCS) | Pipeline resume state |
 | User feedback | SQLite | Feedback tracking and score updates |
 | Behavioral signals | SQLite | Analytics and implicit signals |
 
@@ -202,6 +204,35 @@ Episode stored in Neo4j with metadata:
 - Concurrent processing with configurable semaphore (default: 5)
 - Rate limit handling with exponential backoff and circuit breaker
 
+### Pipeline Checkpoint Persistence
+
+The indexing pipeline (Step 3 of Flow 1) can take 10-20+ hours due to LLM rate limits. To survive crashes, timeouts, and restarts, checkpoints are persisted to GCS after every indexed chunk.
+
+```
+Cloud Run Job container
+    |
+    +-- Local SQLite DB (./knowledge_base.db)
+    |       |-- RawPage, Chunk tables (download/parse data)
+    |       |-- IndexingCheckpoint table (indexed chunk_ids)
+    |
+    +-- GCS FUSE mount (/mnt/pipeline-state/)
+            |-- prod-knowledge-base.db (persistent copy)
+```
+
+**Checkpoint flow per batch:**
+1. Graphiti indexes 1-5 chunks via `add_episode_bulk()`
+2. Raw aiosqlite writes checkpoints (bypasses SQLAlchemy connection pool)
+3. `PRAGMA wal_checkpoint(TRUNCATE)` merges WAL data into main DB file
+4. `shutil.copyfile` copies DB to GCS FUSE mount
+
+**On restart:** Shell wrapper restores DB from FUSE mount. The pipeline queries `IndexingCheckpoint` to find already-indexed chunks and skips them.
+
+**Key design choices** (see [ADR-0010](adr/0010-pipeline-checkpoint-persistence.md)):
+- Raw aiosqlite (not SQLAlchemy) for checkpoint writes -- avoids connection pool lock contention
+- SQLAlchemy NullPool -- connections close immediately, no WAL lock retention
+- WAL checkpoint before copy -- ensures copied DB file contains all data
+- `ConfluenceDownloader(index_to_graphiti=False)` -- prevents Graphiti indexing during download while session is open
+
 ### Flow 2: Question Answering
 
 ```
@@ -302,7 +333,8 @@ Graph expansion is always enabled with Graphiti (`GRAPH_EXPANSION_ENABLED: true`
 | Knowledge Graph | Neo4j 5.26 Community + APOC | Graph storage, vector index, entity/relationship store |
 | Graph Framework | Graphiti-core | Temporal knowledge graph, entity extraction, hybrid search |
 | Graph Protocol | Bolt (port 7687) | Neo4j wire protocol |
-| Metadata DB | SQLite + SQLAlchemy 2.0 (async) | Page sync state, feedback, behavioral signals |
+| Metadata DB | SQLite + SQLAlchemy 2.0 (async, NullPool) | Page sync state, checkpoints, feedback, behavioral signals |
+| Checkpoint Storage | GCS bucket + FUSE mount | Persistent pipeline state across Cloud Run Job executions |
 | Task Queue | Celery + Redis 7 | Background jobs (sync, indexing) |
 | LLM (primary) | Anthropic Claude (Sonnet) | Answer generation, entity extraction |
 | LLM (alternative) | Google Gemini 2.5 Flash (Vertex AI) | Entity extraction fallback |
@@ -346,6 +378,7 @@ Search operations always filter by `group_ids=[group_id]` to ensure tenant isola
 - [ADR-0003](adr/0003-llm-provider-anthropic-claude.md) - Claude for LLM (ACTIVE)
 - [ADR-0004](adr/0004-slack-bot-http-mode-cloudrun.md) - Slack bot deployment (ACTIVE)
 - [ADR-0005](adr/0005-chromadb-source-of-truth.md) - ChromaDB as source of truth (SUPERSEDED -- Neo4j + Graphiti is now source of truth)
+- [ADR-0010](adr/0010-pipeline-checkpoint-persistence.md) - Pipeline checkpoint persistence via GCS FUSE (ACTIVE)
 - [ADR-0006](adr/0006-duckdb-ephemeral-local-storage.md) - DuckDB ephemeral local storage (SUPERSEDED)
 - [ADR-0007](adr/0007-github-actions-ci-cd.md) - GitHub Actions CI/CD (ACTIVE)
 - [ADR-0008](adr/0008-staging-environment.md) - Staging environment (ACTIVE)

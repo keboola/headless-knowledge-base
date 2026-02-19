@@ -22,6 +22,9 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./knowledge_base.db"
+    # Path to persist checkpoint DB (e.g. GCS FUSE mount). When set, the DB is
+    # copied here after every checkpoint flush for crash-resilient resume.
+    CHECKPOINT_PERSIST_PATH: str = ""
 
     # File Storage
     PAGES_DIR: str = "data/pages"  # Flat directory for .md files with random names

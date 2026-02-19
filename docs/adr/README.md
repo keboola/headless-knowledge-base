@@ -16,6 +16,7 @@ An Architecture Decision Record captures an important architectural decision mad
 | [ADR-0004](0004-slack-bot-http-mode-cloudrun.md) | Deploy Slack Bot in HTTP Mode on Cloud Run | Accepted | 2024-12-24 |
 | [ADR-0005](0005-chromadb-source-of-truth.md) | ChromaDB as Source of Truth for Knowledge Data | Superseded | 2026-01-03 |
 | [ADR-0009](0009-neo4j-graphiti-knowledge-store.md) | Neo4j + Graphiti as Knowledge Store | Accepted | 2026-02-13 |
+| [ADR-0010](0010-pipeline-checkpoint-persistence.md) | Pipeline Checkpoint Persistence via GCS FUSE | Accepted | 2026-02-18 |
 
 ## Key Architecture Document
 

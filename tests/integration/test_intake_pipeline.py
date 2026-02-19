@@ -9,7 +9,9 @@ These tests verify:
 
 import asyncio
 import pytest
+import pytest_asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
+from sqlalchemy import func, select
 
 from knowledge_base.db.models import IndexingCheckpoint
 from knowledge_base.graph.graphiti_indexer import GraphitiIndexer, CircuitBreaker
@@ -41,8 +43,9 @@ class TestCheckpointSystem:
 
         # Verify data was written to database
         result = await async_session.execute(
-            "SELECT COUNT(*) FROM indexing_checkpoints WHERE session_id = ?",
-            ("test-session",),
+            select(func.count()).select_from(IndexingCheckpoint).where(
+                IndexingCheckpoint.session_id == "test-session"
+            )
         )
         count = result.scalar()
         assert count == 3
@@ -63,16 +66,18 @@ class TestCheckpointSystem:
 
         # Should have only 1 row (upserted)
         result = await async_session.execute(
-            "SELECT COUNT(*) FROM indexing_checkpoints WHERE chunk_id = ?",
-            ("chunk-1",),
+            select(func.count()).select_from(IndexingCheckpoint).where(
+                IndexingCheckpoint.chunk_id == "chunk-1"
+            )
         )
         count = result.scalar()
         assert count == 1
 
         # Retry count should be incremented
         result = await async_session.execute(
-            "SELECT retry_count FROM indexing_checkpoints WHERE chunk_id = ?",
-            ("chunk-1",),
+            select(IndexingCheckpoint.retry_count).where(
+                IndexingCheckpoint.chunk_id == "chunk-1"
+            )
         )
         retry_count = result.scalar()
         assert retry_count >= 1
@@ -242,13 +247,30 @@ class TestResumeCapability:
 
 
 # Pytest fixtures
-@pytest.fixture
+@pytest_asyncio.fixture
 async def async_session():
-    """Create async database session for testing."""
-    from knowledge_base.db.database import async_session_maker
+    """Create isolated async database session for testing.
 
-    async with async_session_maker() as session:
-        yield session
+    Uses in-memory SQLite so tests don't leak state between each other
+    and don't touch the application database.
+    """
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+    from knowledge_base.db.models import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    # Patch async_session_maker so _flush_checkpoints() uses the same in-memory DB
+    async with factory() as session:
+        with patch("knowledge_base.db.database.async_session_maker", factory):
+            yield session
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
 
 
 if __name__ == "__main__":

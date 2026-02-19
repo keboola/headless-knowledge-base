@@ -1,5 +1,31 @@
+# =============================================================================
+# Pipeline State Storage (GCS bucket for SQLite DB persistence across job runs)
+# =============================================================================
+
+resource "google_storage_bucket" "pipeline_state" {
+  name                        = "${var.project_id}-pipeline-state"
+  location                    = var.region
+  project                     = var.project_id
+  uniform_bucket_level_access = true
+
+  versioning {
+    enabled = true # Protect against accidental overwrites
+  }
+}
+
+# IAM: production jobs SA can read/write pipeline state
+resource "google_storage_bucket_iam_member" "jobs_pipeline_state" {
+  bucket = google_storage_bucket.pipeline_state.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.jobs.email}"
+}
+
+# =============================================================================
 # Full Pipeline Job - runs download, parse, and index in sequence
+# =============================================================================
+
 resource "google_cloud_run_v2_job" "pipeline" {
+  provider = google-beta
   name     = "sync-pipeline"
   location = var.region
 
@@ -8,13 +34,23 @@ resource "google_cloud_run_v2_job" "pipeline" {
       containers {
         image = "${var.region}-docker.pkg.dev/${var.project_id}/knowledge-base/jobs:latest"
 
-        command = ["python", "-m", "knowledge_base.cli", "pipeline", "--reindex"]
+        # Shell wrapper: restore SQLite DB from GCS FUSE mount at start.
+        # The app continuously persists checkpoints via CHECKPOINT_PERSIST_PATH.
+        command = ["/bin/sh", "-c"]
+        args = [
+          "cp /mnt/pipeline-state/prod-knowledge-base.db ./knowledge_base.db 2>/dev/null && echo 'Restored checkpoint DB from persistent storage' || echo 'No checkpoint DB found, starting fresh'; python -m knowledge_base.cli pipeline"
+        ]
 
         resources {
           limits = {
             cpu    = "4"
             memory = "8Gi"
           }
+        }
+
+        volume_mounts {
+          name       = "pipeline-state"
+          mount_path = "/mnt/pipeline-state"
         }
 
         env {
@@ -108,7 +144,22 @@ resource "google_cloud_run_v2_job" "pipeline" {
           name  = "GRAPHITI_BULK_ENABLED"
           value = "true"
         }
+
+        env {
+          name  = "CHECKPOINT_PERSIST_PATH"
+          value = "/mnt/pipeline-state/prod-knowledge-base.db"
+        }
       }
+
+      volumes {
+        name = "pipeline-state"
+        gcs {
+          bucket    = google_storage_bucket.pipeline_state.name
+          read_only = false
+        }
+      }
+
+      execution_environment = "EXECUTION_ENVIRONMENT_GEN2" # Required for GCS FUSE volumes
 
       timeout     = "86400s" # 24 hours — Graphiti indexing is slow due to LLM calls per chunk
       max_retries = 1
