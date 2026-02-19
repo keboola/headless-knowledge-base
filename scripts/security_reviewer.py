@@ -403,8 +403,7 @@ Start your response with { and end with }."""
         print(f"Claude API Error: {e}")
         return None
     except json.JSONDecodeError as e:
-        print(f"Failed to parse Claude response as JSON: {e}")
-        print(f"Raw response: {response_text[:500]}")
+        print(f"Failed to parse Claude response as JSON: {e} (response length: {len(response_text)} chars)")
         return None
     except Exception as e:
         print(f"Unexpected error calling Claude: {e}")

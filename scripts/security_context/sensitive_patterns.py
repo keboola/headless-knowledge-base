@@ -50,8 +50,8 @@ SECURITY_PATTERNS = {
     # HIGH: Security control bypass
     'security_bypass': [
         r'ADMIN_PASSWORD\s*=\s*["\']changeme["\']',
-        r'#.*signing_secret',
-        r'#.*SLACK_SIGNING_SECRET',
+        r'verify_signature\s*=\s*False',
+        r'SIGNING_SECRET_VERIFY\s*=\s*False',
     ],
 
     # MEDIUM: Injection risks

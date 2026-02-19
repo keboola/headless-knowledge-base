@@ -41,8 +41,8 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           if [ -z "$GEMINI_API_KEY" ]; then
-            echo "GEMINI_API_KEY secret is not set. Skipping AI review."
-            exit 0
+            echo "::error::GEMINI_API_KEY secret is not configured. AI review cannot run."
+            exit 1
           fi
           OUTPUT=$(python scripts/ai_reviewer.py \
             --repo "$REPO" \

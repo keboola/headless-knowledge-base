@@ -286,8 +286,7 @@ def main():
     # 5. Post Result
     content_text = extract_response_text(result)
     if not content_text:
-        print("Failed to extract text from AI response.")
-        print(f"Raw Result: {result}")
+        print(f"Failed to extract text from AI response (candidates: {len(result.get('candidates', []))})")
         sys.exit(1)
 
     try:
@@ -298,8 +297,7 @@ def main():
         review_data = json.loads(content_text)
         post_review(args.repo, args.pr, args.github_token, review_data)
     except Exception as e:
-        print(f"Failed to process AI response: {e}")
-        print(f"Raw content: {content_text}")
+        print(f"Failed to process AI response: {e} (response length: {len(content_text) if content_text else 0} chars)")
         sys.exit(1)
 
 if __name__ == "__main__":
