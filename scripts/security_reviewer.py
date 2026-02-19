@@ -369,7 +369,7 @@ Start your response with { and end with }."""
         print("Analyzing with Claude for security review...")
         message = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=4096,
+            max_tokens=16384,
             system=system_prompt,
             messages=[
                 {"role": "user", "content": prompt}

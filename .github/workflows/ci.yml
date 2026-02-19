@@ -86,10 +86,18 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          python scripts/security_reviewer.py \
+          OUTPUT=$(python scripts/security_reviewer.py \
             --repo "$REPO" \
             --pr "$PR_NUMBER" \
-            --github-token "$GITHUB_TOKEN"
+            --github-token "$GITHUB_TOKEN" 2>&1) || {
+            echo "$OUTPUT"
+            exit 1
+          }
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -qi "submitted.*REQUEST_CHANGES"; then
+            echo "::error::Security reviewer requested changes - see review comments"
+            exit 1
+          fi
 
   # ============================================
   # Stage 1: Unit Tests (runs on every PR/push)
