@@ -111,8 +111,8 @@ def analyze_code_with_gemini(pr_details, files_data, issues_context, api_key):
         else:
             code_context += " (Binary or Empty File)"
 
-    # 2. Select Model
-    models_to_try = ["gemini-2.0-flash", "gemini-2.0-flash-lite"]
+    # 2. Select Model (use full model IDs for generativelanguage.googleapis.com)
+    models_to_try = ["gemini-2.0-flash-001", "gemini-1.5-flash"]
 
     # Sanitize inputs to prevent prompt injection
     safe_title = html.escape(pr_details['title'])
@@ -194,9 +194,13 @@ def analyze_code_with_gemini(pr_details, files_data, issues_context, api_key):
                     continue
 
                 if response.status_code == 404:
+                    print(f"Model {model} not found, trying next...")
                     break # Try next model
 
-                print(f"API Error ({model}): {response.text}")
+                print(f"API Error ({model}): status={response.status_code}")
+                if response.status_code >= 500:
+                    time.sleep(5 * (attempt + 1))
+                    continue
 
             except Exception as e:
                 print(f"Network Exception: {e}")
