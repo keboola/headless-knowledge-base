@@ -12,6 +12,90 @@ env:
 
 jobs:
   # ============================================
+  # Stage 0a: AI Code Review (PRs only)
+  # ============================================
+  ai-review:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+    steps:
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install requests
+      - name: Run AI Reviewer
+        id: review
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "GEMINI_API_KEY secret is not set. Skipping AI review."
+            exit 0
+          fi
+          OUTPUT=$(python scripts/ai_reviewer.py \
+            --repo "$REPO" \
+            --pr "$PR_NUMBER" \
+            --github-token "$GITHUB_TOKEN" 2>&1) || {
+            echo "$OUTPUT"
+            exit 1
+          }
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -q "Submitted review: REQUEST_CHANGES"; then
+            echo "::error::AI reviewer requested changes - see review comments"
+            exit 1
+          fi
+
+  # ============================================
+  # Stage 0b: Security Review (PRs only)
+  # ============================================
+  security-review:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install requests anthropic[vertex]
+      - name: Run Security Reviewer
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERTEX_PROJECT_ID: claude-code-via-vertex
+          VERTEX_REGION: europe-west1
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python scripts/security_reviewer.py \
+            --repo "$REPO" \
+            --pr "$PR_NUMBER" \
+            --github-token "$GITHUB_TOKEN"
+
+  # ============================================
   # Stage 1: Unit Tests (runs on every PR/push)
   # ============================================
   unit-tests:
@@ -81,12 +165,35 @@ jobs:
   # Stage 2c: Build Gate (for branch protection)
   # ============================================
   build:
-    # Gate job that passes when all build jobs complete
-    # This allows branch protection to require just "build" instead of listing each build job
-    needs: [build-slack-bot, build-jobs]
+    # Gate job: requires builds + reviewer approvals (on PRs) before staging deploy
+    needs: [build-slack-bot, build-jobs, ai-review, security-review]
+    if: always()
     runs-on: ubuntu-latest
     steps:
-      - run: echo "All build jobs completed successfully"
+      - name: Verify all gates passed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BUILD_BOT: ${{ needs.build-slack-bot.result }}
+          BUILD_JOBS: ${{ needs.build-jobs.result }}
+          AI_REVIEW: ${{ needs.ai-review.result }}
+          SEC_REVIEW: ${{ needs.security-review.result }}
+        run: |
+          echo "Build Slack Bot: $BUILD_BOT"
+          echo "Build Jobs: $BUILD_JOBS"
+          echo "AI Review: $AI_REVIEW"
+          echo "Security Review: $SEC_REVIEW"
+
+          # Build jobs must succeed
+          [[ "$BUILD_BOT" == "success" ]] || { echo "::error::build-slack-bot failed"; exit 1; }
+          [[ "$BUILD_JOBS" == "success" ]] || { echo "::error::build-jobs failed"; exit 1; }
+
+          # For PRs: reviewers must succeed
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            [[ "$AI_REVIEW" == "success" ]] || { echo "::error::ai-review failed or not approved"; exit 1; }
+            [[ "$SEC_REVIEW" == "success" ]] || { echo "::error::security-review failed"; exit 1; }
+          fi
+
+          echo "All gates passed"
 
   # ============================================
   # Stage 3: Deploy to Staging
@@ -180,25 +287,7 @@ jobs:
         timeout-minutes: 15
 
   # ============================================
-  # Stage 5: Auto-merge PR on success (PRs only)
-  # ============================================
-  auto-merge:
-    needs: e2e-tests-staging
-    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - name: Enable auto-merge for PR
-        uses: peter-evans/enable-pull-request-automerge@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          pull-request-number: ${{ github.event.pull_request.number }}
-          merge-method: squash
-
-  # ============================================
-  # Stage 6: Deploy to Production (main only)
+  # Stage 5: Deploy to Production (main only)
   # ============================================
   deploy-production:
     needs: e2e-tests-staging
