@@ -94,6 +94,10 @@ class Settings(BaseSettings):
     NEO4J_URI: str = "bolt://localhost:7687"
     NEO4J_USER: str = "neo4j"
     NEO4J_PASSWORD: str = ""
+    # Neo4j connection pool resilience (seconds)
+    NEO4J_LIVENESS_CHECK_TIMEOUT: int = 30  # Check connection health before use
+    NEO4J_MAX_CONNECTION_LIFETIME: int = 1800  # Recycle connections every 30 min
+    NEO4J_CONNECTION_ACQUISITION_TIMEOUT: int = 60  # Wait up to 60s for a connection
     # Feature flags for Graphiti-only architecture
     GRAPH_ENABLE_GRAPHITI: bool = True  # Master switch for Graphiti (now required)
     GRAPH_EXPANSION_ENABLED: bool = True  # Always enabled with Graphiti-only
