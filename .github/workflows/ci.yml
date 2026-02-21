@@ -204,6 +204,7 @@ jobs:
   # ============================================
   deploy-staging:
     needs: build
+    if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -233,6 +234,7 @@ jobs:
   # ============================================
   e2e-tests-staging:
     needs: deploy-staging
+    if: always() && needs.deploy-staging.result == 'success'
     runs-on: ubuntu-latest
     env:
       # Slack configuration (Pattern: {SERVICE}_{ENV}_*)
@@ -295,7 +297,7 @@ jobs:
   # ============================================
   deploy-production:
     needs: e2e-tests-staging
-    if: github.ref == 'refs/heads/main'
+    if: always() && needs.e2e-tests-staging.result == 'success' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
