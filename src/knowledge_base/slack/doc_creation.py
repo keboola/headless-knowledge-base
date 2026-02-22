@@ -11,7 +11,7 @@ from typing import Any
 
 from slack_sdk import WebClient
 
-from knowledge_base.db.database import init_db
+from knowledge_base.db.database import async_session_maker, init_db
 from knowledge_base.documents.creator import DocumentCreator
 from knowledge_base.documents.approval import ApprovalConfig
 from knowledge_base.documents.models import (
@@ -33,19 +33,16 @@ logger = logging.getLogger(__name__)
 
 
 async def _get_document_creator(slack_client=None) -> DocumentCreator:
-    """Get a DocumentCreator instance with database session."""
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import sessionmaker
+    """Get a DocumentCreator instance with database session.
 
-    from knowledge_base.config import settings
-    from knowledge_base.db.models import Base
-
-    # Create sync session (object construction only, no blocking I/O)
-    sync_db_url = settings.DATABASE_URL.replace("+aiosqlite", "")
-    engine = create_engine(sync_db_url)
-    Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
-    session = Session()
+    Uses the project's async_session_maker (NullPool, WAL mode) and extracts
+    the underlying sync session for DocumentCreator compatibility.
+    """
+    # Use the project's async session infrastructure (NullPool, WAL pragmas)
+    # and extract the underlying sync session for DocumentCreator.
+    # DocumentCreator uses sync SQLAlchemy Session by design.
+    async_session = async_session_maker()
+    session = async_session.sync_session
 
     # Try to get LLM
     llm = None
