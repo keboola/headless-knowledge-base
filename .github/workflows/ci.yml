@@ -293,6 +293,29 @@ jobs:
         timeout-minutes: 15
 
   # ============================================
+  # Stage 4b: Auto-merge PR (PRs only, after e2e pass)
+  # ============================================
+  auto-merge:
+    needs: e2e-tests-staging
+    if: >
+      always() &&
+      needs.e2e-tests-staging.result == 'success' &&
+      github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Enable auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          echo "Enabling auto-merge for PR #$PR_NUMBER"
+          gh pr merge "$PR_NUMBER" --repo "${{ github.repository }}" --auto --squash
+          echo "Auto-merge enabled. PR will merge when all required checks pass."
+
+  # ============================================
   # Stage 5: Deploy to Production (main only)
   # ============================================
   deploy-production:
