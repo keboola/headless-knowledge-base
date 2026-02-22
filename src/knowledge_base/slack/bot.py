@@ -569,6 +569,8 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
         await async_call(say, "Please ask a question!", thread_ts=thread_ts)
         return
 
+    logger.info(f"Processing question from user={user_id} channel={channel}: '{text[:80]}'")
+
     # Get user info
     try:
         user_info = await async_call(client.users_info, user=user_id)
@@ -577,13 +579,30 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
         username = user_id
 
     # Send "thinking" message
-    thinking_msg = await async_call(say, "Thinking...", thread_ts=thread_ts)
+    try:
+        thinking_msg = await async_call(say, "Thinking...", thread_ts=thread_ts)
+        logger.info(f"Posted 'Thinking...' message ts={thinking_msg.get('ts', 'unknown')}")
+    except Exception as e:
+        logger.error(f"Failed to post 'Thinking...' message: {e}", exc_info=True)
+        # Try direct chat.postMessage as fallback
+        try:
+            thinking_msg = await async_call(
+                client.chat_postMessage,
+                channel=channel,
+                thread_ts=thread_ts,
+                text="Thinking...",
+            )
+            logger.info(f"Posted 'Thinking...' via fallback, ts={thinking_msg.get('ts', 'unknown')}")
+        except Exception as e2:
+            logger.error(f"Fallback 'Thinking...' also failed: {e2}", exc_info=True)
+            return
 
     # Get conversation history for this thread
     conversation_history = _get_conversation_history(thread_ts)
 
     # Search for relevant chunks
     chunks = await _search_chunks(text)
+    logger.info(f"Search returned {len(chunks)} chunks")
 
     # Record access for each chunk
     for chunk in chunks:
@@ -595,6 +614,7 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
 
     # Generate answer with conversation context
     answer = await _generate_answer(text, chunks, conversation_history)
+    logger.info(f"Generated answer: {len(answer)} chars")
 
     # Store this exchange in conversation history
     _add_to_conversation(thread_ts, "user", text)
@@ -625,8 +645,9 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
             text=fallback_text,
             blocks=blocks,
         )
+        logger.info(f"Updated message with answer (ts={thinking_msg['ts']})")
     except Exception as e:
-        logger.error(f"Failed to update message: {e}")
+        logger.error(f"Failed to update message: {e}", exc_info=True)
         # Fallback: post answer as a new message so the user still gets a response
         try:
             await async_call(
@@ -636,8 +657,9 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
                 text=fallback_text,
                 blocks=blocks,
             )
+            logger.info("Posted answer as new message (fallback)")
         except Exception as e2:
-            logger.error(f"Failed to post fallback message: {e2}")
+            logger.error(f"Failed to post fallback message: {e2}", exc_info=True)
 
     # Always add feedback buttons (even for "no results" responses)
     try:
@@ -648,12 +670,13 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
             blocks=_create_feedback_buttons(thinking_msg["ts"]),
             text="Was this helpful?",
         )
+        logger.info("Posted feedback buttons")
 
         # Store chunk IDs for feedback (empty list if no results)
         chunk_ids = [c.chunk_id for c in chunks] if chunks else []
         pending_feedback[thinking_msg["ts"]] = chunk_ids
 
-        # Record bot response for behavioral tracking (Phase 10.5)
+        # Record bot response for behavioral tracking
         try:
             await record_bot_response(
                 response_ts=thinking_msg["ts"],
@@ -984,11 +1007,18 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    # force=True is required because Settings() triggers logging.warning()
+    # during import, which implicitly calls basicConfig() with default
+    # level=WARNING. Without force=True, our explicit call is a no-op
+    # and all INFO-level logs are silently dropped.
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        format="%(levelname)s:%(name)s:%(message)s",
+        force=True,
     )
     logging.getLogger().addFilter(SecretRedactingFilter())
+
+    logger.info("Slack bot starting (logging configured at INFO level)")
 
     if args.http:
         run_http_mode(port=args.port)
