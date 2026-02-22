@@ -180,12 +180,6 @@ resource "google_secret_manager_secret_iam_member" "slack_signing_secret_access"
   member    = "serviceAccount:${google_service_account.slack_bot.email}"
 }
 
-resource "google_secret_manager_secret_iam_member" "slack_anthropic_access" {
-  secret_id = google_secret_manager_secret.anthropic_api_key.secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.slack_bot.email}"
-}
-
 # Slack Bot Neo4j password access
 resource "google_secret_manager_secret_iam_member" "slack_neo4j_password_access" {
   secret_id = google_secret_manager_secret.neo4j_password.secret_id
@@ -209,12 +203,6 @@ resource "google_secret_manager_secret_iam_member" "jobs_confluence_email_access
 
 resource "google_secret_manager_secret_iam_member" "jobs_confluence_token_access" {
   secret_id = google_secret_manager_secret.confluence_api_token.secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.jobs.email}"
-}
-
-resource "google_secret_manager_secret_iam_member" "jobs_anthropic_access" {
-  secret_id = google_secret_manager_secret.anthropic_api_key.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.jobs.email}"
 }

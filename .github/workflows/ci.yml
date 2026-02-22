@@ -255,16 +255,14 @@ jobs:
       NEO4J_URI: ${{ secrets.NEO4J_STAGING_URI }}
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: ${{ secrets.NEO4J_STAGING_PASSWORD }}
-      # Anthropic API for Graphiti entity extraction
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      ANTHROPIC_MODEL: claude-sonnet-4-20250514
       # Vertex AI for embeddings
       EMBEDDING_PROVIDER: vertex-ai
       VERTEX_AI_PROJECT: ai-knowledge-base-42
       VERTEX_AI_LOCATION: us-central1
       # LLM configuration
       LLM_PROVIDER: gemini
-      GEMINI_MODEL_ID: gemini-2.0-flash
+      GEMINI_INTAKE_MODEL: gemini-2.5-flash
+      GEMINI_CONVERSATION_MODEL: gemini-2.5-flash
       GCP_PROJECT_ID: ai-knowledge-base-42
     steps:
       - uses: actions/checkout@v4

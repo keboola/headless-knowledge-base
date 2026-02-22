@@ -45,7 +45,7 @@ class GeminiLLM(BaseLLM):
         """
         self.project = project or settings.VERTEX_AI_PROJECT or settings.GCP_PROJECT_ID
         self.location = location or settings.VERTEX_AI_LOCATION
-        self.model_name = model or settings.VERTEX_AI_LLM_MODEL
+        self.model_name = model or settings.GEMINI_CONVERSATION_MODEL
         self.max_output_tokens = max_output_tokens
         self.temperature = temperature
         self._model = None

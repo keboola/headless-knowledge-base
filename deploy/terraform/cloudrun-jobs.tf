@@ -141,6 +141,11 @@ resource "google_cloud_run_v2_job" "pipeline" {
         }
 
         env {
+          name  = "GEMINI_INTAKE_MODEL"
+          value = "gemini-2.5-flash"
+        }
+
+        env {
           name  = "GRAPHITI_BULK_ENABLED"
           value = "true"
         }

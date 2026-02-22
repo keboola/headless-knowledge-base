@@ -198,8 +198,9 @@ class TestLLMFactory:
     """Tests for LLM factory and provider selection."""
 
     def test_get_available_providers(self):
-        """Test that available providers include claude and ollama."""
+        """Test that available providers include gemini, claude and ollama."""
         providers = get_available_providers()
+        assert "gemini" in providers
         assert "claude" in providers
         assert "ollama" in providers
 
@@ -244,31 +245,24 @@ class TestLLMFactory:
             assert llm.provider_name == "ollama"
 
     @pytest.mark.asyncio
-    async def test_get_llm_auto_selects_claude_with_api_key(self):
-        """Test that get_llm auto-selects Claude when API key is set."""
-        # Patch both factory and claude provider settings
-        with patch("knowledge_base.rag.factory.settings") as factory_settings, \
-             patch("knowledge_base.rag.providers.claude.settings") as claude_settings:
-            factory_settings.LLM_PROVIDER = ""  # Empty for auto-select
-            factory_settings.ANTHROPIC_API_KEY = "test-api-key"
+    async def test_get_llm_empty_provider_raises_error(self):
+        """Test that empty LLM_PROVIDER raises an error (no auto-fallback)."""
+        with patch("knowledge_base.rag.factory.settings") as mock_settings:
+            mock_settings.LLM_PROVIDER = ""
 
-            claude_settings.ANTHROPIC_API_KEY = "test-api-key"
-            claude_settings.ANTHROPIC_MODEL = "claude-3-5-haiku-20241022"
-
-            llm = await get_llm()
-            assert llm.provider_name == "claude"
+            with pytest.raises(LLMProviderNotConfiguredError):
+                await get_llm()
 
     @pytest.mark.asyncio
-    async def test_get_llm_falls_back_to_ollama(self):
-        """Test that get_llm falls back to Ollama when no Claude key."""
+    async def test_get_llm_unavailable_provider_raises_error(self):
+        """Test that unavailable configured provider raises error (no fallback)."""
         with patch("knowledge_base.rag.factory.settings") as mock_settings:
-            mock_settings.LLM_PROVIDER = ""  # Empty for auto-select
-            mock_settings.ANTHROPIC_API_KEY = ""  # No Claude key
-            mock_settings.OLLAMA_BASE_URL = "http://test:11434"
-            mock_settings.OLLAMA_LLM_MODEL = "test-model"
+            mock_settings.LLM_PROVIDER = "claude"
+            mock_settings.ANTHROPIC_API_KEY = ""  # Claude not configured
 
-            llm = await get_llm()
-            assert llm.provider_name == "ollama"
+            with pytest.raises(LLMProviderNotConfiguredError) as exc_info:
+                await get_llm()
+            assert "claude" in str(exc_info.value)
 
 
 class TestOllamaLLMProviderInterface:

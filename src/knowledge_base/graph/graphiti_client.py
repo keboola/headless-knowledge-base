@@ -205,34 +205,24 @@ class GraphitiClient:
     def _get_llm_client(self):
         """Get the LLM client for Graphiti entity extraction.
 
-        Supports multiple LLM providers:
-        - 'claude'/'anthropic': Uses Anthropic Claude API
-        - 'gemini': Uses Google Gemini API
-
-        Falls back based on available credentials.
+        Dispatches based on LLM_PROVIDER setting. No silent fallback —
+        if the configured provider is not available, raises an error.
         """
-        from graphiti_core.llm_client import LLMConfig
-
         llm_provider = settings.LLM_PROVIDER.lower()
 
-        # Try Gemini if explicitly configured or as fallback
         if llm_provider == "gemini":
             return self._get_gemini_client()
 
-        # Try Anthropic
-        if llm_provider in ("claude", "anthropic", ""):
-            if settings.ANTHROPIC_API_KEY:
-                return self._get_anthropic_client()
-            else:
-                # Fall back to Gemini if Anthropic key not available
-                logger.warning(
-                    "ANTHROPIC_API_KEY not set, falling back to Gemini for entity extraction"
+        if llm_provider in ("claude", "anthropic"):
+            if not settings.ANTHROPIC_API_KEY:
+                raise GraphitiClientError(
+                    "LLM_PROVIDER is set to 'claude' but ANTHROPIC_API_KEY is not configured."
                 )
-                return self._get_gemini_client()
+            return self._get_anthropic_client()
 
         raise GraphitiClientError(
-            f"Unsupported LLM_PROVIDER: {llm_provider}. "
-            "Use 'claude', 'anthropic', or 'gemini'."
+            f"Unsupported LLM_PROVIDER for Graphiti: '{llm_provider}'. "
+            "Use 'gemini' or 'claude'."
         )
 
     def _get_anthropic_client(self):
@@ -273,7 +263,7 @@ class GraphitiClient:
         # Check for Google API key (direct API access)
         google_api_key = os.environ.get("GOOGLE_API_KEY", "")
 
-        model = settings.VERTEX_AI_LLM_MODEL or "gemini-2.0-flash"
+        model = settings.GEMINI_INTAKE_MODEL
 
         # If we have an API key, use consumer Gemini API
         if google_api_key:
