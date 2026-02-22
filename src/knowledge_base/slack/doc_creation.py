@@ -40,7 +40,9 @@ async def _get_document_creator(slack_client=None) -> DocumentCreator:
     """
     # Use the project's async session infrastructure (NullPool, WAL pragmas)
     # and extract the underlying sync session for DocumentCreator.
-    # DocumentCreator uses sync SQLAlchemy Session by design.
+    # NOTE: DocumentCreator uses sync Session internally but its public
+    # methods (create_manual, create_from_description, etc.) are async def
+    # and safe to await. See documents/creator.py.
     async_session = async_session_maker()
     session = async_session.sync_session
 
