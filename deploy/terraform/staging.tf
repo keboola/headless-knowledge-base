@@ -170,16 +170,6 @@ resource "google_cloud_run_v2_service" "slack_bot_staging" {
         }
       }
 
-      env {
-        name = "ANTHROPIC_API_KEY"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.anthropic_api_key.secret_id
-            version = "latest"
-          }
-        }
-      }
-
       # Graph Database Configuration (Graphiti + Neo4j)
       env {
         name  = "GRAPH_BACKEND"
@@ -213,7 +203,7 @@ resource "google_cloud_run_v2_service" "slack_bot_staging" {
       }
 
       env {
-        name  = "GEMINI_MODEL_ID"
+        name  = "GEMINI_CONVERSATION_MODEL"
         value = "gemini-2.5-flash"
       }
 
@@ -235,6 +225,11 @@ resource "google_cloud_run_v2_service" "slack_bot_staging" {
       env {
         name  = "VERTEX_AI_LOCATION"
         value = var.region
+      }
+
+      env {
+        name  = "GOOGLE_GENAI_USE_VERTEXAI"
+        value = "true"
       }
 
       env {
@@ -322,12 +317,6 @@ resource "google_secret_manager_secret_iam_member" "slack_bot_staging_token_acce
 
 resource "google_secret_manager_secret_iam_member" "slack_bot_staging_signing_access" {
   secret_id = google_secret_manager_secret.slack_signing_secret_staging.id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.slack_bot_staging.email}"
-}
-
-resource "google_secret_manager_secret_iam_member" "slack_bot_staging_anthropic_access" {
-  secret_id = google_secret_manager_secret.anthropic_api_key.id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.slack_bot_staging.email}"
 }
@@ -466,6 +455,11 @@ resource "google_cloud_run_v2_job" "confluence_sync_staging" {
           value = "true"
         }
 
+        env {
+          name  = "GEMINI_INTAKE_MODEL"
+          value = "gemini-2.5-flash"
+        }
+
         # Adaptive bulk indexing (TCP-style congestion control)
         env {
           name  = "GRAPHITI_BULK_ENABLED"
@@ -475,17 +469,6 @@ resource "google_cloud_run_v2_job" "confluence_sync_staging" {
         env {
           name  = "CHECKPOINT_PERSIST_PATH"
           value = "/mnt/pipeline-state/staging-knowledge-base.db"
-        }
-
-        # Keep Anthropic key as fallback (optional)
-        env {
-          name = "ANTHROPIC_API_KEY"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.anthropic_api_key.secret_id
-              version = "latest"
-            }
-          }
         }
       }
 

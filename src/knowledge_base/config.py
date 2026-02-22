@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://redis:6379/0"
 
     # LLM Provider Selection
-    LLM_PROVIDER: str = "claude"  # 'ollama', 'claude', or empty for auto-select
+    LLM_PROVIDER: str = "gemini"  # 'gemini', 'claude', 'vertex-claude', or 'ollama'
 
     # Ollama (local LLM)
     OLLAMA_BASE_URL: str = "http://ollama:11434"
@@ -45,10 +45,13 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"  # sentence-transformer model
     INDEX_BATCH_SIZE: int = 100
 
-    # Anthropic (Claude)
+    # Gemini model settings (separate models for different use cases)
+    # Gemini 2.5 Flash supports up to 65K output tokens (required for graphiti-core's 16384)
+    GEMINI_INTAKE_MODEL: str = "gemini-2.5-flash"  # Graphiti entity extraction (intake pipeline)
+    GEMINI_CONVERSATION_MODEL: str = "gemini-2.5-flash"  # Slack bot RAG conversations
+
+    # Anthropic (Claude) — used when LLM_PROVIDER=claude
     ANTHROPIC_API_KEY: str = ""
-    # Using Sonnet for Graphiti entity extraction - Haiku doesn't support the max_tokens
-    # that graphiti-core internally uses (16384). Sonnet is more expensive but works.
     ANTHROPIC_MODEL: str = "claude-sonnet-4-20250514"
     METADATA_BATCH_SIZE: int = 10
 
@@ -113,9 +116,9 @@ class Settings(BaseSettings):
     VERTEX_AI_LOCATION: str = "us-central1"  # Region for Vertex AI
     VERTEX_AI_EMBEDDING_MODEL: str = "text-embedding-005"  # Embedding model
     VERTEX_AI_EMBEDDING_DIMENSION: int = 768  # Embedding dimension
-    # Gemini 2.5 Flash supports up to 65K output tokens (required for graphiti-core's 16384)
-    # Gemini 2.0 Flash only supports 8K output which causes errors with graphiti
-    VERTEX_AI_LLM_MODEL: str = "gemini-2.5-flash"  # Gemini model for entity extraction
+    # DEPRECATED: Use GEMINI_INTAKE_MODEL / GEMINI_CONVERSATION_MODEL instead.
+    # Kept for backward compat with existing deployments that set this env var.
+    VERTEX_AI_LLM_MODEL: str = ""
     VERTEX_AI_CLAUDE_MODEL: str = "claude-sonnet-4@20250514"  # Claude via Vertex AI
     VERTEX_AI_BATCH_SIZE: int = 20  # Max texts per embedding batch (keep under 20k token limit)
     VERTEX_AI_TIMEOUT: float = 60.0  # API timeout in seconds
@@ -143,6 +146,16 @@ class Settings(BaseSettings):
         if not self.CONFLUENCE_SPACE_KEYS:
             return []
         return [s.strip() for s in self.CONFLUENCE_SPACE_KEYS.split(",") if s.strip()]
+
+    @model_validator(mode="after")
+    def migrate_vertex_ai_llm_model(self) -> "Settings":
+        """Backward compat: map deprecated VERTEX_AI_LLM_MODEL to new settings."""
+        if self.VERTEX_AI_LLM_MODEL:
+            if not os.environ.get("GEMINI_INTAKE_MODEL"):
+                self.GEMINI_INTAKE_MODEL = self.VERTEX_AI_LLM_MODEL
+            if not os.environ.get("GEMINI_CONVERSATION_MODEL"):
+                self.GEMINI_CONVERSATION_MODEL = self.VERTEX_AI_LLM_MODEL
+        return self
 
     @model_validator(mode="after")
     def check_security_settings(self) -> "Settings":

@@ -39,16 +39,6 @@ resource "google_cloud_run_v2_service" "slack_bot" {
         }
       }
 
-      env {
-        name = "ANTHROPIC_API_KEY"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.anthropic_api_key.secret_id
-            version = "latest"
-          }
-        }
-      }
-
       # Graph Database Configuration (Graphiti + Neo4j)
       env {
         name  = "GRAPH_BACKEND"
@@ -82,7 +72,7 @@ resource "google_cloud_run_v2_service" "slack_bot" {
       }
 
       env {
-        name  = "GEMINI_MODEL_ID"
+        name  = "GEMINI_CONVERSATION_MODEL"
         value = "gemini-2.5-flash"
       }
 
@@ -104,6 +94,11 @@ resource "google_cloud_run_v2_service" "slack_bot" {
       env {
         name  = "VERTEX_AI_LOCATION"
         value = var.region
+      }
+
+      env {
+        name  = "GOOGLE_GENAI_USE_VERTEXAI"
+        value = "true"
       }
 
       # Health check
@@ -134,7 +129,6 @@ resource "google_cloud_run_v2_service" "slack_bot" {
   depends_on = [
     google_secret_manager_secret_version.slack_bot_token,
     google_secret_manager_secret_version.slack_signing_secret,
-    google_secret_manager_secret_version.anthropic_api_key,
   ]
 }
 

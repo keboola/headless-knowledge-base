@@ -64,55 +64,36 @@ def get_provider(name: str) -> "BaseLLM":
 async def get_llm(provider: str | None = None) -> "BaseLLM":
     """Get an LLM instance (main entry point).
 
-    Selection order:
-    1. Use specified provider if given
-    2. Use LLM_PROVIDER from config if set
-    3. Auto-select based on availability (Claude if API key exists, else Ollama)
+    Uses the configured LLM_PROVIDER. No silent fallback — if the configured
+    provider is not available, raises an error immediately.
 
     Args:
-        provider: Specific provider name, or None for automatic selection
+        provider: Specific provider name, or None to use LLM_PROVIDER setting
 
     Returns:
         Configured LLM instance
 
     Raises:
-        LLMProviderNotConfiguredError: If no provider is available
+        LLMProviderNotConfiguredError: If no provider is configured or available
     """
-    # Use specified or configured provider
     provider_name = provider or settings.LLM_PROVIDER
+    if not provider_name:
+        raise LLMProviderNotConfiguredError(
+            "LLM_PROVIDER is not configured. "
+            "Set it to 'gemini', 'claude', 'vertex-claude', or 'ollama'.",
+            provider="none",
+        )
 
-    if provider_name:
-        llm = get_provider(provider_name)
-        if await llm.is_available():
-            logger.info(f"Using LLM provider: {llm.provider_name}")
-            return llm
-        logger.warning(f"Configured provider '{provider_name}' not available")
+    llm = get_provider(provider_name)
+    if not await llm.is_available():
+        raise LLMProviderNotConfiguredError(
+            f"LLM provider '{provider_name}' is configured but not available. "
+            f"Check your credentials and configuration.",
+            provider=provider_name,
+        )
 
-    # Auto-select: try Claude, then Gemini, then Ollama
-    if settings.ANTHROPIC_API_KEY:
-        llm = get_provider("claude")
-        if await llm.is_available():
-            logger.info("Auto-selected Claude LLM provider")
-            return llm
-
-    # Try Gemini if GCP project is configured
-    if settings.VERTEX_AI_PROJECT or settings.GCP_PROJECT_ID:
-        llm = get_provider("gemini")
-        if await llm.is_available():
-            logger.info("Auto-selected Gemini LLM provider")
-            return llm
-
-    # Fall back to Ollama
-    llm = get_provider("ollama")
-    if await llm.is_available():
-        logger.info("Auto-selected Ollama LLM provider")
-        return llm
-
-    raise LLMProviderNotConfiguredError(
-        "No LLM provider is configured or available. "
-        "Set ANTHROPIC_API_KEY for Claude, configure GCP project for Gemini, or ensure Ollama is running.",
-        provider="none",
-    )
+    logger.info(f"Using LLM provider: {llm.provider_name}")
+    return llm
 
 
 # Import BaseLLM here to avoid circular imports
