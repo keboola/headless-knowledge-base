@@ -1,15 +1,17 @@
-"""Document creation handlers for Slack."""
+"""Document creation handlers for Slack.
 
-import asyncio
+All handlers are async for compatibility with Slack Bolt's AsyncApp
+(used in production HTTP mode on Cloud Run).
+"""
+
 import json
 import logging
 import re
 from typing import Any
 
-from slack_bolt import App
 from slack_sdk import WebClient
 
-from knowledge_base.db.database import init_db
+from knowledge_base.db.database import async_session_maker, init_db
 from knowledge_base.documents.creator import DocumentCreator
 from knowledge_base.documents.approval import ApprovalConfig
 from knowledge_base.documents.models import (
@@ -30,40 +32,26 @@ from knowledge_base.slack.modals import (
 logger = logging.getLogger(__name__)
 
 
-def _run_async(coro):
-    """Safely run an async coroutine from a sync context."""
-    try:
-        return asyncio.run(coro)
-    except RuntimeError as e:
-        if "cannot be called from a running event loop" in str(e):
-            import concurrent.futures
+async def _get_document_creator(slack_client=None) -> DocumentCreator:
+    """Get a DocumentCreator instance with database session.
 
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                return executor.submit(asyncio.run, coro).result()
-        raise
-
-
-def _get_document_creator(slack_client=None) -> DocumentCreator:
-    """Get a DocumentCreator instance with database session."""
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import sessionmaker
-
-    from knowledge_base.config import settings
-    from knowledge_base.db.models import Base
-
-    # Create sync session
-    sync_db_url = settings.DATABASE_URL.replace("+aiosqlite", "")
-    engine = create_engine(sync_db_url)
-    Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
-    session = Session()
+    Uses the project's async_session_maker (NullPool, WAL mode) and extracts
+    the underlying sync session for DocumentCreator compatibility.
+    """
+    # Use the project's async session infrastructure (NullPool, WAL pragmas)
+    # and extract the underlying sync session for DocumentCreator.
+    # NOTE: DocumentCreator uses sync Session internally but its public
+    # methods (create_manual, create_from_description, etc.) are async def
+    # and safe to await. See documents/creator.py.
+    async_session = async_session_maker()
+    session = async_session.sync_session
 
     # Try to get LLM
     llm = None
     try:
-        from knowledge_base.rag.factory import get_llm as get_llm_async
+        from knowledge_base.rag.factory import get_llm
 
-        llm = _run_async(get_llm_async())
+        llm = await get_llm()
     except Exception as e:
         logger.warning(f"LLM not available: {e}")
 
@@ -81,12 +69,12 @@ def _get_document_creator(slack_client=None) -> DocumentCreator:
 # =========================================================================
 
 
-def handle_create_doc_command(ack: Any, body: dict, client: WebClient) -> None:
+async def handle_create_doc_command(ack: Any, body: dict, client: WebClient) -> None:
     """Handle /create-doc slash command."""
-    ack()
+    await ack()
 
     try:
-        client.views_open(
+        await client.views_open(
             trigger_id=body["trigger_id"],
             view=build_create_doc_modal(),
         )
@@ -99,9 +87,9 @@ def handle_create_doc_command(ack: Any, body: dict, client: WebClient) -> None:
 # =========================================================================
 
 
-def handle_save_as_doc(ack: Any, shortcut: dict, client: WebClient) -> None:
+async def handle_save_as_doc(ack: Any, shortcut: dict, client: WebClient) -> None:
     """Handle 'Save as Doc' message shortcut."""
-    ack()
+    await ack()
 
     try:
         channel_id = shortcut["channel"]["id"]
@@ -109,7 +97,7 @@ def handle_save_as_doc(ack: Any, shortcut: dict, client: WebClient) -> None:
         message_ts = message.get("ts", "")
         thread_ts = message.get("thread_ts", message_ts)
 
-        client.views_open(
+        await client.views_open(
             trigger_id=shortcut["trigger_id"],
             view=build_thread_to_doc_modal(channel_id, thread_ts),
         )
@@ -122,11 +110,11 @@ def handle_save_as_doc(ack: Any, shortcut: dict, client: WebClient) -> None:
 # =========================================================================
 
 
-def handle_create_doc_submit(
+async def handle_create_doc_submit(
     ack: Any, body: dict, client: WebClient, view: dict
 ) -> None:
     """Handle create document modal submission."""
-    ack()
+    await ack()
 
     user_id = body["user"]["id"]
     values = view["state"]["values"]
@@ -142,27 +130,25 @@ def handle_create_doc_submit(
         mode = values["mode_block"]["mode_select"]["selected_option"]["value"]
         description = values["description_block"]["description_input"]["value"]
 
-        _run_async(init_db())
-        creator = _get_document_creator(slack_client=client)
+        await init_db()
+        creator = await _get_document_creator(slack_client=client)
 
         if mode == "ai":
             # AI-assisted creation
             if not creator.drafter:
-                client.chat_postMessage(
+                await client.chat_postMessage(
                     channel=user_id,
                     text="LLM not configured. Please try again with manual mode.",
                 )
                 return
 
-            doc, draft_result = _run_async(
-                creator.create_from_description(
-                    title=title,
-                    description=description,
-                    area=area,
-                    doc_type=doc_type,
-                    created_by=user_id,
-                    classification=classification,
-                )
+            doc, draft_result = await creator.create_from_description(
+                title=title,
+                description=description,
+                area=area,
+                doc_type=doc_type,
+                created_by=user_id,
+                classification=classification,
             )
 
             # Send confirmation with draft info
@@ -189,20 +175,18 @@ def handle_create_doc_submit(
                 },
             )
 
-            client.chat_postMessage(
+            await client.chat_postMessage(
                 channel=user_id, blocks=blocks, text=f"Document '{title}' created!"
             )
         else:
             # Manual creation
-            doc = _run_async(
-                creator.create_manual(
-                    title=title,
-                    content=description,
-                    area=area,
-                    doc_type=doc_type,
-                    created_by=user_id,
-                    classification=classification,
-                )
+            doc = await creator.create_manual(
+                title=title,
+                content=description,
+                area=area,
+                doc_type=doc_type,
+                created_by=user_id,
+                classification=classification,
             )
 
             blocks = build_doc_created_message(
@@ -214,23 +198,23 @@ def handle_create_doc_submit(
                 requires_approval=requires_approval(doc_type),
             )
 
-            client.chat_postMessage(
+            await client.chat_postMessage(
                 channel=user_id, blocks=blocks, text=f"Document '{title}' created!"
             )
 
     except Exception as e:
         logger.error(f"Failed to create document: {e}")
-        client.chat_postMessage(
+        await client.chat_postMessage(
             channel=user_id,
             text=f"Failed to create document: {e}",
         )
 
 
-def handle_thread_to_doc_submit(
+async def handle_thread_to_doc_submit(
     ack: Any, body: dict, client: WebClient, view: dict
 ) -> None:
     """Handle thread-to-doc modal submission."""
-    ack()
+    await ack()
 
     user_id = body["user"]["id"]
     values = view["state"]["values"]
@@ -241,7 +225,7 @@ def handle_thread_to_doc_submit(
         thread_ts = metadata.get("thread_ts")
 
         if not channel_id or not thread_ts:
-            client.chat_postMessage(
+            await client.chat_postMessage(
                 channel=user_id,
                 text="Error: Could not find thread information.",
             )
@@ -255,11 +239,11 @@ def handle_thread_to_doc_submit(
         ]["value"]
 
         # Fetch thread messages
-        result = client.conversations_replies(channel=channel_id, ts=thread_ts)
+        result = await client.conversations_replies(channel=channel_id, ts=thread_ts)
         messages = result.get("messages", [])
 
         if not messages:
-            client.chat_postMessage(
+            await client.chat_postMessage(
                 channel=user_id,
                 text="Error: Could not fetch thread messages.",
             )
@@ -271,26 +255,24 @@ def handle_thread_to_doc_submit(
             for m in messages
         ]
 
-        _run_async(init_db())
-        creator = _get_document_creator(slack_client=client)
+        await init_db()
+        creator = await _get_document_creator(slack_client=client)
 
         if not creator.drafter:
-            client.chat_postMessage(
+            await client.chat_postMessage(
                 channel=user_id,
                 text="LLM not configured. Thread summarization requires AI.",
             )
             return
 
-        doc, draft_result = _run_async(
-            creator.create_from_thread(
-                thread_messages=thread_messages,
-                channel_id=channel_id,
-                thread_ts=thread_ts,
-                area=area,
-                created_by=user_id,
-                doc_type=doc_type,
-                classification=classification,
-            )
+        doc, draft_result = await creator.create_from_thread(
+            thread_messages=thread_messages,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            area=area,
+            created_by=user_id,
+            doc_type=doc_type,
+            classification=classification,
         )
 
         blocks = build_doc_created_message(
@@ -302,7 +284,7 @@ def handle_thread_to_doc_submit(
             requires_approval=requires_approval(doc_type),
         )
 
-        client.chat_postMessage(
+        await client.chat_postMessage(
             channel=user_id,
             blocks=blocks,
             text=f"Document '{doc.title}' created from thread!",
@@ -310,17 +292,17 @@ def handle_thread_to_doc_submit(
 
     except Exception as e:
         logger.error(f"Failed to create document from thread: {e}")
-        client.chat_postMessage(
+        await client.chat_postMessage(
             channel=user_id,
             text=f"Failed to create document from thread: {e}",
         )
 
 
-def handle_rejection_submit(
+async def handle_rejection_submit(
     ack: Any, body: dict, client: WebClient, view: dict
 ) -> None:
     """Handle rejection reason modal submission."""
-    ack()
+    await ack()
 
     user_id = body["user"]["id"]
     values = view["state"]["values"]
@@ -335,8 +317,8 @@ def handle_rejection_submit(
         if not doc_id:
             return
 
-        _run_async(init_db())
-        creator = _get_document_creator(slack_client=client)
+        await init_db()
+        creator = await _get_document_creator(slack_client=client)
 
         decision = ApprovalDecision(
             doc_id=doc_id,
@@ -345,16 +327,16 @@ def handle_rejection_submit(
             rejection_reason=rejection_reason,
         )
 
-        _run_async(creator.approval.process_decision(decision))
+        await creator.approval.process_decision(decision)
 
-        client.chat_postMessage(
+        await client.chat_postMessage(
             channel=user_id,
             text="Document rejected. The author has been notified.",
         )
 
     except Exception as e:
         logger.error(f"Failed to process rejection: {e}")
-        client.chat_postMessage(
+        await client.chat_postMessage(
             channel=user_id,
             text=f"Failed to process rejection: {e}",
         )
@@ -365,17 +347,17 @@ def handle_rejection_submit(
 # =========================================================================
 
 
-def handle_approve_doc(ack: Any, body: dict, client: WebClient) -> None:
+async def handle_approve_doc(ack: Any, body: dict, client: WebClient) -> None:
     """Handle document approval button click."""
-    ack()
+    await ack()
 
     user_id = body["user"]["id"]
     action_id = body["actions"][0]["action_id"]
     doc_id = action_id.replace("approve_doc_", "")
 
     try:
-        _run_async(init_db())
-        creator = _get_document_creator(slack_client=client)
+        await init_db()
+        creator = await _get_document_creator(slack_client=client)
 
         decision = ApprovalDecision(
             doc_id=doc_id,
@@ -383,10 +365,10 @@ def handle_approve_doc(ack: Any, body: dict, client: WebClient) -> None:
             approver_id=user_id,
         )
 
-        status = _run_async(creator.approval.process_decision(decision))
+        status = await creator.approval.process_decision(decision)
 
         # Update the message to show approval
-        client.chat_postEphemeral(
+        await client.chat_postEphemeral(
             channel=body["channel"]["id"],
             user=user_id,
             text=f"Document approved! Status: {status.status}",
@@ -394,28 +376,28 @@ def handle_approve_doc(ack: Any, body: dict, client: WebClient) -> None:
 
     except Exception as e:
         logger.error(f"Failed to approve document: {e}")
-        client.chat_postEphemeral(
+        await client.chat_postEphemeral(
             channel=body["channel"]["id"],
             user=user_id,
             text=f"Failed to approve: {e}",
         )
 
 
-def handle_reject_doc(ack: Any, body: dict, client: WebClient) -> None:
+async def handle_reject_doc(ack: Any, body: dict, client: WebClient) -> None:
     """Handle document rejection button click - opens reason modal."""
-    ack()
+    await ack()
 
     action_id = body["actions"][0]["action_id"]
     doc_id = action_id.replace("reject_doc_", "")
 
     try:
         # Get document title
-        _run_async(init_db())
-        creator = _get_document_creator()
+        await init_db()
+        creator = await _get_document_creator()
         doc = creator.get_document(doc_id)
         title = doc.title if doc else "Unknown Document"
 
-        client.views_open(
+        await client.views_open(
             trigger_id=body["trigger_id"],
             view=build_rejection_reason_modal(doc_id, title),
         )
@@ -423,21 +405,21 @@ def handle_reject_doc(ack: Any, body: dict, client: WebClient) -> None:
         logger.error(f"Failed to open rejection modal: {e}")
 
 
-def handle_submit_for_approval(ack: Any, body: dict, client: WebClient) -> None:
+async def handle_submit_for_approval(ack: Any, body: dict, client: WebClient) -> None:
     """Handle submit for approval button click."""
-    ack()
+    await ack()
 
     user_id = body["user"]["id"]
     action_id = body["actions"][0]["action_id"]
     doc_id = action_id.replace("submit_doc_", "")
 
     try:
-        _run_async(init_db())
-        creator = _get_document_creator(slack_client=client)
+        await init_db()
+        creator = await _get_document_creator(slack_client=client)
 
-        doc = _run_async(creator.submit_for_approval(doc_id, user_id))
+        doc = await creator.submit_for_approval(doc_id, user_id)
 
-        client.chat_postEphemeral(
+        await client.chat_postEphemeral(
             channel=body["channel"]["id"],
             user=user_id,
             text=f"Document submitted for approval! Status: {doc.status}",
@@ -445,29 +427,29 @@ def handle_submit_for_approval(ack: Any, body: dict, client: WebClient) -> None:
 
     except Exception as e:
         logger.error(f"Failed to submit for approval: {e}")
-        client.chat_postEphemeral(
+        await client.chat_postEphemeral(
             channel=body["channel"]["id"],
             user=user_id,
             text=f"Failed to submit: {e}",
         )
 
 
-def handle_view_doc(ack: Any, body: dict, client: WebClient) -> None:
+async def handle_view_doc(ack: Any, body: dict, client: WebClient) -> None:
     """Handle view document button click - opens preview modal."""
-    ack()
+    await ack()
 
     action_id = body["actions"][0]["action_id"]
     doc_id = action_id.replace("view_doc_", "")
 
     try:
-        _run_async(init_db())
-        creator = _get_document_creator()
+        await init_db()
+        creator = await _get_document_creator()
         doc = creator.get_document(doc_id)
 
         if not doc:
             return
 
-        client.views_open(
+        await client.views_open(
             trigger_id=body["trigger_id"],
             view=build_doc_preview_modal(
                 doc_id=doc.doc_id,
@@ -483,16 +465,16 @@ def handle_view_doc(ack: Any, body: dict, client: WebClient) -> None:
         logger.error(f"Failed to show document preview: {e}")
 
 
-def handle_edit_doc(ack: Any, body: dict, client: WebClient) -> None:
+async def handle_edit_doc(ack: Any, body: dict, client: WebClient) -> None:
     """Handle edit document button click."""
-    ack()
+    await ack()
 
     user_id = body["user"]["id"]
     action_id = body["actions"][0]["action_id"]
     doc_id = action_id.replace("edit_doc_", "")
 
     # For now, direct users to the web UI for editing
-    client.chat_postEphemeral(
+    await client.chat_postEphemeral(
         channel=body["channel"]["id"],
         user=user_id,
         text=f"To edit this document, please use the web UI:\n"
@@ -501,11 +483,11 @@ def handle_edit_doc(ack: Any, body: dict, client: WebClient) -> None:
     )
 
 
-def register_doc_handlers(app: App) -> None:
+def register_doc_handlers(app) -> None:
     """Register all document creation handlers with the Slack app.
 
     Args:
-        app: Slack Bolt App instance
+        app: Slack Bolt App or AsyncApp instance
     """
     # Slash Commands
     from knowledge_base.config import settings

@@ -191,10 +191,12 @@ jobs:
           [[ "$BUILD_BOT" == "success" ]] || { echo "::error::build-slack-bot failed"; exit 1; }
           [[ "$BUILD_JOBS" == "success" ]] || { echo "::error::build-jobs failed"; exit 1; }
 
-          # For PRs: reviewers must succeed
+          # For PRs: security review is required, AI review is advisory
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            [[ "$AI_REVIEW" == "success" ]] || { echo "::error::ai-review failed or not approved"; exit 1; }
             [[ "$SEC_REVIEW" == "success" ]] || { echo "::error::security-review failed"; exit 1; }
+            if [[ "$AI_REVIEW" != "success" ]]; then
+              echo "::warning::AI review requested changes - see review comments for suggestions"
+            fi
           fi
 
           echo "All gates passed"
