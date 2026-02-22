@@ -136,7 +136,30 @@ jobs:
           docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/slack-bot:$TAG
 
   # ============================================
-  # Stage 2b: Build jobs Docker Image
+  # Stage 2b: Build MCP Server Docker Image
+  # ============================================
+  build-mcp:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Configure Docker
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+      - name: Build and push mcp-server image
+        env:
+          TAG: ${{ github.sha }}
+        run: |
+          docker build -f deploy/docker/Dockerfile.mcp -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/mcp-server:$TAG .
+          docker tag ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/mcp-server:$TAG ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/mcp-server:latest
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/mcp-server:$TAG
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/mcp-server:latest
+
+  # ============================================
+  # Stage 2c: Build jobs Docker Image
   # ============================================
   build-jobs:
     needs: unit-tests
@@ -166,11 +189,11 @@ jobs:
           docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/jobs:$TAG
 
   # ============================================
-  # Stage 2c: Build Gate (for branch protection)
+  # Stage 2d: Build Gate (for branch protection)
   # ============================================
   build:
     # Gate job: requires builds + reviewer approvals (on PRs) before staging deploy
-    needs: [build-slack-bot, build-jobs, ai-review, security-review]
+    needs: [build-slack-bot, build-mcp, build-jobs, ai-review, security-review]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -178,17 +201,20 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BUILD_BOT: ${{ needs.build-slack-bot.result }}
+          BUILD_MCP: ${{ needs.build-mcp.result }}
           BUILD_JOBS: ${{ needs.build-jobs.result }}
           AI_REVIEW: ${{ needs.ai-review.result }}
           SEC_REVIEW: ${{ needs.security-review.result }}
         run: |
           echo "Build Slack Bot: $BUILD_BOT"
+          echo "Build MCP Server: $BUILD_MCP"
           echo "Build Jobs: $BUILD_JOBS"
           echo "AI Review: $AI_REVIEW"
           echo "Security Review: $SEC_REVIEW"
 
           # Build jobs must succeed
           [[ "$BUILD_BOT" == "success" ]] || { echo "::error::build-slack-bot failed"; exit 1; }
+          [[ "$BUILD_MCP" == "success" ]] || { echo "::error::build-mcp failed"; exit 1; }
           [[ "$BUILD_JOBS" == "success" ]] || { echo "::error::build-jobs failed"; exit 1; }
 
           # For PRs: security review is required, AI review is advisory
@@ -232,11 +258,33 @@ jobs:
             ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/jobs:staging
 
   # ============================================
+  # Stage 3b: Deploy MCP Server to Staging
+  # ============================================
+  deploy-mcp-staging:
+    needs: build
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Deploy mcp-server to staging
+        env:
+          TAG: ${{ github.sha }}
+        run: |
+          gcloud run services update kb-mcp-staging \
+            --image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/mcp-server:$TAG \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }}
+
+  # ============================================
   # Stage 4: E2E Tests against Staging (ALL tests)
   # ============================================
   e2e-tests-staging:
-    needs: deploy-staging
-    if: always() && needs.deploy-staging.result == 'success'
+    needs: [deploy-staging, deploy-mcp-staging]
+    if: always() && needs.deploy-staging.result == 'success' && needs.deploy-mcp-staging.result == 'success'
     runs-on: ubuntu-latest
     env:
       # Slack configuration (Pattern: {SERVICE}_{ENV}_*)
@@ -344,3 +392,25 @@ jobs:
           gcloud artifacts docker tags add \
             ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/jobs:$TAG \
             ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/jobs:latest
+
+  # ============================================
+  # Stage 5b: Deploy MCP Server to Production (main only)
+  # ============================================
+  deploy-mcp-production:
+    needs: e2e-tests-staging
+    if: always() && needs.e2e-tests-staging.result == 'success' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Deploy mcp-server to production
+        env:
+          TAG: ${{ github.sha }}
+        run: |
+          gcloud run services update kb-mcp \
+            --image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/mcp-server:$TAG \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }}
