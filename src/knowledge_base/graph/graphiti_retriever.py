@@ -27,6 +27,30 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _is_connection_error(exc: Exception) -> bool:
+    """Check if an exception indicates a Neo4j connection failure.
+
+    The Neo4j driver's liveness check catches OSError, ServiceUnavailable,
+    and SessionExpired — but RuntimeError from asyncio's transport layer
+    escapes these catch clauses. This helper detects all connection-related
+    errors so the search path can retry with a fresh connection.
+    """
+    # asyncio transport closed (the specific error seen in production)
+    if isinstance(exc, RuntimeError) and "TCPTransport" in str(exc):
+        return True
+    # Standard Neo4j connection errors
+    try:
+        from neo4j.exceptions import ServiceUnavailable, SessionExpired
+        if isinstance(exc, (ServiceUnavailable, SessionExpired)):
+            return True
+    except ImportError:
+        pass
+    # OS-level connection errors (broken pipe, connection reset)
+    if isinstance(exc, OSError):
+        return True
+    return False
+
+
 @dataclass
 class SearchResult:
     """A single search result (compatible with VectorRetriever.SearchResult)."""
@@ -181,6 +205,8 @@ class GraphitiRetriever:
     async def _lookup_episodes(self, episode_uuids: list[str]) -> dict[str, dict]:
         """Look up episode content and metadata from Neo4j by UUID.
 
+        Includes retry-with-reset on Neo4j connection errors.
+
         Args:
             episode_uuids: List of episode UUIDs to look up
 
@@ -190,37 +216,48 @@ class GraphitiRetriever:
         if not episode_uuids:
             return {}
 
-        try:
-            graphiti = await self._get_graphiti()
-            driver = graphiti.driver
+        max_retries = settings.NEO4J_SEARCH_MAX_RETRIES
+        for attempt in range(1 + max_retries):
+            try:
+                graphiti = await self._get_graphiti()
+                driver = graphiti.driver
 
-            records, _, _ = await driver.execute_query(
-                """
-                MATCH (ep:Episodic)
-                WHERE ep.uuid IN $uuids
-                RETURN ep.uuid as uuid, ep.name as name,
-                       ep.content as content,
-                       ep.source_description as source_desc
-                """,
-                uuids=episode_uuids,
-            )
+                records, _, _ = await driver.execute_query(
+                    """
+                    MATCH (ep:Episodic)
+                    WHERE ep.uuid IN $uuids
+                    RETURN ep.uuid as uuid, ep.name as name,
+                           ep.content as content,
+                           ep.source_description as source_desc
+                    """,
+                    uuids=episode_uuids,
+                )
 
-            result = {}
-            for record in records:
-                uuid = record["uuid"]
-                source_desc = record.get("source_desc")
-                metadata = self._parse_metadata(source_desc)
-                result[uuid] = {
-                    "name": record.get("name", ""),
-                    "content": record.get("content", "") or "",
-                    "metadata": metadata,
-                }
+                result = {}
+                for record in records:
+                    uuid = record["uuid"]
+                    source_desc = record.get("source_desc")
+                    metadata = self._parse_metadata(source_desc)
+                    result[uuid] = {
+                        "name": record.get("name", ""),
+                        "content": record.get("content", "") or "",
+                        "metadata": metadata,
+                    }
 
-            return result
+                return result
 
-        except Exception as e:
-            logger.warning(f"Failed to look up episodes: {e}")
-            return {}
+            except Exception as e:
+                if attempt < max_retries and _is_connection_error(e):
+                    logger.warning(
+                        f"Neo4j connection error in episode lookup (attempt {attempt + 1}), "
+                        f"resetting client and retrying: {e}"
+                    )
+                    await self.client.reset_and_reconnect()
+                    self._graphiti = None
+                    continue
+                logger.warning(f"Failed to look up episodes: {e}")
+                return {}
+        return {}
 
     async def search_chunks(
         self,
@@ -248,82 +285,93 @@ class GraphitiRetriever:
             logger.warning("Graphiti retrieval DISABLED — returning empty results")
             return []
 
-        try:
-            graphiti = await self._get_graphiti()
+        max_retries = settings.NEO4J_SEARCH_MAX_RETRIES
+        for attempt in range(1 + max_retries):
+            try:
+                graphiti = await self._get_graphiti()
 
-            # Over-fetch to account for filtering
-            fetch_count = num_results * 3 if (space_key or doc_type or min_quality_score) else num_results
+                # Over-fetch to account for filtering
+                fetch_count = num_results * 3 if (space_key or doc_type or min_quality_score) else num_results
 
-            results = await graphiti.search(
-                query=query,
-                num_results=fetch_count,
-                group_ids=[self.group_id],
-            )
-
-            logger.info(f"Graphiti raw search returned {len(results)} results for: {query[:50]}...")
-
-            # Collect all episode UUIDs from edge results for batch lookup
-            all_episode_uuids = []
-            for result in results:
-                episodes = getattr(result, 'episodes', None) or []
-                all_episode_uuids.extend(episodes)
-
-            # Batch lookup episode content and metadata
-            episode_data = {}
-            if all_episode_uuids:
-                unique_uuids = list(set(all_episode_uuids))
-                episode_data = await self._lookup_episodes(unique_uuids)
-                logger.info(
-                    f"Looked up {len(episode_data)}/{len(unique_uuids)} episodes "
-                    f"for {len(results)} search results"
+                results = await graphiti.search(
+                    query=query,
+                    num_results=fetch_count,
+                    group_ids=[self.group_id],
                 )
 
-            # Convert and filter results
-            search_results = []
-            seen_episodes = set()  # Deduplicate by episode
-            for result in results:
-                # Get episode data for this result (use first episode)
-                episodes = getattr(result, 'episodes', None) or []
-                ep_data = None
-                for ep_uuid in episodes:
-                    if ep_uuid in episode_data and ep_uuid not in seen_episodes:
-                        ep_data = episode_data[ep_uuid]
-                        seen_episodes.add(ep_uuid)
+                logger.info(f"Graphiti raw search returned {len(results)} results for: {query[:50]}...")
+
+                # Collect all episode UUIDs from edge results for batch lookup
+                all_episode_uuids = []
+                for result in results:
+                    episodes = getattr(result, 'episodes', None) or []
+                    all_episode_uuids.extend(episodes)
+
+                # Batch lookup episode content and metadata
+                episode_data = {}
+                if all_episode_uuids:
+                    unique_uuids = list(set(all_episode_uuids))
+                    episode_data = await self._lookup_episodes(unique_uuids)
+                    logger.info(
+                        f"Looked up {len(episode_data)}/{len(unique_uuids)} episodes "
+                        f"for {len(results)} search results"
+                    )
+
+                # Convert and filter results
+                search_results = []
+                seen_episodes = set()  # Deduplicate by episode
+                for result in results:
+                    # Get episode data for this result (use first episode)
+                    episodes = getattr(result, 'episodes', None) or []
+                    ep_data = None
+                    for ep_uuid in episodes:
+                        if ep_uuid in episode_data and ep_uuid not in seen_episodes:
+                            ep_data = episode_data[ep_uuid]
+                            seen_episodes.add(ep_uuid)
+                            break
+
+                    sr = self._to_search_result(result, episode_data=ep_data)
+
+                    # Skip deleted chunks
+                    if sr.metadata.get('deleted'):
+                        continue
+
+                    # Apply filters
+                    if space_key and sr.metadata.get('space_key') != space_key:
+                        continue
+                    if doc_type and sr.metadata.get('doc_type') != doc_type:
+                        continue
+                    if min_quality_score and sr.quality_score < min_quality_score:
+                        continue
+
+                    search_results.append(sr)
+
+                    if len(search_results) >= num_results:
                         break
 
-                sr = self._to_search_result(result, episode_data=ep_data)
+                if len(results) > 0 and len(search_results) == 0:
+                    logger.warning(
+                        f"Graphiti returned {len(results)} raw results but ALL were filtered out "
+                        f"(space_key={space_key}, doc_type={doc_type}, min_quality={min_quality_score})"
+                    )
+                logger.info(f"Graphiti search_chunks returning {len(search_results)}/{len(results)} results for: {query[:50]}...")
+                return search_results
 
-                # Skip deleted chunks
-                if sr.metadata.get('deleted'):
+            except Exception as e:
+                if attempt < max_retries and _is_connection_error(e):
+                    logger.warning(
+                        f"Neo4j connection error on search attempt {attempt + 1}, "
+                        f"resetting client and retrying: {e}"
+                    )
+                    await self.client.reset_and_reconnect()
+                    self._graphiti = None
                     continue
-
-                # Apply filters
-                if space_key and sr.metadata.get('space_key') != space_key:
-                    continue
-                if doc_type and sr.metadata.get('doc_type') != doc_type:
-                    continue
-                if min_quality_score and sr.quality_score < min_quality_score:
-                    continue
-
-                search_results.append(sr)
-
-                if len(search_results) >= num_results:
-                    break
-
-            if len(results) > 0 and len(search_results) == 0:
-                logger.warning(
-                    f"Graphiti returned {len(results)} raw results but ALL were filtered out "
-                    f"(space_key={space_key}, doc_type={doc_type}, min_quality={min_quality_score})"
-                )
-            logger.info(f"Graphiti search_chunks returning {len(search_results)}/{len(results)} results for: {query[:50]}...")
-            return search_results
-
-        except GraphitiClientError as e:
-            logger.error(f"Graphiti search FAILED: {e}", exc_info=True)
-            return []
-        except Exception as e:
-            logger.error(f"Unexpected error in Graphiti search: {e}", exc_info=True)
-            return []
+                if isinstance(e, GraphitiClientError):
+                    logger.error(f"Graphiti search FAILED: {e}", exc_info=True)
+                else:
+                    logger.error(f"Unexpected error in Graphiti search: {e}", exc_info=True)
+                return []
+        return []
 
     async def search_with_quality_boost(
         self,
