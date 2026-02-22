@@ -399,6 +399,21 @@ class GraphitiClient:
 
         return SimpleEmbeddingCrossEncoder()
 
+    async def reset_and_reconnect(self) -> None:
+        """Reset the singleton and close the stale connection.
+
+        Call this when a connection error is detected to force
+        a fresh connection on the next get_client() call.
+        """
+        logger.warning("Resetting Graphiti client due to connection error")
+        try:
+            await self.close()
+        except Exception as e:
+            logger.warning(f"Error during client close on reset: {e}")
+            # Force reset even if close fails
+            GraphitiClient._instance = None
+            GraphitiClient._initialized = False
+
     async def close(self) -> None:
         """Close the Graphiti client connection."""
         if GraphitiClient._instance is not None:
