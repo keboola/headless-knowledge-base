@@ -226,7 +226,7 @@ async def oauth_authorization_server_metadata(request: Request):
 
     Tells MCP clients (Claude.AI) where our authorization endpoints are.
     """
-    base_url = str(request.base_url).rstrip("/")
+    base_url = _get_base_url(request)
 
     return {
         "issuer": base_url,
@@ -336,6 +336,13 @@ async def oauth_register(request: Request):
             "token_endpoint_auth_method": "none",
         },
     )
+
+
+def _get_base_url(request: Request) -> str:
+    """Get the external base URL, respecting X-Forwarded-Proto from reverse proxies."""
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("host", request.url.netloc)
+    return f"{scheme}://{host}"
 
 
 def _map_to_google_scopes(requested_scope: str) -> str:
