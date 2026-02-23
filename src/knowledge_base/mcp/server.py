@@ -1,6 +1,7 @@
 """MCP HTTP Server with OAuth 2.1 for Knowledge Base.
 
 Provides Streamable HTTP transport for MCP protocol with Google OAuth authentication.
+Acts as both OAuth Authorization Server (proxying to Google) and Resource Server.
 Compatible with Claude.AI remote MCP server integration.
 """
 
@@ -8,10 +9,12 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, Optional
+from urllib.parse import urlencode
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from knowledge_base.mcp.config import (
@@ -98,7 +101,16 @@ app.add_middleware(
 @app.middleware("http")
 async def oauth_middleware(request: Request, call_next):
     """OAuth authentication middleware."""
-    skip_paths = ["/health", "/.well-known/oauth-protected-resource", "/callback", "/"]
+    skip_paths = [
+        "/health",
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-authorization-server",
+        "/authorize",
+        "/token",
+        "/register",
+        "/callback",
+        "/",
+    ]
     if request.url.path in skip_paths:
         return await call_next(request)
 
@@ -167,7 +179,7 @@ async def oauth_protected_resource_metadata():
 
 @app.get("/callback")
 async def oauth_callback(code: str = None, state: str = None, error: str = None):
-    """OAuth authorization code callback."""
+    """OAuth authorization code callback (for browser popup flows)."""
     if error:
         return HTMLResponse(
             content=f"<html><body><h1>OAuth Error</h1><p>{error}</p></body></html>",
@@ -197,6 +209,150 @@ async def oauth_callback(code: str = None, state: str = None, error: str = None)
         content="<html><body><h1>OAuth Callback</h1></body></html>",
         status_code=200,
     )
+
+
+# =============================================================================
+# OAuth Authorization Server Endpoints (proxy to Google)
+# =============================================================================
+# The MCP spec requires the MCP server to act as an OAuth Authorization Server.
+# Claude.AI discovers these endpoints via /.well-known/oauth-authorization-server
+# or falls back to default paths (/authorize, /token, /register).
+# We proxy the OAuth flow to Google as the upstream identity provider.
+
+
+@app.get("/.well-known/oauth-authorization-server")
+async def oauth_authorization_server_metadata(request: Request):
+    """RFC 8414 OAuth Authorization Server Metadata.
+
+    Tells MCP clients (Claude.AI) where our authorization endpoints are.
+    """
+    base_url = str(request.base_url).rstrip("/")
+
+    return {
+        "issuer": base_url,
+        "authorization_endpoint": f"{base_url}/authorize",
+        "token_endpoint": f"{base_url}/token",
+        "registration_endpoint": f"{base_url}/register",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
+        "scopes_supported": list(OAUTH_SCOPES.keys()),
+    }
+
+
+@app.get("/authorize")
+async def oauth_authorize(request: Request):
+    """OAuth authorization endpoint - redirects to Google OAuth.
+
+    Claude.AI sends the user here. We redirect to Google's authorize endpoint,
+    mapping scopes and preserving PKCE parameters. Google redirects back to
+    Claude.AI's callback directly.
+    """
+    params = dict(request.query_params)
+
+    # Map any non-Google scopes to Google-compatible scopes
+    requested_scope = params.get("scope", "")
+    google_scopes = _map_to_google_scopes(requested_scope)
+    params["scope"] = google_scopes
+
+    # Ensure client_id is set (use ours if not provided)
+    if "client_id" not in params or not params["client_id"]:
+        params["client_id"] = mcp_settings.MCP_OAUTH_CLIENT_ID
+
+    google_authorize_url = (
+        f"{mcp_settings.MCP_OAUTH_AUTHORIZATION_ENDPOINT}?{urlencode(params)}"
+    )
+    logger.info(
+        f"OAuth authorize: redirecting to Google (scope={google_scopes}, "
+        f"redirect_uri={params.get('redirect_uri', 'N/A')})"
+    )
+    return RedirectResponse(url=google_authorize_url, status_code=302)
+
+
+@app.post("/token")
+async def oauth_token(request: Request):
+    """OAuth token endpoint - proxies token exchange to Google.
+
+    Claude.AI sends the authorization code here. We forward it to Google's
+    token endpoint, adding our client_secret for the exchange.
+    """
+    # Parse form data (OAuth token requests use application/x-www-form-urlencoded)
+    form_data = await request.form()
+    token_params = dict(form_data)
+
+    # Add our client credentials for the token exchange
+    token_params["client_id"] = mcp_settings.MCP_OAUTH_CLIENT_ID
+    token_params["client_secret"] = mcp_settings.MCP_OAUTH_CLIENT_SECRET
+
+    logger.info(
+        f"OAuth token exchange: grant_type={token_params.get('grant_type', 'N/A')}"
+    )
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            mcp_settings.MCP_OAUTH_TOKEN_ENDPOINT,
+            data=token_params,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+    if response.status_code != 200:
+        logger.warning(
+            f"Google token exchange failed: {response.status_code} {response.text}"
+        )
+
+    # Return Google's response directly to Claude.AI
+    return JSONResponse(
+        status_code=response.status_code,
+        content=response.json(),
+    )
+
+
+@app.post("/register")
+async def oauth_register(request: Request):
+    """OAuth Dynamic Client Registration (RFC 7591).
+
+    Returns our Google OAuth client_id so Claude.AI can use it for the
+    authorization flow. This is a simplified registration that always
+    returns the same client credentials.
+    """
+    body = await request.json()
+    redirect_uris = body.get("redirect_uris", [])
+    client_name = body.get("client_name", "MCP Client")
+
+    logger.info(
+        f"OAuth client registration: name={client_name}, "
+        f"redirect_uris={redirect_uris}"
+    )
+
+    return JSONResponse(
+        status_code=201,
+        content={
+            "client_id": mcp_settings.MCP_OAUTH_CLIENT_ID,
+            "client_name": client_name,
+            "redirect_uris": redirect_uris,
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none",
+        },
+    )
+
+
+def _map_to_google_scopes(requested_scope: str) -> str:
+    """Map MCP/custom scopes to Google-compatible OAuth scopes.
+
+    Claude.AI may send scopes like 'claudeai' or our custom 'kb.read kb.write'.
+    Google only understands standard OpenID scopes.
+    """
+    google_scopes = {"openid", "email", "profile"}
+
+    if requested_scope:
+        for scope in requested_scope.split():
+            # Keep standard scopes, discard custom ones
+            if scope in ("openid", "email", "profile"):
+                google_scopes.add(scope)
+
+    return " ".join(sorted(google_scopes))
 
 
 # =============================================================================

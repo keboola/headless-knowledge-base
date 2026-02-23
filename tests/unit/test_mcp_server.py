@@ -11,6 +11,7 @@ import pytest
 # Set required env vars BEFORE importing server module, because server.py
 # instantiates MCPSettings() at module level which requires these.
 os.environ.setdefault("MCP_OAUTH_CLIENT_ID", "test-client-id")
+os.environ.setdefault("MCP_OAUTH_CLIENT_SECRET", "test-client-secret")
 os.environ.setdefault("MCP_OAUTH_RESOURCE_IDENTIFIER", "https://test-kb-mcp.example.com")
 os.environ.setdefault("MCP_DEV_MODE", "true")
 
@@ -77,6 +78,175 @@ class TestOAuthMetadataEndpoint:
         body = resp.json()
         assert "resource" in body
         assert "authorization_servers" in body
+
+
+# ===========================================================================
+# OAuth Authorization Server Metadata
+# ===========================================================================
+
+
+class TestOAuthAuthorizationServerMetadata:
+    """Test GET /.well-known/oauth-authorization-server."""
+
+    async def test_returns_metadata(self, client: AsyncClient):
+        resp = await client.get("/.well-known/oauth-authorization-server")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "issuer" in body
+        assert "authorization_endpoint" in body
+        assert "token_endpoint" in body
+        assert "registration_endpoint" in body
+        assert body["response_types_supported"] == ["code"]
+        assert "S256" in body["code_challenge_methods_supported"]
+
+    async def test_endpoints_use_base_url(self, client: AsyncClient):
+        resp = await client.get("/.well-known/oauth-authorization-server")
+        body = resp.json()
+        assert body["authorization_endpoint"].endswith("/authorize")
+        assert body["token_endpoint"].endswith("/token")
+        assert body["registration_endpoint"].endswith("/register")
+
+
+# ===========================================================================
+# OAuth Authorize Endpoint
+# ===========================================================================
+
+
+class TestOAuthAuthorize:
+    """Test GET /authorize - redirects to Google."""
+
+    async def test_redirects_to_google(self, client: AsyncClient):
+        resp = await client.get(
+            "/authorize",
+            params={
+                "response_type": "code",
+                "client_id": "test-client-id",
+                "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
+                "scope": "claudeai",
+                "state": "test-state",
+                "code_challenge": "abc123",
+                "code_challenge_method": "S256",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        location = resp.headers["location"]
+        assert "accounts.google.com" in location
+        # Should map claudeai scope to Google scopes
+        assert "openid" in location
+        assert "email" in location
+        assert "profile" in location
+        # Should NOT contain the custom scope
+        assert "claudeai" not in location
+        # Should preserve PKCE params
+        assert "code_challenge=abc123" in location
+        assert "state=test-state" in location
+
+    async def test_no_auth_required(self, client: AsyncClient):
+        """The /authorize endpoint must be accessible without Bearer token."""
+        resp = await client.get(
+            "/authorize",
+            params={"response_type": "code", "scope": "openid"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+
+
+# ===========================================================================
+# OAuth Token Endpoint
+# ===========================================================================
+
+
+class TestOAuthToken:
+    """Test POST /token - proxies to Google."""
+
+    async def test_proxies_to_google(self, client: AsyncClient):
+        """Token endpoint should proxy to Google and return the response."""
+        mock_google_response = MagicMock()
+        mock_google_response.status_code = 200
+        mock_google_response.json.return_value = {
+            "access_token": "ya29.mock-token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "id_token": "eyJ...",
+        }
+
+        with patch("knowledge_base.mcp.server.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_google_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            resp = await client.post(
+                "/token",
+                data={
+                    "grant_type": "authorization_code",
+                    "code": "test-auth-code",
+                    "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
+                    "code_verifier": "test-verifier",
+                },
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["access_token"] == "ya29.mock-token"
+        assert body["token_type"] == "Bearer"
+
+    async def test_no_auth_required(self, client: AsyncClient):
+        """The /token endpoint must be accessible without Bearer token."""
+        mock_google_response = MagicMock()
+        mock_google_response.status_code = 400
+        mock_google_response.json.return_value = {"error": "invalid_grant"}
+
+        with patch("knowledge_base.mcp.server.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_google_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            resp = await client.post(
+                "/token",
+                data={"grant_type": "authorization_code", "code": "bad-code"},
+            )
+
+        # Should NOT get 401 (auth not required), should get Google's error
+        assert resp.status_code == 400
+
+
+# ===========================================================================
+# OAuth Dynamic Client Registration
+# ===========================================================================
+
+
+class TestOAuthRegister:
+    """Test POST /register - returns our client_id."""
+
+    async def test_returns_client_id(self, client: AsyncClient):
+        resp = await client.post(
+            "/register",
+            json={
+                "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+                "client_name": "Claude.AI",
+                "grant_types": ["authorization_code"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "none",
+            },
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["client_id"] == "test-client-id"
+        assert body["client_name"] == "Claude.AI"
+        assert "authorization_code" in body["grant_types"]
+
+    async def test_no_auth_required(self, client: AsyncClient):
+        """The /register endpoint must be accessible without Bearer token."""
+        resp = await client.post(
+            "/register",
+            json={"redirect_uris": ["https://example.com/callback"]},
+        )
+        assert resp.status_code == 201
 
 
 # ===========================================================================

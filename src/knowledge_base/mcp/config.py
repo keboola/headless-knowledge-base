@@ -19,7 +19,7 @@ class MCPSettings(BaseSettings):
 
     # OAuth 2.1 Configuration (Google OAuth)
     MCP_OAUTH_CLIENT_ID: str  # Required - fail fast if missing
-    MCP_OAUTH_CLIENT_SECRET: str = ""  # May not be needed for resource server validation
+    MCP_OAUTH_CLIENT_SECRET: str  # Required - needed for token exchange with Google
     MCP_OAUTH_AUTHORIZATION_SERVER: str = "https://accounts.google.com"
     MCP_OAUTH_AUTHORIZATION_ENDPOINT: str = (
         "https://accounts.google.com/o/oauth2/v2/auth"
