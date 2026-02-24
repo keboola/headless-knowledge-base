@@ -61,7 +61,8 @@ def extract_user_context(claims: dict[str, Any]) -> dict[str, Any]:
             logger.info("Google OAuth: granted default scopes for verified user")
 
             # Grant write access for @keboola.com domain (internal users)
-            if email.endswith("@keboola.com"):
+            # email_verified is already checked above, but enforce explicitly for write scope
+            if email.endswith("@keboola.com") and email_verified:
                 scopes.append("kb.write")
                 logger.info("Google OAuth: granted write scope for internal user")
 
@@ -223,10 +224,10 @@ class OAuthMiddleware(BaseHTTPMiddleware):
             request.state.user = extract_user_context(claims)
             return await call_next(request)
         except TokenValidationError as e:
-            logger.warning(f"Token validation failed: {type(e).__name__}")
+            logger.warning("Token validation failed")
             return self._unauthorized_response(str(e))
         except Exception as e:
-            logger.error(f"Unexpected error during token validation: {type(e).__name__}")
+            logger.error("Unexpected error during token validation")
             return self._unauthorized_response("Token validation failed")
 
 

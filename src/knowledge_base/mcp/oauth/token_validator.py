@@ -153,7 +153,7 @@ class TokenValidator:
 
                 # Google tokens should have email_verified
                 if not claims.get("email_verified", False):
-                    logger.warning("Google token email not verified")
+                    logger.debug("Google token email not verified")
 
                 return claims
             else:

@@ -1,5 +1,6 @@
 """MCP server configuration using pydantic-settings."""
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +21,17 @@ class MCPSettings(BaseSettings):
     # OAuth 2.1 Configuration (Google OAuth)
     MCP_OAUTH_CLIENT_ID: str  # Required - fail fast if missing
     MCP_OAUTH_CLIENT_SECRET: str  # Required - needed for token exchange with Google
+
+    @field_validator("MCP_OAUTH_CLIENT_ID", "MCP_OAUTH_CLIENT_SECRET")
+    @classmethod
+    def must_be_non_empty(cls, v: str, info) -> str:
+        """Ensure OAuth credentials are non-empty strings."""
+        if not v or not v.strip():
+            raise ValueError(
+                f"{info.field_name} must be a non-empty string"
+            )
+        return v
+
     MCP_OAUTH_AUTHORIZATION_SERVER: str = "https://accounts.google.com"
     MCP_OAUTH_AUTHORIZATION_ENDPOINT: str = (
         "https://accounts.google.com/o/oauth2/v2/auth"

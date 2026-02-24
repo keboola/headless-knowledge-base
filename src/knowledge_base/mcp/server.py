@@ -68,8 +68,8 @@ async def lifespan(app: FastAPI):
     )
 
     logger.info(f"MCP Server started on {mcp_settings.MCP_HOST}:{mcp_settings.MCP_PORT}")
-    logger.info(f"OAuth issuer: {mcp_settings.MCP_OAUTH_ISSUER}")
-    logger.info("OAuth audience configured")
+    logger.debug(f"OAuth issuer: {mcp_settings.MCP_OAUTH_ISSUER}")
+    logger.debug("OAuth audience configured")
     logger.info(f"Dev mode: {mcp_settings.MCP_DEV_MODE}")
 
     yield
@@ -86,7 +86,7 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://claude.ai", "https://www.claude.ai"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -130,7 +130,6 @@ async def oauth_middleware(request: Request, call_next):
         import os
 
         dev_email = os.getenv("TEST_USER_EMAIL", "dev@keboola.com")
-        logger.debug("MCP dev mode: skipping token validation")
         request.state.user = {
             "sub": "dev-user",
             "email": dev_email,
@@ -146,7 +145,7 @@ async def oauth_middleware(request: Request, call_next):
             request.state.user = extract_user_context(claims)
             return await call_next(request)
         except Exception as e:
-            logger.warning(f"Token validation failed: {type(e).__name__}")
+            logger.warning("Token validation failed")
             return JSONResponse(
                 status_code=401,
                 content={"error": "invalid_token", "error_description": str(e)},
@@ -263,10 +262,7 @@ async def oauth_authorize(request: Request):
     google_authorize_url = (
         f"{mcp_settings.MCP_OAUTH_AUTHORIZATION_ENDPOINT}?{urlencode(params)}"
     )
-    logger.info(
-        f"OAuth authorize: redirecting to Google (scope={google_scopes}, "
-        f"redirect_uri={params.get('redirect_uri', 'N/A')})"
-    )
+    logger.debug("OAuth authorize: redirecting to Google")
     return RedirectResponse(url=google_authorize_url, status_code=302)
 
 
@@ -285,9 +281,7 @@ async def oauth_token(request: Request):
     token_params["client_id"] = mcp_settings.MCP_OAUTH_CLIENT_ID
     token_params["client_secret"] = mcp_settings.MCP_OAUTH_CLIENT_SECRET
 
-    logger.info(
-        f"OAuth token exchange: grant_type={token_params.get('grant_type', 'N/A')}"
-    )
+    logger.debug("OAuth token exchange")
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -320,10 +314,7 @@ async def oauth_register(request: Request):
     redirect_uris = body.get("redirect_uris", [])
     client_name = body.get("client_name", "MCP Client")
 
-    logger.info(
-        f"OAuth client registration: name={client_name}, "
-        f"redirect_uris={redirect_uris}"
-    )
+    logger.debug("OAuth client registration")
 
     return JSONResponse(
         status_code=201,
