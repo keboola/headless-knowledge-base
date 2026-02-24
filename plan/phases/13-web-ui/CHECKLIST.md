@@ -26,7 +26,7 @@
 - [x] Document credentials retrieval (`gcloud secrets versions access ...`).
 
 ## Pre-requisites (Manual Action Required)
-- [ ] **Domain Name**: Identify the domain to use (e.g., `kb.dev.keboola.com` or similar).
+- [ ] **Domain Name**: Identify the domain to use (e.g., `kb.keboola.systems` or similar).
 - [ ] **OAuth Consent Screen**:
     - Go to GCP Console -> APIs & Services -> OAuth consent screen.
     - Create "Internal" app (if Org exists) or "External" (testing).

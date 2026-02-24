@@ -9,16 +9,16 @@ Access is secured via **Google Identity-Aware Proxy (IAP)**, meaning no VPN is r
 
 | Environment | UI URL (Browser) | DB Host (Connection Settings) | Access Control |
 |---|---|---|---|
-| **Production** | `https://kb.internal.keboola.com` | `neo4j.internal.keboola.com` | IAP (UI) / Cloud Armor (DB) |
-| **Staging** | `https://kb.staging.keboola.com` | `neo4j.staging.keboola.com` | IAP (UI) / Cloud Armor (DB) |
+| **Production** | `https://kb.keboola.systems` | `neo4j.keboola.systems` | IAP (UI) / Cloud Armor (DB) |
+| **Staging** | `https://kb.staging.keboola.systems` | `neo4j.staging.keboola.systems` | IAP (UI) / Cloud Armor (DB) |
 
 ## User Guide: How to Connect
 
-1.  **Open the UI**: Navigate to the UI URL (e.g., `https://kb.internal.keboola.com`).
+1.  **Open the UI**: Navigate to the UI URL (e.g., `https://kb.keboola.systems`).
 2.  **Log In**: You will be redirected to Google Login. Use your company email.
 3.  **Neodash Connect Screen**:
     *   **Protocol**: `neo4j+s` (Secure Bolt)
-    *   **Hostname**: `neo4j.internal.keboola.com` (Do not add `https://`)
+    *   **Hostname**: `neo4j.keboola.systems` (Do not add `https://`)
     *   **Port**: `443` (Default for SSL)
     *   **Username**: `neo4j`
     *   **Password**: *Ask your administrator for the read-only or admin password.*
@@ -65,7 +65,8 @@ Run the helper script with your credentials:
 
 Ensure your `terraform.tfvars` has the correct domain and authorized users:
 ```hcl
-base_domain = "keboola.com"
+base_domain = "keboola.systems"
+staging_domain = "keboola.systems"
 iap_support_email = "support@keboola.com"
 
 # Important: Only these users can log in via IAP
@@ -87,8 +88,8 @@ After Terraform completes, it will output the `load_balancer_ip`. You must creat
 
 | Type | Name | Value |
 |---|---|---|
-| A | `kb.internal` | `<LOAD_BALANCER_IP>` |
-| A | `neo4j.internal` | `<LOAD_BALANCER_IP>` |
+| A | `kb` | `<LOAD_BALANCER_IP>` |
+| A | `neo4j` | `<LOAD_BALANCER_IP>` |
 | A | `kb.staging` | `<LOAD_BALANCER_IP>` |
 | A | `neo4j.staging` | `<LOAD_BALANCER_IP>` |
 
@@ -96,14 +97,14 @@ Wait for DNS propagation (TTL) and Google Managed SSL provisioning (can take 15-
 
 ### 4. Post-Deployment Verification
 
-1.  Visit `https://kb.internal.keboola.com`.
+1.  Visit `https://kb.keboola.systems`.
 2.  Verify Google Login redirect works.
 3.  Verify Neodash loads.
 4.  Retrieve the generated Neo4j password:
     ```bash
     gcloud secrets versions access latest --secret="neo4j-password"
     ```
-5.  Try connecting Neodash to `neo4j.internal.keboola.com:443`.
+5.  Try connecting Neodash to `neo4j.keboola.systems:443`.
 
 ---
 

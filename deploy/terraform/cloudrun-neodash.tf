@@ -43,7 +43,7 @@ resource "google_cloud_run_v2_service" "neodash" {
 
       env {
         name  = "standaloneHost"
-        value = "neo4j.internal.${var.base_domain}"
+        value = "neo4j.${var.base_domain}"
       }
 
       env {

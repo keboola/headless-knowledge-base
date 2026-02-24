@@ -317,7 +317,7 @@ python3 test-neo4j-connection.py --target staging --verbose
 ║   2026-02-05 14:16:06                           ║
 ╚═══════════════════════════════════════════════╝
 
-✓ TCP connection to LB: Connected to neo4j.staging.keboola.dev:443
+✓ TCP connection to LB: Connected to neo4j.staging.keboola.systems:443
 ✓ TLS handshake through LB: TLSv1.3
 ✓ Bolt handshake through LB: Bolt 0.1028
 ✓ Driver connection: Query executed successfully (returned: 1)
@@ -385,7 +385,7 @@ python3 test-neo4j-connection.py --target production
 ```
 Browser/Client
   ↓
-neo4j.staging.keboola.dev:443 (SSL Load Balancer)
+neo4j.staging.keboola.systems:443 (SSL Load Balancer)
   ↓
 TLS/SSL Termination (TLSv1.3)
   ↓
@@ -494,7 +494,7 @@ User Journey:
 | `standalone` | `true` | Neodash connects directly to Neo4j |
 | `standaloneUser` | `neo4j` | Service account username |
 | `standalonePassword` | (from Secret Manager) | Service account password |
-| `standaloneHost` | `neo4j.staging.keboola.dev` | Neo4j host |
+| `standaloneHost` | `neo4j.staging.keboola.systems` | Neo4j host |
 | `standalonePort` | `443` | HTTPS port for TLS |
 | `standaloneProtocol` | `bolt+s` | Bolt over SSL |
 
@@ -554,7 +554,7 @@ gcloud compute network-endpoint-groups describe neo4j-staging-neg --zone=us-cent
 
 **Symptom**:
 ```
-✗ TCP connection to LB: DNS resolution failed for neo4j.internal.keboola.dev
+✗ TCP connection to LB: DNS resolution failed for neo4j.keboola.systems
 ```
 
 **Cause**: Running from outside GCP network (expected for production)
