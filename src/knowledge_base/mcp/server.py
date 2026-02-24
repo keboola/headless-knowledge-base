@@ -69,7 +69,7 @@ async def lifespan(app: FastAPI):
 
     logger.info(f"MCP Server started on {mcp_settings.MCP_HOST}:{mcp_settings.MCP_PORT}")
     logger.info(f"OAuth issuer: {mcp_settings.MCP_OAUTH_ISSUER}")
-    logger.info(f"OAuth audience: {_get_oauth_audience()}")
+    logger.info("OAuth audience configured")
     logger.info(f"Dev mode: {mcp_settings.MCP_DEV_MODE}")
 
     yield
@@ -130,7 +130,7 @@ async def oauth_middleware(request: Request, call_next):
         import os
 
         dev_email = os.getenv("TEST_USER_EMAIL", "dev@keboola.com")
-        logger.info(f"MCP dev mode: using email {dev_email}")
+        logger.debug("MCP dev mode: skipping token validation")
         request.state.user = {
             "sub": "dev-user",
             "email": dev_email,
@@ -146,7 +146,7 @@ async def oauth_middleware(request: Request, call_next):
             request.state.user = extract_user_context(claims)
             return await call_next(request)
         except Exception as e:
-            logger.warning(f"Token validation failed: {type(e).__name__}: {e}")
+            logger.warning(f"Token validation failed: {type(e).__name__}")
             return JSONResponse(
                 status_code=401,
                 content={"error": "invalid_token", "error_description": str(e)},

@@ -153,7 +153,7 @@ class TokenValidator:
 
                 # Google tokens should have email_verified
                 if not claims.get("email_verified", False):
-                    logger.warning(f"Google token email not verified: {claims.get('email')}")
+                    logger.warning("Google token email not verified")
 
                 return claims
             else:
@@ -181,9 +181,9 @@ class TokenValidator:
         except jwt.InvalidAudienceError:
             raise InvalidAudienceError(f"Invalid audience, expected {self.audience}")
         except jwt.InvalidTokenError as e:
-            raise InvalidTokenError(f"Invalid token: {e}")
+            raise InvalidTokenError(f"Invalid token: {type(e).__name__}")
         except Exception as e:
-            raise TokenValidationError(f"Token validation failed: {e}")
+            raise TokenValidationError(f"Token validation failed: {type(e).__name__}")
 
     def _validate_google_access_token(self, token: str) -> dict[str, Any]:
         """
@@ -241,11 +241,11 @@ class TokenValidator:
                 "scope": claims.get("scope", ""),
             }
 
-            logger.info(f"Google access token validated for: {normalized.get('email')}")
+            logger.debug("Google access token validated")
             return normalized
 
         except httpx.RequestError as e:
-            raise TokenValidationError(f"Failed to validate token with Google: {e}")
+            raise TokenValidationError(f"Failed to validate token with Google: {type(e).__name__}")
 
     async def validate_async(self, token: str) -> dict[str, Any]:
         """

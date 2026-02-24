@@ -5,6 +5,7 @@ import logging
 import uuid
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 from mcp.types import TextContent, Tool
 
@@ -203,7 +204,7 @@ async def execute_tool(
     user: dict[str, Any],
 ) -> list[TextContent]:
     """Execute a tool and return results as TextContent list."""
-    logger.info(f"Executing tool: {tool_name}, user: {user.get('email', 'unknown')}")
+    logger.info(f"Executing tool: {tool_name}, user: {user.get('sub', 'unknown')}")
 
     try:
         if tool_name == "ask_question":
@@ -353,7 +354,7 @@ async def _execute_create_knowledge(
         page_title=f"Quick Fact by {user_email}",
         chunk_index=0,
         space_key="MCP",
-        url=f"mcp://user/{user_email}",
+        url=f"mcp://user/{quote(user_email, safe='')}",
         author=user_email,
         created_at=now.isoformat(),
         updated_at=now.isoformat(),
