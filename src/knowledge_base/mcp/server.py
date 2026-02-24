@@ -68,9 +68,6 @@ async def lifespan(app: FastAPI):
     )
 
     logger.info(f"MCP Server started on {mcp_settings.MCP_HOST}:{mcp_settings.MCP_PORT}")
-    logger.debug(f"OAuth issuer: {mcp_settings.MCP_OAUTH_ISSUER}")
-    logger.debug("OAuth audience configured")
-    logger.info(f"Dev mode: {mcp_settings.MCP_DEV_MODE}")
 
     yield
 
@@ -144,11 +141,10 @@ async def oauth_middleware(request: Request, call_next):
             claims = await resource_server.validate_token_async(token)
             request.state.user = extract_user_context(claims)
             return await call_next(request)
-        except Exception as e:
-            logger.warning("Token validation failed")
+        except Exception:
             return JSONResponse(
                 status_code=401,
-                content={"error": "invalid_token", "error_description": str(e)},
+                content={"error": "invalid_token", "error_description": "Token validation failed"},
                 headers={
                     "WWW-Authenticate": 'Bearer realm="knowledge-base-mcp", error="invalid_token"'
                 },
@@ -262,7 +258,6 @@ async def oauth_authorize(request: Request):
     google_authorize_url = (
         f"{mcp_settings.MCP_OAUTH_AUTHORIZATION_ENDPOINT}?{urlencode(params)}"
     )
-    logger.debug("OAuth authorize: redirecting to Google")
     return RedirectResponse(url=google_authorize_url, status_code=302)
 
 
@@ -281,18 +276,11 @@ async def oauth_token(request: Request):
     token_params["client_id"] = mcp_settings.MCP_OAUTH_CLIENT_ID
     token_params["client_secret"] = mcp_settings.MCP_OAUTH_CLIENT_SECRET
 
-    logger.debug("OAuth token exchange")
-
     async with httpx.AsyncClient() as client:
         response = await client.post(
             mcp_settings.MCP_OAUTH_TOKEN_ENDPOINT,
             data=token_params,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-
-    if response.status_code != 200:
-        logger.warning(
-            f"Google token exchange failed: {response.status_code} {response.text}"
         )
 
     # Return Google's response directly to Claude.AI
@@ -313,8 +301,6 @@ async def oauth_register(request: Request):
     body = await request.json()
     redirect_uris = body.get("redirect_uris", [])
     client_name = body.get("client_name", "MCP Client")
-
-    logger.debug("OAuth client registration")
 
     return JSONResponse(
         status_code=201,

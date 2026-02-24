@@ -152,9 +152,6 @@ class TokenValidator:
                         )
 
                 # Google tokens should have email_verified
-                if not claims.get("email_verified", False):
-                    logger.debug("Google token email not verified")
-
                 return claims
             else:
                 # Standard OAuth 2.0 token validation
@@ -241,7 +238,6 @@ class TokenValidator:
                 "scope": claims.get("scope", ""),
             }
 
-            logger.debug("Google access token validated")
             return normalized
 
         except httpx.RequestError as e:

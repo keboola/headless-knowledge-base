@@ -223,11 +223,9 @@ class OAuthMiddleware(BaseHTTPMiddleware):
             claims = await self.resource_server.validate_token_async(token)
             request.state.user = extract_user_context(claims)
             return await call_next(request)
-        except TokenValidationError as e:
-            logger.warning("Token validation failed")
-            return self._unauthorized_response(str(e))
-        except Exception as e:
-            logger.error("Unexpected error during token validation")
+        except TokenValidationError:
+            return self._unauthorized_response("Token validation failed")
+        except Exception:
             return self._unauthorized_response("Token validation failed")
 
 
