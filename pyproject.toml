@@ -36,6 +36,10 @@ dependencies = [
     "google-genai>=1.0.0",  # For Gemini LLM client in Graphiti
     "kuzu>=0.4.0",
     "neo4j>=5.26.0",
+    # MCP server dependencies
+    "mcp>=1.25.0",
+    "authlib>=1.6.0",
+    "PyJWT>=2.10.0",
 ]
 
 [project.optional-dependencies]
