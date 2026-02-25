@@ -106,7 +106,6 @@ async def oauth_middleware(request: Request, call_next):
         "/token",
         "/register",
         "/callback",
-        "/",
     ]
     if request.url.path in skip_paths:
         return await call_next(request)
@@ -362,8 +361,7 @@ class MCPResponse(BaseModel):
     id: Optional[int | str] = None
 
 
-@app.get("/mcp")
-async def mcp_sse_endpoint(request: Request):
+async def _handle_mcp_sse(request: Request):
     """MCP SSE endpoint for server-initiated messages."""
     from starlette.responses import StreamingResponse
 
@@ -388,8 +386,7 @@ async def mcp_sse_endpoint(request: Request):
     )
 
 
-@app.post("/mcp")
-async def mcp_endpoint(request: Request, mcp_request: MCPRequest):
+async def _handle_mcp_post(request: Request, mcp_request: MCPRequest):
     """MCP JSON-RPC endpoint."""
     user = getattr(request.state, "user", None)
     if not user:
@@ -445,6 +442,30 @@ async def mcp_endpoint(request: Request, mcp_request: MCPRequest):
             id=mcp_request.id,
             error={"code": -32603, "message": str(e)},
         )
+
+
+# Mount MCP handlers at both "/" and "/mcp" — Claude.AI sends requests to the
+# server URL root, while direct integrations may use the /mcp path.
+
+
+@app.get("/")
+async def root_sse_endpoint(request: Request):
+    return await _handle_mcp_sse(request)
+
+
+@app.post("/")
+async def root_mcp_endpoint(request: Request, mcp_request: MCPRequest):
+    return await _handle_mcp_post(request, mcp_request)
+
+
+@app.get("/mcp")
+async def mcp_sse_endpoint(request: Request):
+    return await _handle_mcp_sse(request)
+
+
+@app.post("/mcp")
+async def mcp_endpoint(request: Request, mcp_request: MCPRequest):
+    return await _handle_mcp_post(request, mcp_request)
 
 
 async def handle_tools_list(user: dict) -> dict:
