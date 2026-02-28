@@ -5,6 +5,7 @@ and converts rows to ChunkData format for GraphitiIndexer.
 """
 
 import logging
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
@@ -33,6 +34,11 @@ class KeboolaDownloader:
     ):
         self.client = client or KeboolaClient()
         self.source_key = source_key or settings.KEBOOLA_SOURCE_KEY
+
+    @staticmethod
+    def _sanitize_id(value: str) -> str:
+        """Sanitize a string for use in chunk IDs (alphanumeric, hyphens, underscores only)."""
+        return re.sub(r"[^a-zA-Z0-9_-]", "_", value)
 
     @staticmethod
     def _parse_metadata(metadata_str: str) -> tuple[str, str]:
@@ -82,7 +88,7 @@ class KeboolaDownloader:
         source_name, page_id = self._parse_metadata(metadata_str)
 
         if not page_id:
-            logger.warning(
+            logger.debug(
                 "Could not extract page_id from metadata at row %d (metadata length=%d)",
                 row_index,
                 len(metadata_str),
@@ -93,9 +99,10 @@ class KeboolaDownloader:
         chunk_index = page_chunk_counters[page_id]
         page_chunk_counters[page_id] += 1
 
-        # Generate unique chunk_id
+        # Generate unique chunk_id with sanitized components
         table_short = table_id.split(".")[-1] if "." in table_id else table_id
-        chunk_id = f"kbc_{table_short}_{page_id}_{chunk_index}"
+        safe_page_id = self._sanitize_id(page_id)
+        chunk_id = f"kbc_{self._sanitize_id(table_short)}_{safe_page_id}_{chunk_index}"
 
         page_title = source_name or f"Keboola Import {row_index}"
         space_key = self.source_key

@@ -30,9 +30,12 @@ resource "google_secret_manager_secret" "keboola_api_token" {
   }
 }
 
+# Secret value is managed out-of-band via:
+#   gcloud secrets versions add keboola-api-token --data-file=- --project=ai-knowledge-base-42
+# The lifecycle block prevents Terraform from overwriting the real value.
 resource "google_secret_manager_secret_version" "keboola_api_token" {
   secret      = google_secret_manager_secret.keboola_api_token.id
-  secret_data = "REPLACE_ME"
+  secret_data = "PLACEHOLDER_UPDATE_VIA_GCLOUD"
 
   lifecycle {
     ignore_changes = [secret_data]

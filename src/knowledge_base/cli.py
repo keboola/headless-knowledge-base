@@ -1257,11 +1257,18 @@ async def _show_keboola_sync_state(table_id: str) -> None:
     is_flag=True,
     help="Clear checkpoints and sync state, reprocess all chunks",
 )
+@click.option(
+    "--sample-size",
+    type=int,
+    default=5,
+    help="Number of sample chunks to show in dry-run mode",
+)
 def keboola_sync(
     table_id: str | None,
     verbose: bool,
     dry_run: bool,
     reindex: bool,
+    sample_size: int,
 ) -> None:
     """Sync data from Keboola Storage table into the knowledge graph.
 
@@ -1273,7 +1280,7 @@ def keboola_sync(
 
     Requires KEBOOLA_API_TOKEN and KEBOOLA_API_URL to be set.
     """
-    asyncio.run(_keboola_sync(table_id, verbose, dry_run, reindex))
+    asyncio.run(_keboola_sync(table_id, verbose, dry_run, reindex, sample_size))
 
 
 async def _keboola_sync(
@@ -1281,6 +1288,7 @@ async def _keboola_sync(
     verbose: bool,
     dry_run: bool,
     reindex: bool,
+    sample_size: int = 5,
 ) -> None:
     """Async implementation of keboola-sync command."""
     from sqlalchemy import delete, func, select
@@ -1358,14 +1366,14 @@ async def _keboola_sync(
         return
 
     if dry_run:
-        click.echo("\n[DRY RUN] Would index the following:")
-        for i, chunk in enumerate(chunks[:5]):
+        click.echo(f"\n[DRY RUN] Would index the following (showing {min(sample_size, len(chunks))} of {len(chunks)}):")
+        for i, chunk in enumerate(chunks[:sample_size]):
             click.echo(
                 f"  {i + 1}. {chunk.chunk_id}: {chunk.page_title} "
                 f"({len(chunk.content)} chars)"
             )
-        if len(chunks) > 5:
-            click.echo(f"  ... and {len(chunks) - 5} more")
+        if len(chunks) > sample_size:
+            click.echo(f"  ... and {len(chunks) - sample_size} more")
         return
 
     # Step 2: Filter already-indexed chunks (crash resume)

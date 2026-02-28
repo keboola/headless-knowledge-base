@@ -84,7 +84,12 @@ class KeboolaClient:
                 "Exporting table (changed_since=%s)",
                 "provided" if changed_since else "full",
             )
-            tables.export_to_file(**export_kwargs)
+            try:
+                tables.export_to_file(**export_kwargs)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Keboola table export failed: {type(exc).__name__}"
+                ) from exc
 
             # kbcstorage saves as table name (last part of table_id)
             table_name = table_id.split(".")[-1]

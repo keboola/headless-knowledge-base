@@ -37,7 +37,7 @@ dependencies = [
     "kuzu>=0.4.0",
     "neo4j>=5.26.0",
     # Keboola Storage API client
-    "kbcstorage>=0.8.0",
+    "kbcstorage>=0.8.0,<1.0",
     # MCP server dependencies
     "mcp>=1.25.0",
     "authlib>=1.6.0",
