@@ -1161,6 +1161,278 @@ async def _pipeline(
 
 
 # =============================================================================
+# KEBOOLA COMMANDS
+# =============================================================================
+
+
+@cli.command(name="keboola-info")
+@click.option(
+    "--table-id",
+    "-t",
+    help="Keboola table ID to inspect (defaults to KEBOOLA_TABLE_ID)",
+)
+def keboola_info(table_id: str | None) -> None:
+    """Show information about a Keboola Storage table.
+
+    Displays table metadata (columns, row count) and a preview
+    of the first few rows with parsed metadata.
+    """
+    from knowledge_base.keboola.client import KeboolaClient
+    from knowledge_base.keboola.downloader import KeboolaDownloader
+
+    if not settings.KEBOOLA_API_TOKEN:
+        click.echo("Error: KEBOOLA_API_TOKEN not set.", err=True)
+        sys.exit(1)
+    if not settings.KEBOOLA_API_URL:
+        click.echo("Error: KEBOOLA_API_URL not set.", err=True)
+        sys.exit(1)
+
+    effective_table_id = table_id or settings.KEBOOLA_TABLE_ID
+    if not effective_table_id:
+        click.echo("Error: No table ID. Use --table-id or set KEBOOLA_TABLE_ID.", err=True)
+        sys.exit(1)
+
+    client = KeboolaClient()
+
+    try:
+        info = client.get_table_detail(effective_table_id)
+    except Exception as exc:
+        logger.error("Failed to fetch table detail: %s", type(exc).__name__)
+        click.echo("Error: Could not retrieve table details. Check credentials and table ID.", err=True)
+        sys.exit(1)
+
+    click.echo(f"\nTable: {effective_table_id}")
+    click.echo(f"  Columns: {info.get('columns', [])}")
+    click.echo(f"  Rows: {info.get('rowsCount', 'unknown')}")
+    click.echo(f"  Data size: {info.get('dataSizeBytes', 'unknown')} bytes")
+    click.echo(f"  Last import: {info.get('lastImportDate', 'unknown')}")
+    click.echo(f"  Last change: {info.get('lastChangeDate', 'unknown')}")
+
+    # Show sync state
+    asyncio.run(_show_keboola_sync_state(effective_table_id))
+
+    # Show first 3 rows with parsed metadata
+    click.echo(f"\nSample rows (first 3):")
+    try:
+        for i, row in enumerate(client.iter_table_rows(effective_table_id)):
+            if i >= 3:
+                break
+            text_preview = row.get("text", "")[:100]
+            metadata = row.get("metadata", "")
+            source_name, page_id = KeboolaDownloader._parse_metadata(metadata)
+            click.echo(f"\n  Row {i}:")
+            click.echo(f"    metadata: {metadata}")
+            click.echo(f"    parsed -> source={source_name}, page_id={page_id}")
+            click.echo(f"    text: {text_preview}...")
+    except Exception as exc:
+        logger.error("Failed to fetch sample rows: %s", type(exc).__name__)
+        click.echo("Error: Could not retrieve sample rows. Check credentials and table ID.", err=True)
+        sys.exit(1)
+
+
+async def _show_keboola_sync_state(table_id: str) -> None:
+    """Show last sync state for a table."""
+    from knowledge_base.db.database import init_db
+    from knowledge_base.keboola.downloader import KeboolaDownloader
+
+    await init_db()
+    downloader = KeboolaDownloader()
+    last_sync = await downloader.get_last_sync_time(table_id)
+    if last_sync:
+        click.echo(f"  Last sync: {last_sync.isoformat()}")
+    else:
+        click.echo("  Last sync: never")
+
+
+@cli.command(name="keboola-sync")
+@click.option(
+    "--table-id",
+    "-t",
+    help="Keboola table ID to sync (defaults to KEBOOLA_TABLE_ID)",
+)
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed progress")
+@click.option("--dry-run", is_flag=True, help="Fetch and map data without indexing")
+@click.option(
+    "--reindex",
+    is_flag=True,
+    help="Clear checkpoints and sync state, reprocess all chunks",
+)
+@click.option(
+    "--sample-size",
+    type=int,
+    default=5,
+    help="Number of sample chunks to show in dry-run mode",
+)
+def keboola_sync(
+    table_id: str | None,
+    verbose: bool,
+    dry_run: bool,
+    reindex: bool,
+    sample_size: int,
+) -> None:
+    """Sync data from Keboola Storage table into the knowledge graph.
+
+    Fetches pre-chunked data from a Keboola Storage table, maps it to
+    ChunkData format, and indexes it to Graphiti (Neo4j knowledge graph).
+
+    Supports incremental sync: only rows modified since the last successful
+    sync are exported and processed.
+
+    Requires KEBOOLA_API_TOKEN and KEBOOLA_API_URL to be set.
+    """
+    asyncio.run(_keboola_sync(table_id, verbose, dry_run, reindex, sample_size))
+
+
+async def _keboola_sync(
+    table_id: str | None,
+    verbose: bool,
+    dry_run: bool,
+    reindex: bool,
+    sample_size: int = 5,
+) -> None:
+    """Async implementation of keboola-sync command."""
+    from sqlalchemy import delete, func, select
+
+    from knowledge_base.db.database import async_session_maker, init_db
+    from knowledge_base.db.models import IndexingCheckpoint
+    from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
+    from knowledge_base.keboola.downloader import KeboolaDownloader
+
+    # Validate required settings
+    if not settings.KEBOOLA_API_TOKEN:
+        click.echo("Error: KEBOOLA_API_TOKEN not set.", err=True)
+        sys.exit(1)
+    if not settings.KEBOOLA_API_URL:
+        click.echo("Error: KEBOOLA_API_URL not set.", err=True)
+        sys.exit(1)
+
+    effective_table_id = table_id or settings.KEBOOLA_TABLE_ID
+    if not effective_table_id:
+        click.echo(
+            "Error: No table ID. Use --table-id or set KEBOOLA_TABLE_ID.",
+            err=True,
+        )
+        sys.exit(1)
+
+    await init_db()
+    downloader = KeboolaDownloader()
+
+    # Step 1: Check last sync time for incremental export
+    click.echo("\n" + "=" * 60)
+    click.echo("STEP 1: Fetching data from Keboola Storage")
+    click.echo("=" * 60)
+
+    changed_since: str | None = None
+    if reindex:
+        # Clear Keboola-specific checkpoints and sync state
+        async with async_session_maker() as session:
+            await session.execute(
+                delete(IndexingCheckpoint).where(
+                    IndexingCheckpoint.chunk_id.like("kbc_%")
+                )
+            )
+            from knowledge_base.db.models import KeboolaSyncState
+
+            await session.execute(
+                delete(KeboolaSyncState).where(
+                    KeboolaSyncState.source_id == effective_table_id
+                )
+            )
+            await session.commit()
+        click.echo("Cleared Keboola checkpoints and sync state for full reindex.")
+    else:
+        last_sync = await downloader.get_last_sync_time(effective_table_id)
+        if last_sync:
+            changed_since = last_sync.isoformat()
+            click.echo(f"Incremental sync since: {changed_since}")
+        else:
+            click.echo("First sync: full export")
+
+    # Show table info if verbose
+    if verbose:
+        info = downloader.get_table_info(effective_table_id)
+        click.echo(f"  Table: {effective_table_id}")
+        click.echo(f"  Total rows: {info.get('rowsCount', 'unknown')}")
+        click.echo(f"  Columns: {info.get('columns', [])}")
+
+    chunks = downloader.fetch_chunks(
+        effective_table_id,
+        changed_since=changed_since,
+    )
+    click.echo(f"\nFetched and mapped {len(chunks)} chunks from Keboola")
+
+    if not chunks:
+        click.echo("No new data to index.")
+        return
+
+    if dry_run:
+        click.echo(f"\n[DRY RUN] Would index the following (showing {min(sample_size, len(chunks))} of {len(chunks)}):")
+        for i, chunk in enumerate(chunks[:sample_size]):
+            click.echo(
+                f"  {i + 1}. {chunk.chunk_id}: {chunk.page_title} "
+                f"({len(chunk.content)} chars)"
+            )
+        if len(chunks) > sample_size:
+            click.echo(f"  ... and {len(chunks) - sample_size} more")
+        return
+
+    # Step 2: Filter already-indexed chunks (crash resume)
+    click.echo("\n" + "=" * 60)
+    click.echo("STEP 2: Indexing chunks to Graphiti")
+    click.echo("=" * 60)
+
+    async with async_session_maker() as session:
+        indexed_subquery = select(IndexingCheckpoint.chunk_id).where(
+            IndexingCheckpoint.status == "indexed"
+        )
+        result = await session.execute(indexed_subquery)
+        already_indexed = {row[0] for row in result.all()}
+
+    if already_indexed:
+        before = len(chunks)
+        chunks = [c for c in chunks if c.chunk_id not in already_indexed]
+        skipped = before - len(chunks)
+        if skipped > 0:
+            click.echo(f"Resuming: skipping {skipped} already-indexed chunks")
+
+    if not chunks:
+        click.echo("All chunks already indexed.")
+        await downloader.save_sync_state(effective_table_id, 0)
+        return
+
+    indexer = GraphitiIndexer()
+
+    def progress_callback(indexed: int, total: int) -> None:
+        if verbose:
+            click.echo(f"  Indexed {indexed}/{total} chunks")
+        else:
+            progress = indexed / total * 100
+            click.echo(f"\rProgress: {progress:.1f}% ({indexed}/{total})", nl=False)
+
+    count = await indexer.index_chunks_direct(chunks, progress_callback)
+
+    if not verbose:
+        click.echo()  # New line after progress
+
+    click.echo(f"\nIndexing complete!")
+    click.echo(f"  Chunks indexed: {count}")
+
+    stats_count = await indexer.get_chunk_count()
+    click.echo(f"  Total in index: {stats_count}")
+
+    # Step 3: Save sync state
+    await downloader.save_sync_state(effective_table_id, count)
+    click.echo(f"  Sync state saved for next incremental run")
+
+    # Final summary
+    click.echo("\n" + "=" * 60)
+    click.echo("KEBOOLA SYNC COMPLETE")
+    click.echo("=" * 60)
+    click.echo(f"  Chunks indexed: {count}")
+    click.echo(f"  Total in graph: {stats_count}")
+
+
+# =============================================================================
 # SEARCH COMMANDS (Phase 05.5)
 # =============================================================================
 

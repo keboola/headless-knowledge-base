@@ -123,6 +123,12 @@ class Settings(BaseSettings):
     VERTEX_AI_BATCH_SIZE: int = 20  # Max texts per embedding batch (keep under 20k token limit)
     VERTEX_AI_TIMEOUT: float = 60.0  # API timeout in seconds
 
+    # Keboola Storage API
+    KEBOOLA_API_TOKEN: str = ""
+    KEBOOLA_API_URL: str = ""  # e.g. https://connection.us-east4.gcp.keboola.com
+    KEBOOLA_TABLE_ID: str = ""  # e.g. in.c-bucket.table-name
+    KEBOOLA_SOURCE_KEY: str = "KEBOOLA"  # space_key for Keboola-sourced chunks
+
     # Graphiti Indexing Performance
     GRAPHITI_CONCURRENCY: int = 5  # Concurrent chunks (1=sequential, 5-10=parallel)
     GRAPHITI_INTER_CHUNK_DELAY: float = 0.0  # Delay between chunks (0.0 with semaphore)
