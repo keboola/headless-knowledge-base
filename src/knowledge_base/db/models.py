@@ -197,6 +197,25 @@ class IndexingCheckpoint(Base):
         return f"<IndexingCheckpoint(chunk_id={self.chunk_id}, status={self.status})>"
 
 
+class KeboolaSyncState(Base):
+    """Track Keboola sync state for incremental exports.
+
+    Stores the last successful sync timestamp per table so subsequent
+    runs can use changed_since for delta-only exports.
+    """
+
+    __tablename__ = "keboola_sync_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_id: Mapped[str] = mapped_column(String(256), unique=True, index=True)  # table_id
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    rows_synced: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="success")  # success/failed
+
+    def __repr__(self) -> str:
+        return f"<KeboolaSyncState(source_id={self.source_id}, last_sync_at={self.last_sync_at})>"
+
+
 class ChunkQuality(Base):
     """Quality tracking for chunks with usage-based decay.
 
