@@ -8,6 +8,12 @@ variable "keboola_api_url" {
   default     = "https://connection.us-east4.gcp.keboola.com"
 }
 
+variable "keboola_table_id" {
+  description = "Keboola Storage table ID for Confluence embeddings"
+  type        = string
+  default     = "in.c-keboola-app-embeddings-v2-1226905101.confluence-embeddings-chunked"
+}
+
 # -----------------------------------------------------------------------------
 # Secret Manager - Keboola API credentials
 # -----------------------------------------------------------------------------
@@ -89,7 +95,7 @@ resource "google_cloud_run_v2_job" "keboola_sync" {
 
         env {
           name  = "KEBOOLA_TABLE_ID"
-          value = "in.c-keboola-app-embeddings-v2-1226905101.confluence-embeddings-chunked"
+          value = var.keboola_table_id
         }
 
         # Graph Database Configuration
@@ -114,8 +120,13 @@ resource "google_cloud_run_v2_job" "keboola_sync" {
         }
 
         env {
-          name  = "NEO4J_PASSWORD"
-          value = random_password.neo4j_prod_password.result
+          name = "NEO4J_PASSWORD"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.neo4j_password.secret_id
+              version = "latest"
+            }
+          }
         }
 
         # LLM - cheap model for high-volume indexing
@@ -191,5 +202,6 @@ resource "google_cloud_run_v2_job" "keboola_sync" {
 
   depends_on = [
     google_secret_manager_secret_version.keboola_api_token,
+    google_secret_manager_secret_version.neo4j_password,
   ]
 }

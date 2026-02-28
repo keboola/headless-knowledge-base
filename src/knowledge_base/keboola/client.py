@@ -81,9 +81,8 @@ class KeboolaClient:
                 export_kwargs["changed_since"] = changed_since
 
             logger.info(
-                "Exporting table %s (changed_since=%s)",
-                table_id,
-                changed_since or "full",
+                "Exporting table (changed_since=%s)",
+                "provided" if changed_since else "full",
             )
             tables.export_to_file(**export_kwargs)
 
@@ -96,12 +95,12 @@ class KeboolaClient:
                 files = list(Path(tmpdir).iterdir())
                 if not files:
                     raise FileNotFoundError(
-                        f"No exported file found for table {table_id}"
+                        "No exported file found after table export"
                     )
                 csv_path = files[0]
 
             file_size = csv_path.stat().st_size
-            logger.info("Exported file: %s (%d bytes)", csv_path.name, file_size)
+            logger.info("Exported file (%d bytes)", file_size)
 
             row_count = 0
             with open(csv_path, mode="rt", encoding="utf-8") as f:
@@ -116,4 +115,4 @@ class KeboolaClient:
                     row_count += 1
                     yield row
 
-            logger.info("Streamed %d rows from table %s", row_count, table_id)
+            logger.info("Streamed %d rows from table export", row_count)

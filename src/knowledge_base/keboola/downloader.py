@@ -83,9 +83,9 @@ class KeboolaDownloader:
 
         if not page_id:
             logger.warning(
-                "Could not extract page_id from metadata at row %d: %r",
+                "Could not extract page_id from metadata at row %d (metadata length=%d)",
                 row_index,
-                metadata_str,
+                len(metadata_str),
             )
             page_id = f"kbc_row_{row_index}"
 
@@ -223,8 +223,7 @@ class KeboolaDownloader:
 
             await session.commit()
             logger.info(
-                "Saved sync state for %s: %d rows, status=%s",
-                table_id,
+                "Saved sync state: %d rows, status=%s",
                 rows_synced,
                 status,
             )

@@ -1196,8 +1196,8 @@ def keboola_info(table_id: str | None) -> None:
 
     try:
         info = client.get_table_detail(effective_table_id)
-    except Exception:
-        logger.exception("Failed to fetch table detail for %s", effective_table_id)
+    except Exception as exc:
+        logger.error("Failed to fetch table detail: %s", type(exc).__name__)
         click.echo("Error: Could not retrieve table details. Check credentials and table ID.", err=True)
         sys.exit(1)
 
@@ -1224,8 +1224,8 @@ def keboola_info(table_id: str | None) -> None:
             click.echo(f"    metadata: {metadata}")
             click.echo(f"    parsed -> source={source_name}, page_id={page_id}")
             click.echo(f"    text: {text_preview}...")
-    except Exception:
-        logger.exception("Failed to fetch sample rows for %s", effective_table_id)
+    except Exception as exc:
+        logger.error("Failed to fetch sample rows: %s", type(exc).__name__)
         click.echo("Error: Could not retrieve sample rows. Check credentials and table ID.", err=True)
         sys.exit(1)
 

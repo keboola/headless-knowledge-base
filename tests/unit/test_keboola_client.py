@@ -2,6 +2,7 @@
 
 import csv
 import io
+import os
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -11,9 +12,9 @@ import pytest
 
 from knowledge_base.keboola.client import KeboolaClient
 
-# Clearly-marked test constants -- not real credentials
-_TEST_API_URL = "https://test.keboola.com"
-_TEST_API_TOKEN = "test-token-for-unit-tests"
+# Test credentials loaded from env with safe fallbacks (not real credentials)
+_TEST_API_URL = os.getenv("TEST_KEBOOLA_API_URL", "https://test.keboola.com")
+_TEST_API_TOKEN = os.getenv("TEST_KEBOOLA_API_TOKEN", "test-token")
 
 
 @pytest.fixture
@@ -157,7 +158,7 @@ class TestIterTableRows:
         mock_tables.export_to_file.side_effect = fake_export
 
         with patch.object(client, "_get_tables_client", return_value=mock_tables):
-            with pytest.raises(FileNotFoundError, match="No exported file"):
+            with pytest.raises(FileNotFoundError, match="No exported file found"):
                 list(client.iter_table_rows("in.c-bucket.table"))
 
     def test_changed_since_passed_to_export(self, client: KeboolaClient) -> None:
