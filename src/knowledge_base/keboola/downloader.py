@@ -82,6 +82,11 @@ class KeboolaDownloader:
         source_name, page_id = self._parse_metadata(metadata_str)
 
         if not page_id:
+            logger.warning(
+                "Could not extract page_id from metadata at row %d: %r",
+                row_index,
+                metadata_str,
+            )
             page_id = f"kbc_row_{row_index}"
 
         # Track chunk index per page_id for proper ordering
@@ -145,7 +150,12 @@ class KeboolaDownloader:
             chunks.append(chunk_data)
 
             if (idx + 1) % 5000 == 0:
-                logger.info("Mapped %d rows so far (%d skipped)...", idx + 1, skipped)
+                logger.info(
+                    "Mapped %d rows so far (%d skipped) for table %s...",
+                    idx + 1,
+                    skipped,
+                    table_id,
+                )
 
         logger.info(
             "Mapped %d chunks from %d rows (skipped %d empty/invalid)",

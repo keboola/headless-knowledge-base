@@ -31,6 +31,11 @@ class KeboolaClient:
         self.api_url = api_url or settings.KEBOOLA_API_URL
         self.api_token = api_token or settings.KEBOOLA_API_TOKEN
 
+        if not self.api_url:
+            raise ValueError("Keboola API URL must not be empty. Set KEBOOLA_API_URL.")
+        if not self.api_token:
+            raise ValueError("Keboola API token must not be empty. Set KEBOOLA_API_TOKEN.")
+
     def _get_tables_client(self) -> Any:
         """Lazy-load kbcstorage Tables client."""
         from kbcstorage.tables import Tables

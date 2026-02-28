@@ -11,11 +11,15 @@ import pytest
 
 from knowledge_base.keboola.client import KeboolaClient
 
+# Clearly-marked test constants -- not real credentials
+_TEST_API_URL = "https://test.keboola.com"
+_TEST_API_TOKEN = "test-token-for-unit-tests"
+
 
 @pytest.fixture
 def client() -> KeboolaClient:
     """Create a KeboolaClient with test credentials."""
-    return KeboolaClient(api_url="https://test.keboola.com", api_token="test-token")
+    return KeboolaClient(api_url=_TEST_API_URL, api_token=_TEST_API_TOKEN)
 
 
 def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:

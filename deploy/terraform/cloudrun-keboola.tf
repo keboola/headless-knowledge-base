@@ -2,6 +2,12 @@
 # Keboola Sync Cloud Run Job
 # =============================================================================
 
+variable "keboola_api_url" {
+  description = "Keboola Storage API base URL"
+  type        = string
+  default     = "https://connection.us-east4.gcp.keboola.com"
+}
+
 # -----------------------------------------------------------------------------
 # Secret Manager - Keboola API credentials
 # -----------------------------------------------------------------------------
@@ -78,7 +84,7 @@ resource "google_cloud_run_v2_job" "keboola_sync" {
 
         env {
           name  = "KEBOOLA_API_URL"
-          value = "https://connection.us-east4.gcp.keboola.com"
+          value = var.keboola_api_url
         }
 
         env {

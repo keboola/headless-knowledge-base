@@ -1193,7 +1193,13 @@ def keboola_info(table_id: str | None) -> None:
         sys.exit(1)
 
     client = KeboolaClient()
-    info = client.get_table_detail(effective_table_id)
+
+    try:
+        info = client.get_table_detail(effective_table_id)
+    except Exception:
+        logger.exception("Failed to fetch table detail for %s", effective_table_id)
+        click.echo("Error: Could not retrieve table details. Check credentials and table ID.", err=True)
+        sys.exit(1)
 
     click.echo(f"\nTable: {effective_table_id}")
     click.echo(f"  Columns: {info.get('columns', [])}")
@@ -1207,16 +1213,21 @@ def keboola_info(table_id: str | None) -> None:
 
     # Show first 3 rows with parsed metadata
     click.echo(f"\nSample rows (first 3):")
-    for i, row in enumerate(client.iter_table_rows(effective_table_id)):
-        if i >= 3:
-            break
-        text_preview = row.get("text", "")[:100]
-        metadata = row.get("metadata", "")
-        source_name, page_id = KeboolaDownloader._parse_metadata(metadata)
-        click.echo(f"\n  Row {i}:")
-        click.echo(f"    metadata: {metadata}")
-        click.echo(f"    parsed -> source={source_name}, page_id={page_id}")
-        click.echo(f"    text: {text_preview}...")
+    try:
+        for i, row in enumerate(client.iter_table_rows(effective_table_id)):
+            if i >= 3:
+                break
+            text_preview = row.get("text", "")[:100]
+            metadata = row.get("metadata", "")
+            source_name, page_id = KeboolaDownloader._parse_metadata(metadata)
+            click.echo(f"\n  Row {i}:")
+            click.echo(f"    metadata: {metadata}")
+            click.echo(f"    parsed -> source={source_name}, page_id={page_id}")
+            click.echo(f"    text: {text_preview}...")
+    except Exception:
+        logger.exception("Failed to fetch sample rows for %s", effective_table_id)
+        click.echo("Error: Could not retrieve sample rows. Check credentials and table ID.", err=True)
+        sys.exit(1)
 
 
 async def _show_keboola_sync_state(table_id: str) -> None:
