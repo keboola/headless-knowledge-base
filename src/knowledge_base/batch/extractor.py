@@ -187,11 +187,7 @@ class BatchExtractor:
         Raises:
             RuntimeError: If the job fails, is cancelled, or polling times out.
         """
-        terminal_states = {
-            "JOB_STATE_SUCCEEDED",
-            "JOB_STATE_FAILED",
-            "JOB_STATE_CANCELLED",
-        }
+        terminal_keywords = {"SUCCEEDED", "FAILED", "CANCELLED"}
 
         poll_interval = self._settings.BATCH_POLL_INTERVAL
         max_duration = self._settings.BATCH_MAX_POLL_DURATION
@@ -212,7 +208,9 @@ class BatchExtractor:
                 )
                 prev_state = current_state
 
-            if current_state in terminal_states:
+            # str(job.state) may be "JobState.JOB_STATE_SUCCEEDED" or
+            # "JOB_STATE_SUCCEEDED" depending on SDK version -- match by keyword.
+            if any(kw in current_state for kw in terminal_keywords):
                 break
 
             elapsed = time.monotonic() - start
@@ -224,12 +222,12 @@ class BatchExtractor:
 
             time.sleep(poll_interval)
 
-        # Handle terminal states
-        if current_state == "JOB_STATE_FAILED":
+        # Handle terminal states (match by keyword for SDK compatibility)
+        if "FAILED" in current_state:
             error_msg = str(job.error) if job.error else "unknown error"
             raise RuntimeError(f"Batch job {job_name} failed: {error_msg}")
 
-        if current_state == "JOB_STATE_CANCELLED":
+        if "CANCELLED" in current_state:
             raise RuntimeError(f"Batch job {job_name} was cancelled")
 
         # JOB_STATE_SUCCEEDED -- extract the output GCS URI
