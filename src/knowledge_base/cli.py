@@ -1432,6 +1432,151 @@ async def _keboola_sync(
     click.echo(f"  Total in graph: {stats_count}")
 
 
+@cli.command(name="keboola-batch-import")
+@click.option(
+    "--table-id",
+    "-t",
+    help="Keboola table ID to fetch chunks from (defaults to KEBOOLA_TABLE_ID)",
+)
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Prepare JSONL without submitting batch job",
+)
+@click.option(
+    "--resume",
+    is_flag=True,
+    help="Resume from last checkpoint",
+)
+@click.option(
+    "--clear-graph",
+    is_flag=True,
+    help="Clear existing graph before import",
+)
+@click.option(
+    "--sample-size",
+    type=int,
+    default=0,
+    help="Number of chunks to process (for testing, 0=all)",
+)
+def keboola_batch_import(
+    table_id: str | None,
+    verbose: bool,
+    dry_run: bool,
+    resume: bool,
+    clear_graph: bool,
+    sample_size: int,
+) -> None:
+    """Batch-import Keboola data into the knowledge graph via Gemini Batch API.
+
+    Fetches pre-chunked data from a Keboola Storage table, extracts entities
+    and relationships using the Gemini Batch API (1 LLM call per chunk instead
+    of 7-20), resolves entities, computes embeddings, and bulk-loads into Neo4j
+    in Graphiti-compatible schema.
+
+    Requires KEBOOLA_API_TOKEN, KEBOOLA_API_URL, and BATCH_GCS_BUCKET to be set.
+    """
+    asyncio.run(
+        _keboola_batch_import(
+            table_id, verbose, dry_run, resume, clear_graph, sample_size
+        )
+    )
+
+
+async def _keboola_batch_import(
+    table_id: str | None,
+    verbose: bool,
+    dry_run: bool,
+    resume: bool,
+    clear_graph: bool,
+    sample_size: int,
+) -> None:
+    """Async implementation of keboola-batch-import command."""
+    from knowledge_base.batch.pipeline import BatchImportPipeline
+    from knowledge_base.db.database import init_db
+    from knowledge_base.keboola.client import KeboolaClient
+    from knowledge_base.keboola.downloader import KeboolaDownloader
+
+    # Validate required settings (fail fast)
+    missing = []
+    if not settings.KEBOOLA_API_TOKEN:
+        missing.append("KEBOOLA_API_TOKEN")
+    if not settings.KEBOOLA_API_URL:
+        missing.append("KEBOOLA_API_URL")
+    if not settings.BATCH_GCS_BUCKET:
+        missing.append("BATCH_GCS_BUCKET")
+    if missing:
+        click.echo(
+            f"Error: Missing required environment variables: {', '.join(missing)}",
+            err=True,
+        )
+        sys.exit(1)
+
+    effective_table_id = table_id or settings.KEBOOLA_TABLE_ID
+    if not effective_table_id:
+        click.echo(
+            "Error: No table ID. Use --table-id or set KEBOOLA_TABLE_ID.",
+            err=True,
+        )
+        sys.exit(1)
+
+    if verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    await init_db()
+
+    # Step 1: Fetch chunks from Keboola
+    click.echo("\n" + "=" * 60)
+    click.echo("STEP 1: Fetching chunks from Keboola Storage")
+    click.echo("=" * 60)
+
+    downloader = KeboolaDownloader()
+    chunks = downloader.fetch_chunks(effective_table_id)
+    click.echo(f"Fetched {len(chunks)} chunks from table {effective_table_id}")
+
+    if not chunks:
+        click.echo("No chunks to process.")
+        return
+
+    # Step 2: Truncate to sample size if requested
+    if sample_size > 0:
+        original_count = len(chunks)
+        chunks = chunks[:sample_size]
+        click.echo(
+            f"Sample mode: truncated {original_count} chunks to {len(chunks)}"
+        )
+
+    # Step 3: Run batch import pipeline
+    click.echo("\n" + "=" * 60)
+    click.echo("STEP 2: Running batch import pipeline")
+    click.echo("=" * 60)
+
+    pipeline = BatchImportPipeline()
+    result = await pipeline.run(
+        chunks=chunks,
+        resume=resume,
+        clear_graph=clear_graph,
+        dry_run=dry_run,
+    )
+
+    # Print summary
+    click.echo("\n" + "=" * 60)
+    click.echo("BATCH IMPORT COMPLETE")
+    click.echo("=" * 60)
+    click.echo(f"  Chunks processed: {result.get('chunks_total', len(chunks))}")
+    click.echo(f"  Entities extracted: {result.get('entities_extracted', 0)}")
+    click.echo(f"  Relationships extracted: {result.get('relationships_extracted', 0)}")
+    click.echo(f"  Entities resolved: {result.get('entities_resolved', 0)}")
+    click.echo(f"  Relationships resolved: {result.get('relationships_resolved', 0)}")
+    if dry_run:
+        click.echo(f"  JSONL URI: {result.get('input_uri', 'N/A')}")
+        click.echo("  [DRY RUN] Batch job was NOT submitted.")
+    else:
+        click.echo(f"  Neo4j nodes written: {result.get('nodes_written', 0)}")
+        click.echo(f"  Neo4j edges written: {result.get('edges_written', 0)}")
+
+
 # =============================================================================
 # SEARCH COMMANDS (Phase 05.5)
 # =============================================================================
