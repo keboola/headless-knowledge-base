@@ -132,7 +132,8 @@ resource "google_cloud_run_v2_job" "keboola_sync" {
           }
         }
 
-        # LLM - cheap model for high-volume indexing
+        # LLM - Graphiti requires 16384 max output tokens; gemini-2.0-flash-lite
+        # and gemini-2.0-flash only support 8192, so gemini-2.5-flash is needed.
         env {
           name  = "LLM_PROVIDER"
           value = "gemini"
@@ -145,7 +146,7 @@ resource "google_cloud_run_v2_job" "keboola_sync" {
 
         env {
           name  = "GEMINI_INTAKE_MODEL"
-          value = "gemini-2.0-flash-lite"
+          value = "gemini-2.5-flash"
         }
 
         env {
