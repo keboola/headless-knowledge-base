@@ -52,12 +52,13 @@ class BatchEmbedder:
         """Embed each entity's canonical name and store on ``name_embedding``.
 
         Skips entities that already have an embedding (for resume).
+        Skips entities with empty names (Vertex AI rejects empty text).
         """
         if not entities:
             return
 
-        # Filter to entities that still need embedding
-        to_embed = [e for e in entities if not e.name_embedding]
+        # Filter to entities that still need embedding and have non-empty names
+        to_embed = [e for e in entities if not e.name_embedding and e.canonical_name.strip()]
         if not to_embed:
             logger.info("All %d entities already have embeddings -- skipping", len(entities))
             return
@@ -84,7 +85,7 @@ class BatchEmbedder:
         if not relationships:
             return
 
-        to_embed = [r for r in relationships if not r.fact_embedding]
+        to_embed = [r for r in relationships if not r.fact_embedding and r.fact.strip()]
         if not to_embed:
             logger.info("All %d edges already have embeddings -- skipping", len(relationships))
             return
