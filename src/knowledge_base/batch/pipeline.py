@@ -1,16 +1,17 @@
 """Batch import pipeline orchestrator.
 
 Coordinates the full batch import flow: episode creation, LLM extraction
-via Gemini Batch API, entity resolution, embedding generation, and Neo4j
-bulk loading.  Supports resume from any phase via GCS-persisted state.
+via Gemini Batch API, entity resolution, and streaming embed+load into Neo4j.
+Supports resume from any phase via GCS-persisted state.
 
 Phases:
     1. FETCH    -- count and log incoming chunks (already provided by caller)
     2. EPISODES -- generate episode UUIDs, optionally clear graph, load episodes
     3. EXTRACT  -- prepare JSONL, submit Gemini Batch API job, poll, parse
     4. RESOLVE  -- deterministic entity/relationship deduplication
-    5. EMBED    -- generate embeddings for entities and edges
-    6. LOAD     -- bulk-write entities, relationships, mentions, indices
+    5. LOAD     -- streaming embed+load: write nodes/edges to Neo4j, then
+                   stream embeddings in batches (only one batch in memory at
+                   a time, ~60 KB, safe for 100K+ entities in 8 Gi)
 """
 
 from __future__ import annotations
@@ -40,7 +41,7 @@ _PHASE_ORDER = [
     "submitted",
     "extracted",
     "resolved",
-    "embedded",
+    # "embedded" removed -- embed+load are now a single streaming phase
     "complete",
 ]
 
@@ -50,6 +51,12 @@ def _phase_done(current: str, target: str) -> bool:
     try:
         return _PHASE_ORDER.index(current) >= _PHASE_ORDER.index(target)
     except ValueError:
+        # Handle legacy "embedded" phase from prior runs -- treat as "resolved"
+        if current == "embedded":
+            try:
+                return _PHASE_ORDER.index("resolved") >= _PHASE_ORDER.index(target)
+            except ValueError:
+                return False
         return False
 
 
@@ -130,14 +137,14 @@ class BatchImportPipeline:
         # Phase 1: FETCH (just count and log)
         # ------------------------------------------------------------------
         logger.info(
-            "Phase 1/6 FETCH: received %d chunks for import", len(chunks)
+            "Phase 1/5 FETCH: received %d chunks for import", len(chunks)
         )
 
         # ------------------------------------------------------------------
         # Phase 2: EPISODES
         # ------------------------------------------------------------------
         if not _phase_done(current_phase, "episodes"):
-            logger.info("Phase 2/6 EPISODES: generating UUIDs and loading into Neo4j")
+            logger.info("Phase 2/5 EPISODES: generating UUIDs and loading into Neo4j")
 
             episode_uuids = {
                 chunk.chunk_id: str(uuid4()) for chunk in chunks
@@ -162,7 +169,7 @@ class BatchImportPipeline:
                 timestamp=_utcnow_iso(),
             ))
         else:
-            logger.info("Phase 2/6 EPISODES: already completed -- skipping")
+            logger.info("Phase 2/5 EPISODES: already completed -- skipping")
 
         # ------------------------------------------------------------------
         # Phase 3: EXTRACT (Gemini Batch API)
@@ -174,7 +181,7 @@ class BatchImportPipeline:
 
         if not _phase_done(current_phase, "extracted"):
             logger.info(
-                "Phase 3/6 EXTRACT: preparing JSONL for %d chunks", len(chunks)
+                "Phase 3/5 EXTRACT: preparing JSONL for %d chunks", len(chunks)
             )
 
             # Step 3a: prepare JSONL (always needed, even for resume at 'submitted')
@@ -231,7 +238,7 @@ class BatchImportPipeline:
                 timestamp=_utcnow_iso(),
             ))
         else:
-            logger.info("Phase 3/6 EXTRACT: already completed -- skipping")
+            logger.info("Phase 3/5 EXTRACT: already completed -- skipping")
             # Re-parse results from stored output directory for downstream phases
             if output_dir:
                 logger.info(
@@ -253,7 +260,7 @@ class BatchImportPipeline:
         relationships: list[ResolvedRelationship] = []
 
         if not _phase_done(current_phase, "resolved"):
-            logger.info("Phase 4/6 RESOLVE: deduplicating entities and relationships")
+            logger.info("Phase 4/5 RESOLVE: deduplicating entities and relationships")
 
             entities, relationships = self._resolver.resolve(
                 extractions, episode_uuids
@@ -273,10 +280,8 @@ class BatchImportPipeline:
             ))
         else:
             logger.info(
-                "Phase 4/6 RESOLVE: already completed -- re-resolving from extractions"
+                "Phase 4/5 RESOLVE: already completed -- re-resolving from extractions"
             )
-            # Entities/relationships are not persisted between phases 4-6.
-            # If we resumed past 'resolved', we need to re-run resolution.
             entities, relationships = self._resolver.resolve(
                 extractions, episode_uuids
             )
@@ -287,63 +292,48 @@ class BatchImportPipeline:
             )
 
         # ------------------------------------------------------------------
-        # Phase 5: EMBED
-        # ------------------------------------------------------------------
-        if not _phase_done(current_phase, "embedded"):
-            logger.info(
-                "Phase 5/6 EMBED: generating embeddings for %d entities and %d edges",
-                len(entities),
-                len(relationships),
-            )
-
-            await self._embedder.embed_entities(entities)
-            await self._embedder.embed_edges(relationships)
-
-            embedded_entities = sum(
-                1 for e in entities if e.name_embedding is not None
-            )
-            embedded_edges = sum(
-                1 for r in relationships if r.fact_embedding is not None
-            )
-            logger.info(
-                "Embedding complete: %d/%d entities, %d/%d edges",
-                embedded_entities,
-                len(entities),
-                embedded_edges,
-                len(relationships),
-            )
-
-            self._save_state(BatchImportState(
-                phase="embedded",
-                batch_job_name=batch_job_name,
-                output_dir=output_dir,
-                chunks_total=len(chunks),
-                timestamp=_utcnow_iso(),
-            ))
-        else:
-            logger.info("Phase 5/6 EMBED: already completed -- re-embedding")
-            # Must re-embed since embeddings are in-memory only
-            await self._embedder.embed_entities(entities)
-            await self._embedder.embed_edges(relationships)
-
-        # ------------------------------------------------------------------
-        # Phase 6: LOAD
+        # Phase 5: LOAD (streaming embed + load)
         # ------------------------------------------------------------------
         if not _phase_done(current_phase, "complete"):
             logger.info(
-                "Phase 6/6 LOAD: writing %d entities, %d relationships to Neo4j",
+                "Phase 5/5 LOAD: streaming embed+load for %d entities, %d relationships",
                 len(entities),
                 len(relationships),
             )
 
+            # Step 5a: Load entities into Neo4j WITHOUT embeddings
+            logger.info("Step 5a: Loading %d entities into Neo4j (no embeddings yet)", len(entities))
             await self._loader.load_entities(entities)
+
+            # Step 5b: Stream entity name embeddings -> update in Neo4j
+            logger.info("Step 5b: Streaming entity name embeddings to Neo4j")
+            embedded_entities = await self._embedder.stream_embed_entities(
+                entities, self._loader.update_entity_embeddings
+            )
+            logger.info("Embedded %d/%d entity names", embedded_entities, len(entities))
+
+            # Step 5c: Load relationships into Neo4j WITHOUT embeddings
+            logger.info("Step 5c: Loading %d relationships into Neo4j (no embeddings yet)", len(relationships))
             await self._loader.load_relationships(relationships)
+
+            # Step 5d: Stream edge fact embeddings -> update in Neo4j
+            logger.info("Step 5d: Streaming edge fact embeddings to Neo4j")
+            embedded_edges = await self._embedder.stream_embed_edges(
+                relationships, self._loader.update_edge_embeddings
+            )
+            logger.info("Embedded %d/%d edge facts", embedded_edges, len(relationships))
+
+            # Step 5e: Load MENTIONS edges and episode references
+            logger.info("Step 5e: Loading MENTIONS edges and episode references")
             await self._loader.load_mentions(
                 entities, list(episode_uuids.values())
             )
             await self._loader.update_episode_edge_refs(
                 chunks, episode_uuids, relationships
             )
+
+            # Step 5f: Build indices
+            logger.info("Step 5f: Building Neo4j indices")
             await self._loader.build_indices()
 
             self._save_state(BatchImportState(
@@ -354,9 +344,9 @@ class BatchImportPipeline:
                 timestamp=_utcnow_iso(),
             ))
 
-            logger.info("Phase 6/6 LOAD: complete")
+            logger.info("Phase 5/5 LOAD: complete")
         else:
-            logger.info("Phase 6/6 LOAD: already completed -- nothing to do")
+            logger.info("Phase 5/5 LOAD: already completed -- nothing to do")
 
         # ------------------------------------------------------------------
         # Summary

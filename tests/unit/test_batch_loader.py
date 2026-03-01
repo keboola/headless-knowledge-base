@@ -532,3 +532,66 @@ class TestClearGraph:
         total = await loader.clear_graph()
 
         assert total == 0
+
+
+# ---------------------------------------------------------------------------
+# update_entity_embeddings tests
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateEntityEmbeddings:
+    """Tests for update_entity_embeddings streaming embed+load method."""
+
+    @pytest.mark.asyncio
+    async def test_updates_entity_embeddings(
+        self, loader: Neo4jBulkLoader, mock_driver: AsyncMock
+    ) -> None:
+        """update_entity_embeddings writes name_embedding via UNWIND on Entity nodes."""
+        batch = [("ent-1", [0.1, 0.2, 0.3]), ("ent-2", [0.4, 0.5, 0.6])]
+        await loader.update_entity_embeddings(batch)
+
+        assert mock_driver.execute_query.call_count == 1
+        query = mock_driver.execute_query.call_args[0][0]
+        assert "Entity" in query
+        assert "name_embedding" in query
+        data = mock_driver.execute_query.call_args[1]["params"]["batch"]
+        assert len(data) == 2
+        assert data[0] == {"uuid": "ent-1", "embedding": [0.1, 0.2, 0.3]}
+
+    @pytest.mark.asyncio
+    async def test_empty_batch_no_call(
+        self, loader: Neo4jBulkLoader, mock_driver: AsyncMock
+    ) -> None:
+        """Empty batch produces no Neo4j calls."""
+        await loader.update_entity_embeddings([])
+        mock_driver.execute_query.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# update_edge_embeddings tests
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateEdgeEmbeddings:
+    """Tests for update_edge_embeddings streaming embed+load method."""
+
+    @pytest.mark.asyncio
+    async def test_updates_edge_embeddings(
+        self, loader: Neo4jBulkLoader, mock_driver: AsyncMock
+    ) -> None:
+        """update_edge_embeddings writes fact_embedding via UNWIND on RELATES_TO edges."""
+        batch = [("rel-1", [0.7, 0.8]), ("rel-2", [0.9, 1.0])]
+        await loader.update_edge_embeddings(batch)
+
+        assert mock_driver.execute_query.call_count == 1
+        query = mock_driver.execute_query.call_args[0][0]
+        assert "RELATES_TO" in query
+        assert "fact_embedding" in query
+
+    @pytest.mark.asyncio
+    async def test_empty_batch_no_call(
+        self, loader: Neo4jBulkLoader, mock_driver: AsyncMock
+    ) -> None:
+        """Empty batch produces no Neo4j calls."""
+        await loader.update_edge_embeddings([])
+        mock_driver.execute_query.assert_not_called()
