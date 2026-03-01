@@ -168,6 +168,9 @@ class BatchImportPipeline:
         # Phase 3: EXTRACT (Gemini Batch API)
         # ------------------------------------------------------------------
         extractions: dict = {}
+        # Track output_dir and job_name as locals so they survive across phases
+        batch_job_name = state.batch_job_name if state else None
+        output_dir = state.output_dir if state else None
 
         if not _phase_done(current_phase, "extracted"):
             logger.info(
@@ -191,27 +194,26 @@ class BatchImportPipeline:
                     }
 
                 # Step 3b: submit batch job
-                job_name = self._extractor.submit_batch(input_uri)
-                logger.info("Batch job submitted: %s", job_name)
+                batch_job_name = self._extractor.submit_batch(input_uri)
+                logger.info("Batch job submitted: %s", batch_job_name)
 
                 self._save_state(BatchImportState(
                     phase="submitted",
-                    batch_job_name=job_name,
+                    batch_job_name=batch_job_name,
                     input_uri=input_uri,
                     chunks_total=len(chunks),
                     timestamp=_utcnow_iso(),
                 ))
             else:
                 # Resuming from 'submitted' -- reuse stored job name
-                if state is None or not state.batch_job_name:
+                if not batch_job_name:
                     raise RuntimeError(
                         "Cannot resume from 'submitted' phase without a stored batch_job_name"
                     )
-                job_name = state.batch_job_name
-                logger.info("Resuming poll for batch job: %s", job_name)
+                logger.info("Resuming poll for batch job: %s", batch_job_name)
 
             # Step 3c: poll until complete
-            output_dir = self._extractor.poll_until_complete(job_name)
+            output_dir = self._extractor.poll_until_complete(batch_job_name)
             logger.info("Batch job completed, output at: %s", output_dir)
 
             # Step 3d: parse results
@@ -223,7 +225,7 @@ class BatchImportPipeline:
 
             self._save_state(BatchImportState(
                 phase="extracted",
-                batch_job_name=job_name,
+                batch_job_name=batch_job_name,
                 output_dir=output_dir,
                 chunks_total=len(chunks),
                 timestamp=_utcnow_iso(),
@@ -231,11 +233,11 @@ class BatchImportPipeline:
         else:
             logger.info("Phase 3/6 EXTRACT: already completed -- skipping")
             # Re-parse results from stored output directory for downstream phases
-            if state and state.output_dir:
+            if output_dir:
                 logger.info(
-                    "Re-downloading extraction results from %s", state.output_dir
+                    "Re-downloading extraction results from %s", output_dir
                 )
-                extractions = self._extractor.parse_results(state.output_dir)
+                extractions = self._extractor.parse_results(output_dir)
                 logger.info(
                     "Re-parsed %d extraction results", len(extractions)
                 )
@@ -264,8 +266,8 @@ class BatchImportPipeline:
 
             self._save_state(BatchImportState(
                 phase="resolved",
-                batch_job_name=state.batch_job_name if state else None,
-                output_dir=state.output_dir if state else None,
+                batch_job_name=batch_job_name,
+                output_dir=output_dir,
                 chunks_total=len(chunks),
                 timestamp=_utcnow_iso(),
             ))
@@ -313,8 +315,8 @@ class BatchImportPipeline:
 
             self._save_state(BatchImportState(
                 phase="embedded",
-                batch_job_name=state.batch_job_name if state else None,
-                output_dir=state.output_dir if state else None,
+                batch_job_name=batch_job_name,
+                output_dir=output_dir,
                 chunks_total=len(chunks),
                 timestamp=_utcnow_iso(),
             ))
@@ -346,8 +348,8 @@ class BatchImportPipeline:
 
             self._save_state(BatchImportState(
                 phase="complete",
-                batch_job_name=state.batch_job_name if state else None,
-                output_dir=state.output_dir if state else None,
+                batch_job_name=batch_job_name,
+                output_dir=output_dir,
                 chunks_total=len(chunks),
                 timestamp=_utcnow_iso(),
             ))
