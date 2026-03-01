@@ -141,6 +141,16 @@ class Settings(BaseSettings):
     GRAPHITI_BULK_INITIAL_BATCH: int = 2  # Starting batch size (doubles in slow_start)
     GRAPHITI_BULK_MAX_BATCH: int = 20  # Maximum batch size cap
 
+    # Batch Import Pipeline (Gemini Batch API + direct Neo4j import)
+    BATCH_GCS_BUCKET: str = ""  # GCS bucket for batch JSONL files
+    BATCH_GCS_PREFIX: str = "batch-import"  # Path prefix within bucket
+    BATCH_GEMINI_MODEL: str = "gemini-2.5-flash"  # Model for batch extraction
+    BATCH_ENTITY_SIMILARITY_THRESHOLD: float = 0.85  # Cosine similarity for entity dedup
+    BATCH_NEO4J_WRITE_SIZE: int = 500  # Rows per UNWIND batch for Neo4j bulk writes
+    BATCH_EMBEDDING_CONCURRENCY: int = 5  # Max parallel embedding batches
+    BATCH_POLL_INTERVAL: int = 60  # Seconds between batch job polls
+    BATCH_MAX_POLL_DURATION: int = 21600  # Max wait for batch job (6 hours)
+
     @property
     def is_gcp_deployment(self) -> bool:
         """Check if running in GCP environment."""
