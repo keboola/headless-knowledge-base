@@ -147,7 +147,7 @@ class Settings(BaseSettings):
     BATCH_GEMINI_MODEL: str = "gemini-2.5-flash"  # Model for batch extraction
     BATCH_ENTITY_SIMILARITY_THRESHOLD: float = 0.85  # Cosine similarity for entity dedup
     BATCH_NEO4J_WRITE_SIZE: int = 500  # Rows per UNWIND batch for Neo4j bulk writes
-    BATCH_EMBEDDING_CONCURRENCY: int = 5  # Max parallel embedding batches
+    BATCH_EMBEDDING_CONCURRENCY: int = 3  # Max parallel embedding batches (keep low to avoid 429)
     BATCH_POLL_INTERVAL: int = 60  # Seconds between batch job polls
     BATCH_MAX_POLL_DURATION: int = 21600  # Max wait for batch job (6 hours)
 

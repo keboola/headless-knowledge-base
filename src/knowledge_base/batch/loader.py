@@ -355,6 +355,49 @@ class Neo4jBulkLoader:
         )
         await self._execute_batch(query, batch, label="episode_edge_refs")
 
+    async def update_entity_embeddings(
+        self, batch: list[tuple[str, list[float]]]
+    ) -> None:
+        """Update ``name_embedding`` on existing :Entity nodes.
+
+        Used by the streaming embed+load pipeline: entities are loaded first
+        without embeddings, then embeddings are computed and written in batches
+        to avoid holding all vectors in memory at once.
+
+        Args:
+            batch: List of (entity_uuid, embedding_vector) pairs.
+        """
+        if not batch:
+            return
+        data = [{"uuid": uid, "embedding": emb} for uid, emb in batch]
+        query = (
+            "UNWIND $batch AS row "
+            "MATCH (n:Entity {uuid: row.uuid}) "
+            "SET n.name_embedding = row.embedding"
+        )
+        await self._execute_batch(query, data, label="entity_embeddings")
+
+    async def update_edge_embeddings(
+        self, batch: list[tuple[str, list[float]]]
+    ) -> None:
+        """Update ``fact_embedding`` on existing :RELATES_TO edges.
+
+        Used by the streaming embed+load pipeline: edges are loaded first
+        without embeddings, then embeddings are computed and written in batches.
+
+        Args:
+            batch: List of (relationship_uuid, embedding_vector) pairs.
+        """
+        if not batch:
+            return
+        data = [{"uuid": uid, "embedding": emb} for uid, emb in batch]
+        query = (
+            "UNWIND $batch AS row "
+            "MATCH ()-[r:RELATES_TO {uuid: row.uuid}]-() "
+            "SET r.fact_embedding = row.embedding"
+        )
+        await self._execute_batch(query, data, label="edge_embeddings")
+
     async def build_indices(self) -> None:
         """Create all range + fulltext indices required by Graphiti search.
 
