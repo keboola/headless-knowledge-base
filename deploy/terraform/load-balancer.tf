@@ -15,7 +15,7 @@ resource "google_compute_managed_ssl_certificate" "cert_v3" {
 
   managed {
     domains = [
-      "kb.internal.${var.base_domain}",
+      "kb.${var.base_domain}",
       "kb.staging.${var.staging_domain}"
     ]
   }
@@ -102,7 +102,7 @@ resource "google_compute_url_map" "default" {
 
   # Production UI
   host_rule {
-    hosts        = ["kb.internal.${var.base_domain}"]
+    hosts        = ["kb.${var.base_domain}"]
     path_matcher = "neodash-prod"
   }
 

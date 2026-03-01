@@ -35,15 +35,15 @@ variable "confluence_space_keys" {
 }
 
 variable "base_domain" {
-  description = "Base domain for production (e.g. keboola.com)"
+  description = "Base domain for production (e.g. keboola.systems)"
   type        = string
-  default     = "keboola.com"
+  default     = "keboola.systems"
 }
 
 variable "staging_domain" {
-  description = "Base domain for staging (e.g. keboola.dev)"
+  description = "Base domain for staging (e.g. keboola.systems)"
   type        = string
-  default     = "keboola.dev"
+  default     = "keboola.systems"
 }
 
 variable "iap_support_email" {
