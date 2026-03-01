@@ -242,7 +242,7 @@ resource "google_cloud_run_v2_job" "keboola_batch_import" {
         # Restore checkpoint DB then run batch import
         command = ["/bin/sh", "-c"]
         args = [
-          "cp /mnt/pipeline-state/prod-knowledge-base.db ./knowledge_base.db 2>/dev/null && echo 'Restored checkpoint DB from persistent storage' || echo 'No checkpoint DB found, starting fresh'; python -m knowledge_base.cli keboola-batch-import --verbose"
+          "cp /mnt/pipeline-state/prod-knowledge-base.db ./knowledge_base.db 2>/dev/null && echo 'Restored checkpoint DB from persistent storage' || echo 'No checkpoint DB found, starting fresh'; python -m knowledge_base.cli keboola-batch-import --verbose --resume"
         ]
 
         resources {
