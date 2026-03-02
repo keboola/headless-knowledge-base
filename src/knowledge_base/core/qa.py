@@ -3,8 +3,10 @@
 Extracted from the Slack bot to be reusable across interfaces (Slack, MCP, API).
 """
 
+import asyncio
 import logging
 
+from knowledge_base.config import settings
 from knowledge_base.rag.factory import get_llm
 from knowledge_base.rag.exceptions import LLMError
 from knowledge_base.search import HybridRetriever, SearchResult
@@ -12,7 +14,7 @@ from knowledge_base.search import HybridRetriever, SearchResult
 logger = logging.getLogger(__name__)
 
 
-async def search_knowledge(query: str, limit: int = 5) -> list[SearchResult]:
+async def search_knowledge(query: str, limit: int | None = None) -> list[SearchResult]:
     """Search for relevant chunks using Graphiti hybrid search.
 
     Uses HybridRetriever which delegates to Graphiti's unified search:
@@ -22,31 +24,99 @@ async def search_knowledge(query: str, limit: int = 5) -> list[SearchResult]:
 
     Returns SearchResult objects with content and metadata.
     """
-    logger.info(f"Searching for: '{query[:100]}...'")
+    if limit is None:
+        limit = settings.SEARCH_DEFAULT_LIMIT
+
+    logger.info("Searching for: '%s...' (limit=%d)", query[:100], limit)
 
     try:
         retriever = HybridRetriever()
         health = await retriever.check_health()
-        logger.info(f"Hybrid search health: {health}")
+        logger.info("Hybrid search health: %s", health)
 
         # Use Graphiti hybrid search
         results = await retriever.search(query, k=limit)
-        logger.info(f"Hybrid search returned {len(results)} results")
+        logger.info("Hybrid search returned %d results", len(results))
 
         # Log first result for debugging
         if results:
             first = results[0]
             logger.info(
-                f"First result: chunk_id={first.chunk_id}, "
-                f"title={first.page_title}, content_len={len(first.content)}"
+                "First result: chunk_id=%s, title=%s, content_len=%d",
+                first.chunk_id, first.page_title, len(first.content),
             )
 
         return results
 
     except Exception as e:
-        logger.error(f"Hybrid search FAILED (returning 0 results): {e}", exc_info=True)
+        logger.error("Hybrid search FAILED (returning 0 results): %s", e, exc_info=True)
 
     return []
+
+
+async def search_with_expansion(
+    query: str,
+    limit: int | None = None,
+) -> list[SearchResult]:
+    """Search with LLM-based query expansion for better recall.
+
+    Generates 2-3 query variants using the LLM, searches each in parallel,
+    and deduplicates results. This mimics what Claude.AI does naturally when
+    calling MCP tools multiple times with different phrasings.
+
+    Falls back to single search if expansion is disabled or fails.
+    """
+    if limit is None:
+        limit = settings.SEARCH_DEFAULT_LIMIT
+
+    if not settings.SEARCH_QUERY_EXPANSION_ENABLED:
+        return await search_knowledge(query, limit)
+
+    try:
+        from knowledge_base.core.query_expansion import expand_query
+        queries = await expand_query(query)
+        logger.info("Query expansion: '%s' -> %d variants: %s", query[:80], len(queries), queries)
+    except Exception as e:
+        logger.warning("Query expansion failed, using original query: %s", e)
+        return await search_knowledge(query, limit)
+
+    # Search all query variants in parallel
+    search_tasks = [search_knowledge(q, limit=limit) for q in queries]
+    all_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+
+    # Collect successful results
+    result_sets = []
+    for i, result in enumerate(all_results):
+        if isinstance(result, Exception):
+            logger.warning("Search variant %d failed: %s", i, result)
+        else:
+            result_sets.append(result)
+
+    if not result_sets:
+        logger.error("All search variants failed, returning empty")
+        return []
+
+    merged = _deduplicate_results(result_sets, limit=limit)
+    logger.info(
+        "Query expansion: %d variants -> %d total results -> %d after dedup",
+        len(queries), sum(len(r) for r in result_sets), len(merged),
+    )
+    return merged
+
+
+def _deduplicate_results(
+    result_sets: list[list[SearchResult]],
+    limit: int,
+) -> list[SearchResult]:
+    """Merge results from multiple searches, deduplicate by chunk_id, keep best score."""
+    seen: dict[str, SearchResult] = {}
+    for results in result_sets:
+        for r in results:
+            if r.chunk_id not in seen or r.score > seen[r.chunk_id].score:
+                seen[r.chunk_id] = r
+
+    merged = sorted(seen.values(), key=lambda x: x.score, reverse=True)
+    return merged[:limit]
 
 
 async def generate_answer(
@@ -64,11 +134,13 @@ async def generate_answer(
     if not chunks:
         return "I couldn't find relevant information in the knowledge base to answer your question."
 
+    content_limit = settings.SEARCH_CHUNK_CONTENT_LIMIT
+
     # Build context from chunks (SearchResult has page_title property and content attribute)
     context_parts = []
     for i, chunk in enumerate(chunks, 1):
         context_parts.append(
-            f"[Source {i}: {chunk.page_title}]\n{chunk.content[:1000]}"
+            f"[Source {i}: {chunk.page_title}]\n{chunk.content[:content_limit]}"
         )
     context = "\n\n---\n\n".join(context_parts)
 
@@ -89,7 +161,7 @@ PREVIOUS CONVERSATION:
 (Use this context to understand what the user is asking about and provide continuity)
 """
 
-    prompt = f"""You are Keboola's internal knowledge base assistant. Answer questions ONLY based on the provided context documents.
+    prompt = f"""You are Keboola's internal knowledge base assistant. Answer questions based on the provided context documents.
 
 CRITICAL RULES:
 - ONLY use information explicitly stated in the context documents below.
@@ -104,7 +176,9 @@ CURRENT QUESTION: {question}
 
 INSTRUCTIONS:
 - Answer based strictly on the context documents above.
-- Be concise and helpful. Use bullet points for multiple items.
+- Be thorough and detailed. Include all relevant information from the sources.
+- Use bullet points, lists, and structured formatting for clarity.
+- If multiple sources contain relevant information, synthesize them into a comprehensive answer.
 - If the documents only partially answer the question, share what IS available and note what's missing.
 - Do NOT invent tool names, process steps, or policies not mentioned in the documents.
 
@@ -112,19 +186,19 @@ Provide your answer:"""
 
     try:
         llm = await get_llm()
-        logger.info(f"Using LLM provider: {llm.provider_name}")
+        logger.info("Using LLM provider: %s", llm.provider_name)
 
         # Skip health check - generate() has proper retry logic and error handling
         answer = await llm.generate(prompt)
         return answer.strip()
     except LLMError as e:
-        logger.error(f"LLM provider error: {e}")
+        logger.error("LLM provider error: %s", e)
         return (
             f"I found {len(chunks)} relevant documents but couldn't generate "
             f"an answer at this time. Please try again later."
         )
     except Exception as e:
-        logger.error(f"LLM generation failed: {e}")
+        logger.error("LLM generation failed: %s", e)
         return (
             f"I found {len(chunks)} relevant documents but couldn't generate "
             f"an answer at this time. Please try again later."

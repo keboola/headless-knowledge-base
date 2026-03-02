@@ -23,7 +23,7 @@ from knowledge_base.lifecycle import (
     process_thread_message,
     record_bot_response,
 )
-from knowledge_base.core.qa import search_knowledge, generate_answer
+from knowledge_base.core.qa import search_with_expansion, generate_answer
 from knowledge_base.search.models import SearchResult
 from knowledge_base.slack.modals import (
     build_incorrect_feedback_modal,
@@ -312,12 +312,14 @@ def create_app() -> App:
     return app
 
 
-async def _search_chunks(query: str, limit: int = 5) -> list[SearchResult]:
-    """Search for relevant chunks using Graphiti hybrid search.
+async def _search_chunks(query: str, limit: int | None = None) -> list[SearchResult]:
+    """Search for relevant chunks using Graphiti hybrid search with query expansion.
 
-    Delegates to core.qa.search_knowledge for reusability across interfaces.
+    Delegates to core.qa.search_with_expansion for reusability across interfaces.
+    Uses LLM-based query expansion to generate multiple search variants for
+    better recall on broad questions.
     """
-    return await search_knowledge(query, limit)
+    return await search_with_expansion(query, limit)
 
 
 async def _generate_answer(
