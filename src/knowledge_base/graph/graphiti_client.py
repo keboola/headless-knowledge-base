@@ -196,10 +196,19 @@ class GraphitiClient:
         )
         graphiti.group_id = self.group_id
 
-        # Initialize the graph schema
+        # Initialize the graph schema (range + fulltext indices)
         await graphiti.build_indices_and_constraints()
 
-        logger.info(f"Neo4j connected at {self.neo4j_uri}")
+        # Create HNSW vector indices and inject custom search interface
+        # Graphiti-core does NOT create vector indices -- without these,
+        # vector similarity searches are brute-force O(N) scans.
+        from knowledge_base.graph.vector_indices import create_vector_indices
+        from knowledge_base.graph.vector_search import Neo4jVectorSearchInterface
+
+        await create_vector_indices(neo4j_driver)
+        neo4j_driver.search_interface = Neo4jVectorSearchInterface()
+
+        logger.info(f"Neo4j connected at {self.neo4j_uri} (HNSW vector search enabled)")
         return graphiti
 
     def _get_llm_client(self):
