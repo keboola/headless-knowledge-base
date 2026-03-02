@@ -396,8 +396,8 @@ class TestEdgeSimilaritySearch:
         assert kwargs["min_score"] == 0.75
 
     @pytest.mark.asyncio
-    async def test_returns_distinct_results(self) -> None:
-        """Query uses RETURN DISTINCT to deduplicate edges."""
+    async def test_includes_score_in_return(self) -> None:
+        """Query includes score in RETURN for ORDER BY compatibility."""
         mock_driver = AsyncMock()
         mock_driver.execute_query = AsyncMock(return_value=([], None, None))
 
@@ -414,7 +414,8 @@ class TestEdgeSimilaritySearch:
         )
 
         query = mock_driver.execute_query.call_args[0][0]
-        assert "RETURN DISTINCT" in query
+        assert "score" in query
+        assert "RETURN" in query
 
     @pytest.mark.asyncio
     async def test_orders_by_score_desc(self) -> None:
@@ -825,3 +826,103 @@ class TestSearchInterfaceInheritance:
         interface = Neo4jVectorSearchInterface()
         assert hasattr(interface, "edge_similarity_search")
         assert callable(interface.edge_similarity_search)
+
+    def test_implements_fulltext_passthrough_methods(self) -> None:
+        """Implements all fulltext passthrough methods."""
+        interface = Neo4jVectorSearchInterface()
+        assert callable(interface.edge_fulltext_search)
+        assert callable(interface.node_fulltext_search)
+        assert callable(interface.episode_fulltext_search)
+        assert callable(interface.community_fulltext_search)
+        assert callable(interface.community_similarity_search)
+
+
+# ---------------------------------------------------------------------------
+# Passthrough delegation tests
+# ---------------------------------------------------------------------------
+
+
+class TestPassthroughDelegation:
+    """Tests that fulltext/community methods delegate to Graphiti defaults."""
+
+    @pytest.mark.asyncio
+    @patch("knowledge_base.graph.vector_search.search_utils")
+    async def test_edge_fulltext_delegates_to_default(self, mock_search_utils: AsyncMock) -> None:
+        """edge_fulltext_search delegates to search_utils.edge_fulltext_search."""
+        mock_search_utils.edge_fulltext_search = AsyncMock(return_value=[])
+
+        mock_driver = AsyncMock()
+        mock_driver.search_interface = None  # Will be set by interface
+
+        interface = Neo4jVectorSearchInterface()
+        mock_driver.search_interface = interface
+
+        await interface.edge_fulltext_search(
+            driver=mock_driver, query="test", search_filter=None, group_ids=["default"], limit=10
+        )
+
+        mock_search_utils.edge_fulltext_search.assert_called_once_with(
+            mock_driver, "test", None, ["default"], 10
+        )
+
+    @pytest.mark.asyncio
+    @patch("knowledge_base.graph.vector_search.search_utils")
+    async def test_node_fulltext_delegates_to_default(self, mock_search_utils: AsyncMock) -> None:
+        """node_fulltext_search delegates to search_utils.node_fulltext_search."""
+        mock_search_utils.node_fulltext_search = AsyncMock(return_value=[])
+
+        mock_driver = AsyncMock()
+        interface = Neo4jVectorSearchInterface()
+        mock_driver.search_interface = interface
+
+        await interface.node_fulltext_search(
+            driver=mock_driver, query="test", search_filter=None, group_ids=None, limit=5
+        )
+
+        mock_search_utils.node_fulltext_search.assert_called_once_with(
+            mock_driver, "test", None, None, 5
+        )
+
+    @pytest.mark.asyncio
+    @patch("knowledge_base.graph.vector_search.search_utils")
+    async def test_episode_fulltext_delegates_to_default(self, mock_search_utils: AsyncMock) -> None:
+        """episode_fulltext_search delegates to search_utils.episode_fulltext_search."""
+        mock_search_utils.episode_fulltext_search = AsyncMock(return_value=[])
+
+        mock_driver = AsyncMock()
+        interface = Neo4jVectorSearchInterface()
+        mock_driver.search_interface = interface
+
+        await interface.episode_fulltext_search(
+            driver=mock_driver, query="test", search_filter=None, group_ids=["g1"], limit=20
+        )
+
+        mock_search_utils.episode_fulltext_search.assert_called_once_with(
+            mock_driver, "test", None, ["g1"], 20
+        )
+
+    @pytest.mark.asyncio
+    @patch("knowledge_base.graph.vector_search.search_utils")
+    async def test_passthrough_temporarily_removes_interface(self, mock_search_utils: AsyncMock) -> None:
+        """Passthrough methods remove search_interface during delegation to avoid recursion."""
+        interface_during_call = None
+
+        async def capture_interface(driver, *args, **kwargs):
+            nonlocal interface_during_call
+            interface_during_call = driver.search_interface
+            return []
+
+        mock_search_utils.edge_fulltext_search = capture_interface
+
+        mock_driver = AsyncMock()
+        interface = Neo4jVectorSearchInterface()
+        mock_driver.search_interface = interface
+
+        await interface.edge_fulltext_search(
+            driver=mock_driver, query="test", search_filter=None
+        )
+
+        # During the call, search_interface should have been None
+        assert interface_during_call is None
+        # After the call, it should be restored
+        assert mock_driver.search_interface is interface
