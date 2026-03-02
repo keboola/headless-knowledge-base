@@ -87,7 +87,11 @@ class Settings(BaseSettings):
     ADMIN_PASSWORD: str = "changeme"  # MUST be changed in production
 
     # Search
-    SEARCH_TOP_K: int = 10  # Default number of results (still used)
+    SEARCH_TOP_K: int = 10  # Default number of results (legacy, used by HybridRetriever fallback)
+    SEARCH_DEFAULT_LIMIT: int = 20  # Default search result limit for Q&A pipeline
+    SEARCH_CHUNK_CONTENT_LIMIT: int = 4000  # Max chars per chunk in LLM context
+    SEARCH_QUERY_EXPANSION_ENABLED: bool = True  # Enable LLM-based query expansion
+    SEARCH_QUERY_EXPANSION_MAX_VARIANTS: int = 3  # Max query variants including original
 
     # Graph Database (Graphiti + Neo4j)
     GRAPH_BACKEND: str = "neo4j"  # "neo4j" for all environments

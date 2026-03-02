@@ -537,7 +537,7 @@ class TestExecuteToolUnknown:
     async def test_tool_execution_exception_returns_error(self):
         """If a tool raises an exception, it should be caught and returned as text."""
         with patch(
-            "knowledge_base.core.qa.search_knowledge",
+            "knowledge_base.core.qa.search_with_expansion",
             new_callable=AsyncMock,
             side_effect=RuntimeError("connection lost"),
         ):

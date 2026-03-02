@@ -231,20 +231,20 @@ async def _execute_ask_question(
     user: dict[str, Any],
 ) -> list[TextContent]:
     """Execute ask_question tool."""
-    from knowledge_base.core.qa import generate_answer, search_knowledge
+    from knowledge_base.core.qa import generate_answer, search_with_expansion
 
     question = arguments["question"]
     conversation_history = arguments.get("conversation_history")
 
-    # Search for relevant chunks
-    chunks = await search_knowledge(question, limit=5)
+    # Search for relevant chunks with query expansion
+    chunks = await search_with_expansion(question)
 
     # Generate answer
     answer = await generate_answer(question, chunks, conversation_history)
 
     # Build sources section
     sources = []
-    for chunk in chunks[:3]:
+    for chunk in chunks[:5]:
         metadata = chunk.metadata if hasattr(chunk, "metadata") else {}
         url = metadata.get("url", "")
         title = chunk.page_title if hasattr(chunk, "page_title") else "Unknown"
