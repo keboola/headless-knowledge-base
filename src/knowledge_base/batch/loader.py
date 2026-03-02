@@ -399,15 +399,22 @@ class Neo4jBulkLoader:
         await self._execute_batch(query, data, label="edge_embeddings")
 
     async def build_indices(self) -> None:
-        """Create all range + fulltext indices required by Graphiti search.
+        """Create all indices required by Graphiti search.
 
-        Delegates to the Graphiti client's ``build_indices_and_constraints``
-        method which handles index creation idempotently.
+        Creates range + fulltext indices via Graphiti, then adds HNSW vector
+        indices for fast similarity search (Graphiti doesn't create these).
         """
+        from knowledge_base.graph.vector_indices import create_vector_indices
+
         logger.info("Building Neo4j indices and constraints via Graphiti")
         graphiti = await self._graphiti_client.get_client()
         await graphiti.build_indices_and_constraints()
-        logger.info("Neo4j indices and constraints created successfully")
+
+        # Create HNSW vector indices (not created by Graphiti)
+        logger.info("Creating HNSW vector indices")
+        await create_vector_indices(graphiti.driver)
+
+        logger.info("Neo4j indices and constraints created successfully (including HNSW vector)")
 
     # ------------------------------------------------------------------
     # Internal helpers
