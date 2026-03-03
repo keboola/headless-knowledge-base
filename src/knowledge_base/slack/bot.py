@@ -497,24 +497,62 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
             logger.error(f"Fallback 'Thinking...' also failed: {e2}", exc_info=True)
             return
 
-    # Get conversation history for this thread
-    conversation_history = _get_conversation_history(thread_ts)
+    thinking_ts = thinking_msg.get("ts")
 
-    # Search for relevant chunks
-    chunks = await _search_chunks(text)
-    logger.info(f"Search returned {len(chunks)} chunks")
+    # Start a background progress ticker that updates the message every 7 seconds
+    progress_messages = [
+        "Searching the knowledge base...",
+        "Waking up the agents...",
+        "Scanning the knowledge graph...",
+        "Exploring related topics...",
+        "Gathering relevant documents...",
+        "Cross-referencing sources...",
+        "Reading through the results...",
+        "Connecting the dots...",
+        "Composing a comprehensive answer...",
+        "Almost there, polishing the response...",
+        "Putting the finishing touches...",
+    ]
+    progress_stop = asyncio.Event()
 
-    # Record access for each chunk
-    for chunk in chunks:
-        await record_chunk_access(
-            chunk_id=chunk.chunk_id,
-            slack_user_id=user_id,
-            query_context=text[:500],
-        )
+    async def _progress_ticker() -> None:
+        """Update the thinking message with rotating status every 7 seconds."""
+        if not thinking_ts:
+            return
+        for msg in progress_messages:
+            if progress_stop.is_set():
+                return
+            try:
+                await async_call(
+                    client.chat_update,
+                    channel=channel,
+                    ts=thinking_ts,
+                    text=msg,
+                )
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(progress_stop.wait(), timeout=7.0)
+                return  # Stop signal received
+            except asyncio.TimeoutError:
+                pass  # Time to show next message
 
-    # Generate answer with conversation context
-    answer = await _generate_answer(text, chunks, conversation_history)
-    logger.info(f"Generated answer: {len(answer)} chars")
+    ticker_task = asyncio.ensure_future(_progress_ticker())
+
+    try:
+        # Get conversation history for this thread
+        conversation_history = _get_conversation_history(thread_ts)
+
+        # Search for relevant chunks
+        chunks = await _search_chunks(text)
+        logger.info(f"Search returned {len(chunks)} chunks")
+
+        # Generate answer with conversation context (don't block on access recording)
+        answer = await _generate_answer(text, chunks, conversation_history)
+        logger.info(f"Generated answer: {len(answer)} chars")
+    finally:
+        progress_stop.set()
+        await ticker_task
 
     # Store this exchange in conversation history
     _add_to_conversation(thread_ts, "user", text)
@@ -536,7 +574,6 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
     # Truncate fallback text for Slack's message limit (40k chars)
     fallback_text = answer[:4000] if len(answer) > 4000 else answer
 
-    thinking_ts = thinking_msg.get("ts")
     if not thinking_ts:
         logger.error("No timestamp in thinking message response, cannot update")
         return
@@ -596,6 +633,29 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
             logger.warning(f"Failed to record bot response: {be}")
     except Exception as e:
         logger.error(f"Failed to post feedback buttons: {e}")
+
+    # Record access for each chunk (fire-and-forget, don't block the response)
+    asyncio.ensure_future(_record_chunk_accesses(chunks, user_id, text))
+
+
+async def _record_chunk_accesses(
+    chunks: list,
+    user_id: str,
+    query_text: str,
+) -> None:
+    """Record access for all chunks in the background (parallel)."""
+    tasks = [
+        record_chunk_access(
+            chunk_id=chunk.chunk_id,
+            slack_user_id=user_id,
+            query_context=query_text[:500],
+        )
+        for chunk in chunks
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.warning("Failed to record chunk access for %s: %s", chunks[i].chunk_id, result)
 
 
 async def _handle_feedback_action(body: dict, client: WebClient) -> None:
