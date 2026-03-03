@@ -499,32 +499,60 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
 
     thinking_ts = thinking_msg.get("ts")
 
-    async def _update_status(status_text: str) -> None:
-        """Update the thinking message with a progress status."""
+    # Start a background progress ticker that updates the message every 7 seconds
+    progress_messages = [
+        "Searching the knowledge base...",
+        "Waking up the agents...",
+        "Scanning the knowledge graph...",
+        "Exploring related topics...",
+        "Gathering relevant documents...",
+        "Cross-referencing sources...",
+        "Reading through the results...",
+        "Connecting the dots...",
+        "Composing a comprehensive answer...",
+        "Almost there, polishing the response...",
+        "Putting the finishing touches...",
+    ]
+    progress_stop = asyncio.Event()
+
+    async def _progress_ticker() -> None:
+        """Update the thinking message with rotating status every 7 seconds."""
         if not thinking_ts:
             return
-        try:
-            await async_call(
-                client.chat_update,
-                channel=channel,
-                ts=thinking_ts,
-                text=status_text,
-            )
-        except Exception:
-            pass  # Non-critical, don't interrupt the pipeline
+        for msg in progress_messages:
+            if progress_stop.is_set():
+                return
+            try:
+                await async_call(
+                    client.chat_update,
+                    channel=channel,
+                    ts=thinking_ts,
+                    text=msg,
+                )
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(progress_stop.wait(), timeout=7.0)
+                return  # Stop signal received
+            except asyncio.TimeoutError:
+                pass  # Time to show next message
 
-    # Get conversation history for this thread
-    conversation_history = _get_conversation_history(thread_ts)
+    ticker_task = asyncio.ensure_future(_progress_ticker())
 
-    # Search for relevant chunks
-    await _update_status("Searching knowledge base...")
-    chunks = await _search_chunks(text)
-    logger.info(f"Search returned {len(chunks)} chunks")
+    try:
+        # Get conversation history for this thread
+        conversation_history = _get_conversation_history(thread_ts)
 
-    # Generate answer with conversation context (don't block on access recording)
-    await _update_status(f"Generating answer from {len(chunks)} sources...")
-    answer = await _generate_answer(text, chunks, conversation_history)
-    logger.info(f"Generated answer: {len(answer)} chars")
+        # Search for relevant chunks
+        chunks = await _search_chunks(text)
+        logger.info(f"Search returned {len(chunks)} chunks")
+
+        # Generate answer with conversation context (don't block on access recording)
+        answer = await _generate_answer(text, chunks, conversation_history)
+        logger.info(f"Generated answer: {len(answer)} chars")
+    finally:
+        progress_stop.set()
+        await ticker_task
 
     # Store this exchange in conversation history
     _add_to_conversation(thread_ts, "user", text)
