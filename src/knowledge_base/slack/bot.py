@@ -723,39 +723,7 @@ async def _handle_feedback_action(body: dict, client: WebClient) -> None:
             logger.error(f"Failed to open feedback modal: {e}")
             # Fall through to direct submission as fallback
 
-    # Direct submission for 'helpful' feedback (or modal fallback)
-    try:
-        user_info = await client.users_info(user=user_id)
-        username = user_info["user"]["name"]
-    except Exception:
-        username = user_id
-
-    # Submit feedback for each chunk
-    for chunk_id in chunk_ids:
-        await submit_feedback(
-            chunk_id=chunk_id,
-            slack_user_id=user_id,
-            slack_username=username,
-            feedback_type=feedback_type,
-            slack_channel_id=channel,
-            query_context=None,
-            conversation_thread_ts=message_ts,
-        )
-
-    # Check for auto-escalation on negative feedback (fallback path only)
-    if feedback_type in ("outdated", "incorrect", "confusing"):
-        try:
-            from knowledge_base.slack.admin_escalation import check_auto_escalation
-            for chunk_id in chunk_ids:
-                await check_auto_escalation(chunk_id, feedback_type, client, channel)
-        except Exception as ae:
-            logger.warning(f"Failed to check auto-escalation: {ae}")
-
-    # Clean up pending feedback (but keep copy for escalation)
-    chunk_ids_copy = chunk_ids.copy()
-    pending_feedback.pop(message_ts, None)
-
-    # Update the feedback buttons to show submitted
+    # Update the feedback buttons to show submitted IMMEDIATELY (before slow DB writes)
     feedback_text = {
         "helpful": "Thanks! Glad it helped!",
         "outdated": "Thanks! We'll review this content.",
@@ -763,7 +731,6 @@ async def _handle_feedback_action(body: dict, client: WebClient) -> None:
         "confusing": "Thanks! We'll try to clarify.",
     }
 
-    # Remove buttons and show thank you
     try:
         await client.chat_update(
             channel=channel,
@@ -781,6 +748,63 @@ async def _handle_feedback_action(body: dict, client: WebClient) -> None:
         )
     except Exception as e:
         logger.error(f"Failed to update feedback message: {e}")
+
+    # Clean up pending feedback
+    pending_feedback.pop(message_ts, None)
+
+    # Submit feedback for each chunk in background (fire-and-forget)
+    asyncio.ensure_future(_submit_feedback_background(
+        chunk_ids=chunk_ids,
+        user_id=user_id,
+        feedback_type=feedback_type,
+        channel=channel,
+        message_ts=message_ts,
+        client=client,
+    ))
+
+
+async def _submit_feedback_background(
+    chunk_ids: list[str],
+    user_id: str,
+    feedback_type: str,
+    channel: str,
+    message_ts: str,
+    client: Any,
+) -> None:
+    """Submit feedback for all chunks in the background (parallel)."""
+    try:
+        user_info = await client.users_info(user=user_id)
+        username = user_info["user"]["name"]
+    except Exception:
+        username = user_id
+
+    tasks = [
+        submit_feedback(
+            chunk_id=chunk_id,
+            slack_user_id=user_id,
+            slack_username=username,
+            feedback_type=feedback_type,
+            slack_channel_id=channel,
+            query_context=None,
+            conversation_thread_ts=message_ts,
+        )
+        for chunk_id in chunk_ids
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.warning("Failed to submit feedback for %s: %s", chunk_ids[i], result)
+
+    logger.info("Submitted %s feedback for %d chunks", feedback_type, len(chunk_ids))
+
+    # Check for auto-escalation on negative feedback
+    if feedback_type in ("outdated", "incorrect", "confusing"):
+        try:
+            from knowledge_base.slack.admin_escalation import check_auto_escalation
+            for chunk_id in chunk_ids:
+                await check_auto_escalation(chunk_id, feedback_type, client, channel)
+        except Exception as ae:
+            logger.warning(f"Failed to check auto-escalation: {ae}")
 
     # Offer admin help for negative feedback (fallback path only)
     if feedback_type in ("outdated", "incorrect", "confusing"):
