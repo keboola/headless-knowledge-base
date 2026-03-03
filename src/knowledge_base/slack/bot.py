@@ -497,14 +497,32 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
             logger.error(f"Fallback 'Thinking...' also failed: {e2}", exc_info=True)
             return
 
+    thinking_ts = thinking_msg.get("ts")
+
+    async def _update_status(status_text: str) -> None:
+        """Update the thinking message with a progress status."""
+        if not thinking_ts:
+            return
+        try:
+            await async_call(
+                client.chat_update,
+                channel=channel,
+                ts=thinking_ts,
+                text=status_text,
+            )
+        except Exception:
+            pass  # Non-critical, don't interrupt the pipeline
+
     # Get conversation history for this thread
     conversation_history = _get_conversation_history(thread_ts)
 
     # Search for relevant chunks
+    await _update_status("Searching knowledge base...")
     chunks = await _search_chunks(text)
     logger.info(f"Search returned {len(chunks)} chunks")
 
     # Generate answer with conversation context (don't block on access recording)
+    await _update_status(f"Generating answer from {len(chunks)} sources...")
     answer = await _generate_answer(text, chunks, conversation_history)
     logger.info(f"Generated answer: {len(answer)} chars")
 
@@ -528,7 +546,6 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
     # Truncate fallback text for Slack's message limit (40k chars)
     fallback_text = answer[:4000] if len(answer) > 4000 else answer
 
-    thinking_ts = thinking_msg.get("ts")
     if not thinking_ts:
         logger.error("No timestamp in thinking message response, cannot update")
         return
