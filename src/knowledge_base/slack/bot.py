@@ -504,15 +504,7 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
     chunks = await _search_chunks(text)
     logger.info(f"Search returned {len(chunks)} chunks")
 
-    # Record access for each chunk
-    for chunk in chunks:
-        await record_chunk_access(
-            chunk_id=chunk.chunk_id,
-            slack_user_id=user_id,
-            query_context=text[:500],
-        )
-
-    # Generate answer with conversation context
+    # Generate answer with conversation context (don't block on access recording)
     answer = await _generate_answer(text, chunks, conversation_history)
     logger.info(f"Generated answer: {len(answer)} chars")
 
@@ -596,6 +588,29 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
             logger.warning(f"Failed to record bot response: {be}")
     except Exception as e:
         logger.error(f"Failed to post feedback buttons: {e}")
+
+    # Record access for each chunk (fire-and-forget, don't block the response)
+    asyncio.ensure_future(_record_chunk_accesses(chunks, user_id, text))
+
+
+async def _record_chunk_accesses(
+    chunks: list,
+    user_id: str,
+    query_text: str,
+) -> None:
+    """Record access for all chunks in the background (parallel)."""
+    tasks = [
+        record_chunk_access(
+            chunk_id=chunk.chunk_id,
+            slack_user_id=user_id,
+            query_context=query_text[:500],
+        )
+        for chunk in chunks
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.warning("Failed to record chunk access for %s: %s", chunks[i].chunk_id, result)
 
 
 async def _handle_feedback_action(body: dict, client: WebClient) -> None:
