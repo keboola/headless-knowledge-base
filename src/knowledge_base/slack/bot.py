@@ -816,7 +816,7 @@ async def _submit_feedback_background(
                 user_id=user_id,
                 message_ts=message_ts,
                 feedback_type=feedback_type,
-                chunk_ids=chunk_ids_copy,
+                chunk_ids=chunk_ids,
             )
         except Exception as ae:
             logger.warning(f"Failed to offer admin help: {ae}")

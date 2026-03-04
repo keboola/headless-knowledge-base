@@ -5,6 +5,8 @@ ARCHITECTURE NOTE (per docs/ARCHITECTURE.md):
 - SQLite stores local models (RawPage, feedback, behavioral signals, etc.)
 """
 
+import asyncio
+
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -49,12 +51,29 @@ async_session_maker = async_sessionmaker(
 )
 
 
-async def init_db() -> None:
-    """Initialize database and create all tables."""
-    from knowledge_base.db.models import Base
+_init_db_lock = asyncio.Lock()
+_init_db_done = False
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+
+async def init_db() -> None:
+    """Initialize database and create all tables.
+
+    Safe for concurrent calls — uses a lock to ensure create_all runs
+    only once, preventing SQLite 'table already exists' race conditions
+    when multiple async handlers call init_db() simultaneously.
+    """
+    global _init_db_done
+    if _init_db_done:
+        return
+
+    async with _init_db_lock:
+        if _init_db_done:
+            return
+        from knowledge_base.db.models import Base
+
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        _init_db_done = True
 
 
 async def get_session() -> AsyncSession:
