@@ -660,7 +660,12 @@ class GraphitiBuilder:
             return {"success": False, "error": str(e)}
 
     async def get_chunk_episode(self, chunk_id: str) -> dict[str, Any] | None:
-        """Get a chunk episode by chunk_id.
+        """Get a chunk episode by chunk_id using direct Cypher query.
+
+        Uses a direct Neo4j lookup by name instead of graphiti.search() to
+        avoid expensive embedding + HNSW + BM25 overhead. This is critical
+        for background operations (access recording, feedback) that run for
+        many chunks in parallel.
 
         Args:
             chunk_id: The chunk ID to look up
@@ -673,33 +678,39 @@ class GraphitiBuilder:
 
         try:
             graphiti = await self._get_graphiti()
+            driver = graphiti.driver
 
-            # Search for episode by chunk_id (stored as name)
-            results = await graphiti.search(
-                query=chunk_id,
-                num_results=5,
-                group_ids=[self.group_id],
+            records, _, _ = await driver.execute_query(
+                """
+                MATCH (ep:Episodic {name: $chunk_id})
+                WHERE ep.group_id = $group_id
+                RETURN ep.uuid as uuid, ep.name as name,
+                       ep.content as content,
+                       ep.source_description as source_desc
+                LIMIT 1
+                """,
+                chunk_id=chunk_id,
+                group_id=self.group_id,
             )
 
-            # Find exact match by name
-            for result in results:
-                if hasattr(result, 'name') and result.name == chunk_id:
-                    # Parse metadata from source_description
-                    metadata = {}
-                    if hasattr(result, 'source_description') and result.source_description:
-                        try:
-                            metadata = json.loads(result.source_description)
-                        except json.JSONDecodeError:
-                            pass
+            if not records:
+                return None
 
-                    return {
-                        "chunk_id": chunk_id,
-                        "episode_uuid": str(result.uuid) if hasattr(result, 'uuid') else None,
-                        "content": result.content if hasattr(result, 'content') else None,
-                        "metadata": metadata,
-                    }
+            record = records[0]
+            metadata = {}
+            source_desc = record.get("source_desc")
+            if source_desc:
+                try:
+                    metadata = json.loads(source_desc)
+                except json.JSONDecodeError:
+                    pass
 
-            return None
+            return {
+                "chunk_id": chunk_id,
+                "episode_uuid": record.get("uuid"),
+                "content": record.get("content", "") or "",
+                "metadata": metadata,
+            }
 
         except Exception as e:
             logger.error(f"Failed to get chunk episode {chunk_id}: {e}")
@@ -727,7 +738,8 @@ class GraphitiBuilder:
     ) -> bool:
         """Update the quality score for a chunk in Graphiti.
 
-        This updates the metadata stored in the episode's source_description.
+        Uses direct Cypher to update source_description JSON instead of
+        graphiti.add_episode() which triggers expensive LLM entity extraction.
 
         Args:
             chunk_id: The chunk ID to update
@@ -742,13 +754,11 @@ class GraphitiBuilder:
             return False
 
         try:
-            # Get current episode
             episode = await self.get_chunk_episode(chunk_id)
             if not episode:
                 logger.warning(f"Chunk {chunk_id} not found for quality update")
                 return False
 
-            # Update metadata
             metadata = episode.get('metadata', {})
             metadata['quality_score'] = max(0.0, min(100.0, new_score))
 
@@ -756,28 +766,16 @@ class GraphitiBuilder:
                 current_count = metadata.get('feedback_count', 0)
                 metadata['feedback_count'] = current_count + 1
 
-            # Re-add episode with updated metadata
-            # (Graphiti doesn't have direct update, so we use add_episode which upserts)
             graphiti = await self._get_graphiti()
-
-            content = episode.get('content', '')
-            if not content:
-                logger.warning(f"No content found for chunk {chunk_id}, cannot update")
-                return False
-
-            # Determine reference time from metadata
-            updated_at = metadata.get('updated_at', '')
-            try:
-                ref_time = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
-            except (ValueError, AttributeError):
-                ref_time = datetime.utcnow()
-
-            await graphiti.add_episode(
-                name=chunk_id,
-                episode_body=content,
-                source_description=json.dumps(metadata, default=str),
-                reference_time=ref_time,
+            await graphiti.driver.execute_query(
+                """
+                MATCH (ep:Episodic {name: $chunk_id})
+                WHERE ep.group_id = $group_id
+                SET ep.source_description = $source_desc
+                """,
+                chunk_id=chunk_id,
                 group_id=self.group_id,
+                source_desc=json.dumps(metadata, default=str),
             )
 
             logger.debug(f"Updated quality score for {chunk_id}: {new_score}")
@@ -794,6 +792,9 @@ class GraphitiBuilder:
     ) -> bool:
         """Update metadata for a chunk in Graphiti.
 
+        Uses direct Cypher to update source_description JSON instead of
+        graphiti.add_episode() which triggers expensive LLM entity extraction.
+
         Args:
             chunk_id: The chunk ID to update
             metadata_updates: Dict of metadata fields to update
@@ -805,37 +806,24 @@ class GraphitiBuilder:
             return False
 
         try:
-            # Get current episode
             episode = await self.get_chunk_episode(chunk_id)
             if not episode:
                 logger.warning(f"Chunk {chunk_id} not found for metadata update")
                 return False
 
-            # Merge updates into existing metadata
             metadata = episode.get('metadata', {})
             metadata.update(metadata_updates)
 
-            # Re-add episode with updated metadata
             graphiti = await self._get_graphiti()
-
-            content = episode.get('content', '')
-            if not content:
-                logger.warning(f"No content found for chunk {chunk_id}, cannot update metadata")
-                return False
-
-            # Determine reference time from metadata
-            updated_at = metadata.get('updated_at', '')
-            try:
-                ref_time = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
-            except (ValueError, AttributeError):
-                ref_time = datetime.utcnow()
-
-            await graphiti.add_episode(
-                name=chunk_id,
-                episode_body=content,
-                source_description=json.dumps(metadata, default=str),
-                reference_time=ref_time,
+            await graphiti.driver.execute_query(
+                """
+                MATCH (ep:Episodic {name: $chunk_id})
+                WHERE ep.group_id = $group_id
+                SET ep.source_description = $source_desc
+                """,
+                chunk_id=chunk_id,
                 group_id=self.group_id,
+                source_desc=json.dumps(metadata, default=str),
             )
 
             logger.debug(f"Updated metadata for {chunk_id}")
