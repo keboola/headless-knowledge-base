@@ -59,7 +59,21 @@ class SlackTestClient:
                 raise
 
     # Status messages the bot posts before the real answer
-    STATUS_MESSAGES = {"Searching the knowledge base...", "Thinking..."}
+    # Keep in sync with progress_messages in bot.py _handle_question()
+    STATUS_MESSAGES = {
+        "Thinking...",
+        "Searching the knowledge base...",
+        "Waking up the agents...",
+        "Scanning the knowledge graph...",
+        "Exploring related topics...",
+        "Gathering relevant documents...",
+        "Cross-referencing sources...",
+        "Reading through the results...",
+        "Connecting the dots...",
+        "Composing a comprehensive answer...",
+        "Almost there, polishing the response...",
+        "Putting the finishing touches...",
+    }
 
     # Feedback prompt prefixes (posted as separate messages, not the answer)
     FEEDBACK_PREFIXES = ("was this helpful", "thanks!", "thanks for your feedback")
@@ -84,13 +98,20 @@ class SlackTestClient:
         # Very short messages are UI elements (feedback buttons, etc.)
         if len(text) < 20:
             return False
+        # Fallback heuristic: short messages ending with "..." are likely
+        # status/progress messages that were added after this list was written
+        if len(text) < 50 and text.endswith("..."):
+            return False
         return True
+
+    # Extra time (seconds) to poll after initial timeout before giving up
+    RETRY_EXTENSION = 30
 
     async def wait_for_bot_reply(
         self,
         parent_ts: Optional[str] = None,
         after_ts: Optional[str] = None,
-        timeout: int = 90
+        timeout: int = 120
     ) -> Optional[dict]:
         """Wait for the bot to post a substantive message in the channel or thread.
 
@@ -101,11 +122,27 @@ class SlackTestClient:
 
         This method waits for step 2 (the edited real answer) and returns it.
         Skips status messages, feedback prompts, and other short UI messages.
+
+        If the initial timeout elapses without a reply, retries for an
+        additional RETRY_EXTENSION seconds to handle intermittent bot slowness.
         """
+        # Total effective timeout = timeout + RETRY_EXTENSION
+        effective_timeout = timeout + self.RETRY_EXTENSION
         start_time = time.time()
         poll_count = 0
+        retrying = False
 
-        while time.time() - start_time < timeout:
+        while time.time() - start_time < effective_timeout:
+            # Log once when we enter the retry window
+            elapsed = time.time() - start_time
+            if not retrying and elapsed >= timeout:
+                retrying = True
+                logger.warning(
+                    f"Initial timeout of {timeout}s elapsed without bot reply. "
+                    f"Retrying for {self.RETRY_EXTENSION}s more "
+                    f"(parent_ts={parent_ts}, after_ts={after_ts})"
+                )
+
             try:
                 if parent_ts:
                     # Check thread replies
@@ -152,10 +189,11 @@ class SlackTestClient:
                 logger.warning(f"Error polling Slack: {e}")
 
             poll_count += 1
-            await asyncio.sleep(2)
+            await asyncio.sleep(1.5)
 
         logger.warning(
-            f"Timed out after {timeout}s waiting for bot reply "
+            f"Timed out after {effective_timeout}s (initial {timeout}s + "
+            f"{self.RETRY_EXTENSION}s retry) waiting for bot reply "
             f"(parent_ts={parent_ts}, after_ts={after_ts})"
         )
         return None

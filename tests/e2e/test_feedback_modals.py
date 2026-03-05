@@ -282,11 +282,11 @@ class TestModalSubmissionHandlers:
                     "outdated_block": {
                         "outdated_input": {"value": "The API endpoint changed"}
                     },
-                    "current_block": {
-                        "current_input": {"value": "New endpoint is /api/v2"}
+                    "current_info_block": {
+                        "current_info_input": {"value": "New endpoint is /api/v2"}
                     },
-                    "when_block": {
-                        "when_input": {"value": "Last week"}
+                    "when_changed_block": {
+                        "when_changed_input": {"value": "Last week"}
                     },
                 }
             },
@@ -326,8 +326,8 @@ class TestModalSubmissionHandlers:
             }),
             "state": {
                 "values": {
-                    "confusion_block": {
-                        "confusion_select": {
+                    "confusion_type_block": {
+                        "confusion_type_select": {
                             "selected_option": {
                                 "value": "too_technical",
                                 "text": {"text": "Too technical"}
@@ -556,11 +556,11 @@ class TestCorrectionEpisodeCreation:
                     "outdated_block": {
                         "outdated_input": {"value": "The API endpoint changed"}
                     },
-                    "current_block": {
-                        "current_input": {"value": "New endpoint is /api/v2"}
+                    "current_info_block": {
+                        "current_info_input": {"value": "New endpoint is /api/v2"}
                     },
-                    "when_block": {
-                        "when_input": {"value": "Last week"}
+                    "when_changed_block": {
+                        "when_changed_input": {"value": "Last week"}
                     },
                 }
             },
@@ -656,11 +656,11 @@ class TestCorrectionEpisodeCreation:
                     "outdated_block": {
                         "outdated_input": {"value": "Content is old"}
                     },
-                    "current_block": {
-                        "current_input": {"value": "   "}
+                    "current_info_block": {
+                        "current_info_input": {"value": "   "}
                     },
-                    "when_block": {
-                        "when_input": {"value": None}
+                    "when_changed_block": {
+                        "when_changed_input": {"value": None}
                     },
                 }
             },
@@ -698,8 +698,8 @@ class TestCorrectionEpisodeCreation:
             }),
             "state": {
                 "values": {
-                    "confusion_block": {
-                        "confusion_select": {
+                    "confusion_type_block": {
+                        "confusion_type_select": {
                             "selected_option": {
                                 "value": "too_technical",
                                 "text": {"text": "Too technical"}

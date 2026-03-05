@@ -8,12 +8,38 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from knowledge_base.slack.quick_knowledge import handle_create_knowledge
 from knowledge_base.slack.bot import _handle_feedback_action, pending_feedback
+from knowledge_base.db.database import init_db
 from knowledge_base.lifecycle.feedback import get_feedback_for_chunk
 
 logger = logging.getLogger(__name__)
 
 # Mark all tests in this module as e2e
 pytestmark = pytest.mark.e2e
+
+
+async def _call_feedback_action_and_wait(body, client):
+    """Call _handle_feedback_action and deterministically wait for its background task.
+
+    _handle_feedback_action uses asyncio.ensure_future() to schedule
+    _submit_feedback_background as a fire-and-forget task. Using asyncio.sleep()
+    to wait for it is inherently racy. Instead, we patch asyncio.ensure_future
+    in the bot module to capture the spawned task, then explicitly await it.
+    """
+    captured_tasks = []
+    original_ensure_future = asyncio.ensure_future
+
+    def capturing_ensure_future(coro, *args, **kwargs):
+        task = original_ensure_future(coro, *args, **kwargs)
+        captured_tasks.append(task)
+        return task
+
+    with patch("knowledge_base.slack.bot.asyncio.ensure_future", side_effect=capturing_ensure_future):
+        await _handle_feedback_action(body, client)
+
+    # Await all background tasks spawned by _handle_feedback_action
+    for task in captured_tasks:
+        await task
+
 
 @pytest.mark.asyncio
 async def test_complete_feedback_lifecycle(slack_client, db_session, e2e_config):
@@ -27,9 +53,15 @@ async def test_complete_feedback_lifecycle(slack_client, db_session, e2e_config)
     6. Simulate user clicking "Incorrect" feedback
     7. Verify quality score decreased significantly
     """
+    # Ensure database tables exist before any feedback operations.
+    # The db_session fixture creates tables on a separate engine instance;
+    # _handle_feedback_action uses the module-level engine from database.py
+    # which needs its own init_db() call to guarantee tables exist.
+    await init_db()
+
     unique_id = uuid.uuid4().hex[:8]
     fact_text = f"The official color of project {unique_id} is Ultraviolet."
-    
+
     # 1. Create Knowledge
     ack = AsyncMock()
     mock_client = MagicMock()
@@ -39,14 +71,14 @@ async def test_complete_feedback_lifecycle(slack_client, db_session, e2e_config)
         "ok": True,
         "user": {"name": "test_user"}
     }
-    
+
     command = {
         "text": fact_text,
         "user_id": "U_TEST_USER",
         "user_name": "test_user",
         "channel_id": e2e_config["channel_id"]
     }
-    
+
     with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_indexer_cls:
         mock_indexer = mock_indexer_cls.return_value
         mock_indexer.embeddings.embed = AsyncMock(return_value=[[0.1] * 768])
@@ -87,9 +119,13 @@ async def test_complete_feedback_lifecycle(slack_client, db_session, e2e_config)
         "message": {"ts": fake_message_ts}
     }
 
-    # We use sync mocks because bot.py uses synchronous WebClient
-    mock_client.chat_update = MagicMock()
-    mock_client.chat_postEphemeral = MagicMock()
+    # These methods are awaited in bot.py, so they must be AsyncMock
+    mock_client.chat_update = AsyncMock()
+    mock_client.chat_postEphemeral = AsyncMock()
+    mock_client.users_info = AsyncMock(return_value={
+        "ok": True,
+        "user": {"name": "test_user"}
+    })
 
     # Mock Graphiti for feedback quality updates
     with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
@@ -98,7 +134,7 @@ async def test_complete_feedback_lifecycle(slack_client, db_session, e2e_config)
         mock_builder.update_chunk_quality = AsyncMock(return_value=True)
         mock_builder_fn.return_value = mock_builder
 
-        await _handle_feedback_action(helpful_body, mock_client)
+        await _call_feedback_action_and_wait(helpful_body, mock_client)
 
     # 5. Verify feedback record exists in database (for analytics)
     feedbacks = await get_feedback_for_chunk(chunk_id)
@@ -113,7 +149,7 @@ async def test_complete_feedback_lifecycle(slack_client, db_session, e2e_config)
         mock_builder.update_chunk_quality = AsyncMock(return_value=True)
         mock_builder_fn.return_value = mock_builder
 
-        await _handle_feedback_action(helpful_body, mock_client)
+        await _call_feedback_action_and_wait(helpful_body, mock_client)
         # Verify Graphiti update was called with increased score
         mock_builder.update_chunk_quality.assert_called()
 
@@ -133,7 +169,7 @@ async def test_complete_feedback_lifecycle(slack_client, db_session, e2e_config)
         mock_builder.update_chunk_quality = AsyncMock(return_value=True)
         mock_builder_fn.return_value = mock_builder
 
-        await _handle_feedback_action(incorrect_body, mock_client)
+        await _call_feedback_action_and_wait(incorrect_body, mock_client)
         # Verify quality score update was called
         mock_builder.update_chunk_quality.assert_called()
 
@@ -182,10 +218,11 @@ async def test_feedback_on_multiple_chunks(slack_client, db_session, e2e_config)
     }
 
     # Mock client for _handle_feedback_action
+    # These methods are awaited in bot.py, so they must be AsyncMock
     mock_client = MagicMock()
-    mock_client.users_info.return_value = {"ok": True, "user": {"name": "test_user"}}
-    mock_client.chat_update = MagicMock()
-    mock_client.chat_postEphemeral = MagicMock()
+    mock_client.users_info = AsyncMock(return_value={"ok": True, "user": {"name": "test_user"}})
+    mock_client.chat_update = AsyncMock()
+    mock_client.chat_postEphemeral = AsyncMock()
 
     # Mock Graphiti for quality score updates
     with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
@@ -194,7 +231,7 @@ async def test_feedback_on_multiple_chunks(slack_client, db_session, e2e_config)
         mock_builder.update_chunk_quality = AsyncMock(return_value=True)
         mock_builder_fn.return_value = mock_builder
 
-        await _handle_feedback_action(body, mock_client)
+        await _call_feedback_action_and_wait(body, mock_client)
 
         # Verify Graphiti update was called for each chunk
         assert mock_builder.update_chunk_quality.call_count == len(chunk_ids)

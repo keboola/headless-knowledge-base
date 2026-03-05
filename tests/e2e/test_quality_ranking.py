@@ -32,6 +32,30 @@ logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.e2e
 
 
+async def _call_feedback_action_and_wait(body, client):
+    """Call _handle_feedback_action and deterministically wait for its background task.
+
+    _handle_feedback_action uses asyncio.ensure_future() to schedule
+    _submit_feedback_background as a fire-and-forget task. Using asyncio.sleep()
+    to wait for it is inherently racy. Instead, we patch asyncio.ensure_future
+    in the bot module to capture the spawned task, then explicitly await it.
+    """
+    captured_tasks = []
+    original_ensure_future = asyncio.ensure_future
+
+    def capturing_ensure_future(coro, *args, **kwargs):
+        task = original_ensure_future(coro, *args, **kwargs)
+        captured_tasks.append(task)
+        return task
+
+    with patch("knowledge_base.slack.bot.asyncio.ensure_future", side_effect=capturing_ensure_future):
+        await _handle_feedback_action(body, client)
+
+    # Await all background tasks spawned by _handle_feedback_action
+    for task in captured_tasks:
+        await task
+
+
 class TestQualityBasedSearchRanking:
     """Verify that quality scores affect actual search ranking in bot responses."""
 
@@ -62,7 +86,7 @@ class TestQualityBasedSearchRanking:
         ack = AsyncMock()
         mock_client = MagicMock()
         mock_client.chat_postEphemeral = AsyncMock()
-        mock_client.users_info.return_value = {"ok": True, "user": {"name": "test_user"}}
+        mock_client.users_info = AsyncMock(return_value={"ok": True, "user": {"name": "test_user"}})
 
         chunk_ids = []
 
@@ -110,8 +134,11 @@ class TestQualityBasedSearchRanking:
             assert low_chunk_data.quality_score == 100.0, "Low chunk should start at 100"
 
         # Step 2: Demote the low-quality fact with negative feedback
-        mock_client.chat_update = MagicMock()
-        mock_client.chat_postEphemeral = MagicMock()
+        # All awaited client methods must be AsyncMock to avoid
+        # "MagicMock can't be used in 'await' expression" errors
+        mock_client.chat_update = AsyncMock()
+        mock_client.chat_postEphemeral = AsyncMock()
+        mock_client.chat_postMessage = AsyncMock()
 
         # Track quality score changes through mocked Graphiti
         quality_scores = {high_chunk_id: 100.0, low_chunk_id: 100.0}
@@ -141,7 +168,7 @@ class TestQualityBasedSearchRanking:
                     "channel": {"id": e2e_config["channel_id"]},
                     "message": {"ts": fake_ts}
                 }
-                await _handle_feedback_action(feedback_body, mock_client)
+                await _call_feedback_action_and_wait(feedback_body, mock_client)
 
         # Step 3: Verify scores are now different
         assert quality_scores[high_chunk_id] == 100.0, "High quality should remain at 100"
@@ -161,7 +188,7 @@ class TestQualityBasedSearchRanking:
         )
 
         # Step 6: Wait for bot response
-        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=90)
+        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts)
         assert reply is not None, "Bot did not respond to quality ranking test question"
 
         response_text = reply.get("text", "")
@@ -195,7 +222,7 @@ class TestQualityBasedSearchRanking:
         ack = AsyncMock()
         mock_client = MagicMock()
         mock_client.chat_postEphemeral = AsyncMock()
-        mock_client.users_info.return_value = {"ok": True, "user": {"name": "test"}}
+        mock_client.users_info = AsyncMock(return_value={"ok": True, "user": {"name": "test"}})
 
         with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_indexer_cls:
             mock_indexer = mock_indexer_cls.return_value
@@ -223,8 +250,11 @@ class TestQualityBasedSearchRanking:
         quality_score = 100.0
 
         # Heavily demote with 4x incorrect feedback (100 - 4*25 = 0)
-        mock_client.chat_update = MagicMock()
-        mock_client.chat_postEphemeral = MagicMock()
+        # All awaited client methods must be AsyncMock to avoid
+        # "MagicMock can't be used in 'await' expression" errors
+        mock_client.chat_update = AsyncMock()
+        mock_client.chat_postEphemeral = AsyncMock()
+        mock_client.chat_postMessage = AsyncMock()
 
         with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
             mock_builder = MagicMock()
@@ -252,7 +282,7 @@ class TestQualityBasedSearchRanking:
                     "channel": {"id": e2e_config["channel_id"]},
                     "message": {"ts": fake_ts}
                 }
-                await _handle_feedback_action(body, mock_client)
+                await _call_feedback_action_and_wait(body, mock_client)
 
         # Verify score is 0
         assert quality_score == 0.0, f"Expected score 0, got {quality_score}"
@@ -268,7 +298,7 @@ class TestQualityBasedSearchRanking:
             f"<@{e2e_config['bot_user_id']}> {question}"
         )
 
-        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=90)
+        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts)
         assert reply is not None, "Bot did not respond"
 
         response_text = reply.get("text", "")
@@ -302,7 +332,7 @@ class TestQualityBasedSearchRanking:
         ack = AsyncMock()
         mock_client = MagicMock()
         mock_client.chat_postEphemeral = AsyncMock()
-        mock_client.users_info.return_value = {"ok": True, "user": {"name": "test"}}
+        mock_client.users_info = AsyncMock(return_value={"ok": True, "user": {"name": "test"}})
 
         chunk_ids = []
 
@@ -336,8 +366,11 @@ class TestQualityBasedSearchRanking:
         quality_score = 100.0
 
         # Give helpful feedback (score caps at 100, but records feedback count)
-        mock_client.chat_update = MagicMock()
-        mock_client.chat_postEphemeral = MagicMock()
+        # All awaited client methods must be AsyncMock to avoid
+        # "MagicMock can't be used in 'await' expression" errors
+        mock_client.chat_update = AsyncMock()
+        mock_client.chat_postEphemeral = AsyncMock()
+        mock_client.chat_postMessage = AsyncMock()
 
         with patch("knowledge_base.graph.graphiti_builder.get_graphiti_builder") as mock_builder_fn:
             mock_builder = MagicMock()
@@ -364,7 +397,7 @@ class TestQualityBasedSearchRanking:
                     "channel": {"id": e2e_config["channel_id"]},
                     "message": {"ts": fake_ts}
                 }
-                await _handle_feedback_action(body, mock_client)
+                await _call_feedback_action_and_wait(body, mock_client)
 
         # Verify feedback was recorded in analytics DB
         feedbacks = await get_feedback_for_chunk(promoted_chunk_id)
@@ -380,7 +413,7 @@ class TestQualityBasedSearchRanking:
             f"<@{e2e_config['bot_user_id']}> {question}"
         )
 
-        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=90)
+        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts)
         assert reply is not None, "Bot did not respond"
 
         response_text = reply.get("text", "")

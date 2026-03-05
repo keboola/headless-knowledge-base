@@ -427,9 +427,17 @@ class GraphitiClient:
 
     @classmethod
     def reset(cls) -> None:
-        """Reset the singleton instance (for testing)."""
+        """Reset the singleton instance (for testing).
+
+        Also resets the asyncio.Lock to avoid 'Future attached to a different loop'
+        errors when the singleton is recreated on a different event loop (e.g. in
+        pytest where each test session may use a new loop).
+        """
+        global _default_client
         cls._instance = None
         cls._initialized = False
+        cls._init_lock = None
+        _default_client = None
 
     async def check_health(self) -> bool:
         """Check if the graph database is accessible.
