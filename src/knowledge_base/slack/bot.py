@@ -704,11 +704,13 @@ async def _handle_feedback_action(body: dict, client: WebClient) -> None:
             build_modal = modal_builders[feedback_type]
 
             # Build and open the modal
+            feedback_buttons_ts = body["message"]["ts"]
             modal_view = build_modal(
                 message_ts=message_ts,
                 chunk_ids=chunk_ids,
                 channel_id=channel,
                 reporter_id=user_id,
+                feedback_buttons_ts=feedback_buttons_ts,
             )
 
             await client.views_open(

@@ -259,6 +259,19 @@ async def send_to_admin_channel(
         )
         return True
     except SlackApiError as e:
+        if e.response.get("error") == "channel_not_found" or e.response.get("error") == "not_in_channel":
+            # Bot may not be a member — try to join first
+            try:
+                await client.conversations_join(channel=admin_channel_id)
+                await client.chat_postMessage(
+                    channel=admin_channel_id,
+                    blocks=blocks,
+                    text=f"Knowledge feedback: {feedback_type} from <@{reporter_id}>",
+                )
+                return True
+            except SlackApiError as join_err:
+                logger.error(f"Failed to join and send to admin channel: {join_err}")
+                return False
         logger.error(f"Failed to send to admin channel: {e}")
         return False
 
@@ -598,6 +611,7 @@ async def confirm_feedback_to_reporter(
     reporter_id: str,
     feedback_type: str,
     owner_notified: bool,
+    thread_ts: str | None = None,
 ) -> None:
     """Send confirmation to reporter that feedback was received.
 
@@ -607,6 +621,7 @@ async def confirm_feedback_to_reporter(
         reporter_id: User who reported the issue
         feedback_type: Type of feedback submitted
         owner_notified: Whether owner was notified (vs admin channel)
+        thread_ts: Thread timestamp to post confirmation in-thread
     """
     if owner_notified:
         message = (
@@ -620,10 +635,13 @@ async def confirm_feedback_to_reporter(
         )
 
     try:
-        await client.chat_postEphemeral(
-            channel=channel_id,
-            user=reporter_id,
-            text=message,
-        )
+        kwargs: dict = {
+            "channel": channel_id,
+            "user": reporter_id,
+            "text": message,
+        }
+        if thread_ts:
+            kwargs["thread_ts"] = thread_ts
+        await client.chat_postEphemeral(**kwargs)
     except SlackApiError as e:
         logger.error(f"Failed to confirm feedback to reporter: {e}")

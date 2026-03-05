@@ -233,6 +233,11 @@ resource "google_cloud_run_v2_service" "slack_bot_staging" {
       }
 
       env {
+        name  = "KNOWLEDGE_ADMIN_CHANNEL"
+        value = "C0A6WU7EFMY"
+      }
+
+      env {
         name  = "ENVIRONMENT"
         value = "staging"
       }

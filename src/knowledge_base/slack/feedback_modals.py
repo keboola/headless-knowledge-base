@@ -20,6 +20,40 @@ from knowledge_base.slack.owner_notification import (
 
 logger = logging.getLogger(__name__)
 
+FEEDBACK_THANK_YOU = {
+    "incorrect": "Thanks! We'll investigate this.",
+    "outdated": "Thanks! We'll review this content.",
+    "confusing": "Thanks! We'll try to clarify.",
+}
+
+
+async def _update_feedback_buttons(
+    client: WebClient,
+    channel_id: str,
+    feedback_buttons_ts: str | None,
+    feedback_type: str,
+) -> None:
+    """Replace feedback buttons with a thank-you message after modal submit."""
+    if not feedback_buttons_ts:
+        return
+    try:
+        await client.chat_update(
+            channel=channel_id,
+            ts=feedback_buttons_ts,
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"_{FEEDBACK_THANK_YOU.get(feedback_type, 'Thanks for your feedback!')}_",
+                    },
+                }
+            ],
+            text=FEEDBACK_THANK_YOU.get(feedback_type, "Thanks!"),
+        )
+    except Exception as e:
+        logger.error(f"Failed to update feedback buttons: {e}")
+
 
 async def handle_incorrect_modal_submit(
     ack: Any, body: dict, client: WebClient, view: dict
@@ -43,6 +77,10 @@ async def handle_incorrect_modal_submit(
         chunk_ids = metadata.get("chunk_ids", [])
         channel_id = metadata.get("channel_id")
         reporter_id = metadata.get("reporter_id")
+        feedback_buttons_ts = metadata.get("feedback_buttons_ts")
+
+        # Replace feedback buttons with thank-you immediately
+        await _update_feedback_buttons(client, channel_id, feedback_buttons_ts, "incorrect")
 
         # Extract form values
         values = view["state"]["values"]
@@ -117,13 +155,14 @@ async def handle_incorrect_modal_submit(
             message_ts=message_ts,
         )
 
-        # Confirm to reporter
+        # Confirm to reporter (in-thread)
         await confirm_feedback_to_reporter(
             client=client,
             channel_id=channel_id,
             reporter_id=reporter_id,
             feedback_type="incorrect",
             owner_notified=owner_notified,
+            thread_ts=message_ts,
         )
 
         logger.info(
@@ -157,6 +196,10 @@ async def handle_outdated_modal_submit(
         chunk_ids = metadata.get("chunk_ids", [])
         channel_id = metadata.get("channel_id")
         reporter_id = metadata.get("reporter_id")
+        feedback_buttons_ts = metadata.get("feedback_buttons_ts")
+
+        # Replace feedback buttons with thank-you immediately
+        await _update_feedback_buttons(client, channel_id, feedback_buttons_ts, "outdated")
 
         # Extract form values
         values = view["state"]["values"]
@@ -230,13 +273,14 @@ async def handle_outdated_modal_submit(
             message_ts=message_ts,
         )
 
-        # Confirm to reporter
+        # Confirm to reporter (in-thread)
         await confirm_feedback_to_reporter(
             client=client,
             channel_id=channel_id,
             reporter_id=reporter_id,
             feedback_type="outdated",
             owner_notified=owner_notified,
+            thread_ts=message_ts,
         )
 
         logger.info(
@@ -269,6 +313,10 @@ async def handle_confusing_modal_submit(
         chunk_ids = metadata.get("chunk_ids", [])
         channel_id = metadata.get("channel_id")
         reporter_id = metadata.get("reporter_id")
+        feedback_buttons_ts = metadata.get("feedback_buttons_ts")
+
+        # Replace feedback buttons with thank-you immediately
+        await _update_feedback_buttons(client, channel_id, feedback_buttons_ts, "confusing")
 
         # Extract form values
         values = view["state"]["values"]
@@ -324,13 +372,14 @@ async def handle_confusing_modal_submit(
             message_ts=message_ts,
         )
 
-        # Confirm to reporter
+        # Confirm to reporter (in-thread)
         await confirm_feedback_to_reporter(
             client=client,
             channel_id=channel_id,
             reporter_id=reporter_id,
             feedback_type="confusing",
             owner_notified=owner_notified,
+            thread_ts=message_ts,
         )
 
         logger.info(
