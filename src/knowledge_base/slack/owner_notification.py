@@ -251,15 +251,19 @@ async def send_to_admin_channel(
         owner_notified=owner_notified,
     )
 
+    logger.info(f"Posting to admin channel ID={admin_channel_id} (env={ADMIN_CHANNEL})")
     try:
         await client.chat_postMessage(
             channel=admin_channel_id,
             blocks=blocks,
             text=f"Knowledge feedback: {feedback_type} from <@{reporter_id}>",
         )
+        logger.info("Successfully posted to admin channel")
         return True
     except SlackApiError as e:
-        if e.response.get("error") == "channel_not_found" or e.response.get("error") == "not_in_channel":
+        error_code = e.response.get("error", "unknown")
+        logger.error(f"chat.postMessage to admin channel failed: error={error_code}, channel={admin_channel_id}")
+        if error_code in ("channel_not_found", "not_in_channel"):
             # Bot may not be a member — try to join first
             try:
                 await client.conversations_join(channel=admin_channel_id)
@@ -272,7 +276,6 @@ async def send_to_admin_channel(
             except SlackApiError as join_err:
                 logger.error(f"Failed to join and send to admin channel: {join_err}")
                 return False
-        logger.error(f"Failed to send to admin channel: {e}")
         return False
 
 
