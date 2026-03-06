@@ -234,7 +234,7 @@ resource "google_cloud_run_v2_service" "slack_bot_staging" {
 
       env {
         name  = "KNOWLEDGE_ADMIN_CHANNEL"
-        value = "C0A6WU7EFMY"  # #knowledge-admins in staging workspace
+        value = var.knowledge_admin_channel_staging
       }
 
       env {

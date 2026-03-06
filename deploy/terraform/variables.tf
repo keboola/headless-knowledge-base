@@ -58,6 +58,21 @@ variable "iap_authorized_users" {
 }
 
 # -----------------------------------------------------------------------------
+# Slack Configuration
+# -----------------------------------------------------------------------------
+variable "knowledge_admin_channel_prod" {
+  description = "Slack channel ID for #knowledge-admins in production workspace (Keboola Global)"
+  type        = string
+  default     = "C0AGD7WSVC6"
+}
+
+variable "knowledge_admin_channel_staging" {
+  description = "Slack channel ID for #knowledge-admins in staging workspace"
+  type        = string
+  default     = "C0A6WU7EFMY"
+}
+
+# -----------------------------------------------------------------------------
 # Staging Environment Variables
 # -----------------------------------------------------------------------------
 variable "neo4j_auth_staging" {

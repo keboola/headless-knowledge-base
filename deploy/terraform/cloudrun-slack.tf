@@ -103,7 +103,7 @@ resource "google_cloud_run_v2_service" "slack_bot" {
 
       env {
         name  = "KNOWLEDGE_ADMIN_CHANNEL"
-        value = "C0AGD7WSVC6"  # #knowledge-admins in Keboola Global (production)
+        value = var.knowledge_admin_channel_prod
       }
 
       # Health check
