@@ -43,6 +43,28 @@ class ApprovalEngine:
     there do not block the governance workflow.
     """
 
+    _table_ready = False
+
+    async def _ensure_table(self) -> None:
+        """Create the knowledge_governance table if it doesn't exist.
+
+        Needed because the table may not exist in SQLite databases that were
+        created before the governance feature was added. Uses checkfirst=True
+        so it's safe to call repeatedly.
+        """
+        if ApprovalEngine._table_ready:
+            return
+
+        from knowledge_base.db.database import engine
+
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                KnowledgeGovernanceRecord.__table__.create,
+                checkfirst=True,
+            )
+        ApprovalEngine._table_ready = True
+        logger.info("Ensured knowledge_governance table exists")
+
     async def submit(
         self,
         chunks: list[ChunkData],
@@ -58,6 +80,8 @@ class ApprovalEngine:
 
         Returns GovernanceResult with status and revert deadline.
         """
+        await self._ensure_table()
+
         # Determine status based on tier
         if assessment.tier == "low":
             status = "auto_approved"
@@ -102,6 +126,7 @@ class ApprovalEngine:
 
         Returns True if successful, False if chunk not found or not pending.
         """
+        await self._ensure_table()
         async with async_session_maker() as session:
             result = await session.execute(
                 select(KnowledgeGovernanceRecord).where(
@@ -131,6 +156,7 @@ class ApprovalEngine:
 
         Returns True if successful, False if not found/not pending.
         """
+        await self._ensure_table()
         async with async_session_maker() as session:
             result = await session.execute(
                 select(KnowledgeGovernanceRecord).where(
@@ -159,6 +185,7 @@ class ApprovalEngine:
 
         Returns True if successful, False if window expired, no revert window, or not found.
         """
+        await self._ensure_table()
         async with async_session_maker() as session:
             result = await session.execute(
                 select(KnowledgeGovernanceRecord).where(
@@ -196,6 +223,7 @@ class ApprovalEngine:
 
     async def get_pending_queue(self) -> list[KnowledgeGovernanceRecord]:
         """Get all pending items for admin review, ordered by submission time."""
+        await self._ensure_table()
         async with async_session_maker() as session:
             result = await session.execute(
                 select(KnowledgeGovernanceRecord)
@@ -206,6 +234,7 @@ class ApprovalEngine:
 
     async def get_revertable_items(self) -> list[KnowledgeGovernanceRecord]:
         """Get auto-approved items still within revert window."""
+        await self._ensure_table()
         now = datetime.utcnow()
         async with async_session_maker() as session:
             result = await session.execute(
@@ -223,6 +252,7 @@ class ApprovalEngine:
 
         Returns count of auto-rejected items.
         """
+        await self._ensure_table()
         cutoff = datetime.utcnow() - timedelta(days=settings.GOVERNANCE_AUTO_REJECT_DAYS)
         chunk_ids_to_update = []
 
