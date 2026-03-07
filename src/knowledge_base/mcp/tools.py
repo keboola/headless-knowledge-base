@@ -346,6 +346,7 @@ async def _execute_create_knowledge(
     user: dict[str, Any],
 ) -> list[TextContent]:
     """Execute create_knowledge tool."""
+    from knowledge_base.config import settings
     from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
     from knowledge_base.vectorstore.indexer import ChunkData
 
@@ -385,14 +386,54 @@ async def _execute_create_knowledge(
         summary=content[:200] if len(content) > 200 else content,
     )
 
-    indexer = GraphitiIndexer()
-    await indexer.index_single_chunk(chunk_data)
+    governance_info = None
+
+    if settings.GOVERNANCE_ENABLED:
+        from knowledge_base.governance.risk_classifier import RiskClassifier, IntakeRequest
+        from knowledge_base.governance.approval_engine import ApprovalEngine
+
+        classifier = RiskClassifier()
+        assessment = await classifier.classify(IntakeRequest(
+            author_email=user_email,  # OAuth-verified email
+            intake_path="mcp_create",
+            content=content,
+            chunk_count=1,
+            content_length=len(content),
+        ))
+
+        chunk_data.governance_status = assessment.governance_status
+        chunk_data.governance_risk_score = assessment.score
+        chunk_data.governance_risk_tier = assessment.tier
+
+        indexer = GraphitiIndexer()
+        await indexer.index_single_chunk(chunk_data)
+
+        engine = ApprovalEngine()
+        result = await engine.submit([chunk_data], assessment, user_email, "mcp_create")
+
+        governance_info = {
+            "governance_status": result.status,
+            "risk_score": assessment.score,
+            "risk_tier": assessment.tier,
+        }
+        if result.revert_deadline:
+            governance_info["revert_deadline"] = result.revert_deadline.isoformat()
+    else:
+        indexer = GraphitiIndexer()
+        await indexer.index_single_chunk(chunk_data)
 
     logger.info(f"Created knowledge via MCP: {chunk_id} by {user_email}")
 
+    response_text = f"Knowledge saved successfully.\n\n**Chunk ID:** {chunk_id}\n**Content:** {content[:200]}"
+    if governance_info:
+        response_text += (
+            f"\n\n**Governance:** {governance_info['governance_status']}"
+            f" (risk: {governance_info['risk_tier']}, score: {governance_info['risk_score']:.0f})"
+        )
+
     return [TextContent(
         type="text",
-        text=f"Knowledge saved successfully.\n\n**Chunk ID:** {chunk_id}\n**Content:** {content[:200]}",
+        text=response_text,
     )]
 
 
@@ -414,15 +455,25 @@ async def _execute_ingest_document(
     )
 
     if result["status"] == "success":
+        response_text = (
+            f"Document ingested successfully.\n\n"
+            f"**Title:** {result['title']}\n"
+            f"**Source type:** {result['source_type']}\n"
+            f"**Chunks created:** {result['chunks_created']}\n"
+            f"**Page ID:** {result['page_id']}"
+        )
+        # Include governance info if present
+        gov_status = result.get("governance_status")
+        if gov_status:
+            response_text += (
+                f"\n\n**Governance:** {gov_status}"
+                f" (risk: {result.get('risk_tier', 'N/A')}"
+                f", score: {result.get('risk_score', 0):.0f})"
+            )
+
         return [TextContent(
             type="text",
-            text=(
-                f"Document ingested successfully.\n\n"
-                f"**Title:** {result['title']}\n"
-                f"**Source type:** {result['source_type']}\n"
-                f"**Chunks created:** {result['chunks_created']}\n"
-                f"**Page ID:** {result['page_id']}"
-            ),
+            text=response_text,
         )]
     else:
         return [TextContent(

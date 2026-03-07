@@ -12,6 +12,7 @@ from typing import Any
 
 from slack_sdk import WebClient
 
+from knowledge_base.config import settings
 from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
 from knowledge_base.vectorstore.indexer import ChunkData
 
@@ -53,7 +54,7 @@ async def handle_create_knowledge(ack: Any, command: dict, client: WebClient) ->
             await client.chat_postEphemeral(
                 channel=channel_id,
                 user=user_id,
-                text="⏳ Saving knowledge... (this may take a few seconds)",
+                text="Saving knowledge... (this may take a few seconds)",
             )
 
             # Create unique IDs
@@ -89,28 +90,103 @@ async def handle_create_knowledge(ack: Any, command: dict, client: WebClient) ->
                 summary=text[:200] if len(text) > 200 else text,
             )
 
-            # Index directly to Graphiti (source of truth)
-            indexer = GraphitiIndexer()
-            await indexer.index_single_chunk(chunk_data)
+            if settings.GOVERNANCE_ENABLED:
+                await _process_with_governance(
+                    client, chunk_data, text, user_name, user_id, channel_id, chunk_id,
+                )
+            else:
+                # Original flow — no governance
+                indexer = GraphitiIndexer()
+                await indexer.index_single_chunk(chunk_data)
 
-            logger.info(f"Created and indexed quick knowledge: {chunk_id}")
+                logger.info(f"Created and indexed quick knowledge: {chunk_id}")
 
-            await client.chat_postEphemeral(
-                channel=channel_id,
-                user=user_id,
-                text=f"✅ Knowledge saved! I'll remember that.\n> {text}",
-            )
+                await client.chat_postEphemeral(
+                    channel=channel_id,
+                    user=user_id,
+                    text=f"Knowledge saved! I'll remember that.\n> {text}",
+                )
 
         except Exception as e:
             logger.error(f"Failed to create knowledge: {e}", exc_info=True)
             await client.chat_postEphemeral(
                 channel=channel_id,
                 user=user_id,
-                text=f"❌ Error saving knowledge: {str(e)}",
+                text=f"Error saving knowledge: {str(e)}",
             )
 
     # Start background task and return immediately so HTTP 200 is sent
     asyncio.create_task(process_command())
+
+
+async def _process_with_governance(
+    client: WebClient,
+    chunk_data: ChunkData,
+    text: str,
+    user_name: str,
+    user_id: str,
+    channel_id: str,
+    chunk_id: str,
+) -> None:
+    """Run governance classification and approval for a quick-knowledge chunk."""
+    from knowledge_base.governance.risk_classifier import RiskClassifier, IntakeRequest
+    from knowledge_base.governance.approval_engine import ApprovalEngine
+    from knowledge_base.slack.governance_admin import (
+        notify_admin_high_risk,
+        notify_admin_medium_risk,
+    )
+
+    classifier = RiskClassifier()
+    assessment = await classifier.classify(IntakeRequest(
+        author_email=f"{user_name}@unknown",  # Slack doesn't provide email
+        intake_path="slack_create",
+        content=text,
+        chunk_count=1,
+        content_length=len(text),
+    ))
+
+    # Set governance fields on chunk
+    chunk_data.governance_status = assessment.governance_status
+    chunk_data.governance_risk_score = assessment.score
+    chunk_data.governance_risk_tier = assessment.tier
+
+    # Index to Graphiti (always -- even pending content gets entity extraction)
+    indexer = GraphitiIndexer()
+    await indexer.index_single_chunk(chunk_data)
+
+    logger.info(f"Created and indexed quick knowledge: {chunk_id}")
+
+    # Record governance decision and notify admins
+    engine = ApprovalEngine()
+    result = await engine.submit([chunk_data], assessment, user_name, "slack_create")
+
+    if result.status == "pending_review":
+        records = result.records or []
+        if records:
+            await notify_admin_high_risk(client, records[0])
+        await client.chat_postEphemeral(
+            channel=channel_id,
+            user=user_id,
+            text="Your knowledge has been submitted for admin review before it becomes searchable.",
+        )
+    elif result.status == "approved_with_revert":
+        records = result.records or []
+        if records:
+            await notify_admin_medium_risk(client, records[0])
+        await client.chat_postEphemeral(
+            channel=channel_id,
+            user=user_id,
+            text=(
+                f"Knowledge saved! (Under {settings.GOVERNANCE_REVERT_WINDOW_HOURS}h admin review)"
+                f"\n> {text}"
+            ),
+        )
+    else:  # auto_approved
+        await client.chat_postEphemeral(
+            channel=channel_id,
+            user=user_id,
+            text=f"Knowledge saved! I'll remember that.\n> {text}",
+        )
 
 def register_quick_knowledge_handler(app):
     """Register the command handler with the Slack app."""
