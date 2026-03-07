@@ -242,6 +242,11 @@ resource "google_cloud_run_v2_service" "slack_bot_staging" {
         value = "staging"
       }
 
+      env {
+        name  = "GOVERNANCE_ENABLED"
+        value = "true"
+      }
+
       startup_probe {
         http_get {
           path = "/health"

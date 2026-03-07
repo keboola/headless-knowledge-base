@@ -106,6 +106,11 @@ resource "google_cloud_run_v2_service" "slack_bot" {
         value = var.knowledge_admin_channel_prod
       }
 
+      env {
+        name  = "GOVERNANCE_ENABLED"
+        value = "false"
+      }
+
       # Health check
       startup_probe {
         http_get {
