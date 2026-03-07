@@ -92,6 +92,7 @@ class Settings(BaseSettings):
     SEARCH_CHUNK_CONTENT_LIMIT: int = 4000  # Max chars per chunk in LLM context
     SEARCH_QUERY_EXPANSION_ENABLED: bool = True  # Enable LLM-based query expansion
     SEARCH_QUERY_EXPANSION_MAX_VARIANTS: int = 3  # Max query variants including original
+    SEARCH_MIN_CONTENT_LENGTH: int = 20  # Min chars for a result to be considered meaningful
 
     # Graph Database (Graphiti + Neo4j)
     GRAPH_BACKEND: str = "neo4j"  # "neo4j" for all environments

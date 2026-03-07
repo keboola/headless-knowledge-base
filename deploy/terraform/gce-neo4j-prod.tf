@@ -6,7 +6,7 @@
 
 resource "google_compute_instance" "neo4j_prod" {
   name         = "neo4j-prod"
-  machine_type = "e2-standard-2" # 2 vCPU, 8GB RAM
+  machine_type = "e2-standard-4" # 4 vCPU, 16GB RAM
   zone         = var.zone
 
   boot_disk {

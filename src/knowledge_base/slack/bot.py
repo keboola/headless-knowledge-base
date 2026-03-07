@@ -561,15 +561,26 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
     # Build response blocks (split long answers to stay within Slack's 3000 char block limit)
     blocks = _split_text_into_blocks(answer)
 
-    # Add source references
+    # Add source references (skip empty titles, deduplicate)
     if chunks:
-        source_text = "*Sources:*\n" + "\n".join(
-            f"• {chunk.page_title}" for chunk in chunks[:3]
-        )
-        blocks.append({
-            "type": "context",
-            "elements": [{"type": "mrkdwn", "text": source_text}]
-        })
+        source_lines = []
+        seen_titles = set()
+        for chunk in chunks:
+            title = chunk.page_title
+            if not title or not title.strip():
+                continue
+            if title in seen_titles:
+                continue
+            seen_titles.add(title)
+            source_lines.append(f"• {title}")
+            if len(source_lines) >= 3:
+                break
+        if source_lines:
+            source_text = "*Sources:*\n" + "\n".join(source_lines)
+            blocks.append({
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": source_text}]
+            })
 
     # Truncate fallback text for Slack's message limit (40k chars)
     fallback_text = answer[:4000] if len(answer) > 4000 else answer

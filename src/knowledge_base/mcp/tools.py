@@ -242,14 +242,23 @@ async def _execute_ask_question(
     # Generate answer
     answer = await generate_answer(question, chunks, conversation_history)
 
-    # Build sources section
+    # Build sources section (skip empty, deduplicate)
     sources = []
+    seen_titles = set()
     for chunk in chunks[:5]:
         metadata = chunk.metadata if hasattr(chunk, "metadata") else {}
         url = metadata.get("url", "")
-        title = chunk.page_title if hasattr(chunk, "page_title") else "Unknown"
-        if url:
+        title = chunk.page_title if hasattr(chunk, "page_title") else ""
+        if not title and not url:
+            continue
+        label = title or url
+        if label in seen_titles:
+            continue
+        seen_titles.add(label)
+        if url and title:
             sources.append(f"- [{title}]({url})")
+        elif url:
+            sources.append(f"- {url}")
         else:
             sources.append(f"- {title}")
 
@@ -289,8 +298,10 @@ async def _execute_search_knowledge(
     for i, r in enumerate(results, 1):
         metadata = r.metadata if hasattr(r, "metadata") else {}
         url = metadata.get("url", "")
-        title = r.page_title if hasattr(r, "page_title") else "Unknown"
+        title = r.page_title if hasattr(r, "page_title") else ""
         content_preview = r.content[:200] + "..." if len(r.content) > 200 else r.content
+        if not content_preview.strip():
+            content_preview = "(No content available)"
         score = f"{r.score:.3f}" if hasattr(r, "score") else "N/A"
 
         lines.append(f"### {i}. {title}")
