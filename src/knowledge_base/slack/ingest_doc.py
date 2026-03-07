@@ -58,6 +58,7 @@ class DocumentIngester:
         created_by: str,
         channel_id: str,
         slack_client: WebClient | None = None,
+        intake_path: str = "slack_ingest",
     ) -> dict:
         """Ingest a document from a URL.
 
@@ -66,12 +67,14 @@ class DocumentIngester:
             created_by: Slack user ID of creator
             channel_id: Channel where command was issued
             slack_client: Optional Slack client for governance admin notifications
+            intake_path: Source path for governance audit trail ("slack_ingest" or "mcp_ingest")
 
         Returns:
             Result dict with status, chunks_created, title, etc.
         """
-        # Store slack_client for use in _apply_governance during _create_and_index
+        # Store slack_client and intake_path for use in _apply_governance during _create_and_index
         self._slack_client = slack_client
+        self._intake_path = intake_path
         try:
             # Detect document type
             doc_type = self._detect_doc_type(url)
@@ -92,6 +95,7 @@ class DocumentIngester:
             }
         finally:
             self._slack_client = None
+            self._intake_path = "slack_ingest"
 
     def _detect_doc_type(self, url: str) -> str:
         """Detect the type of document from URL."""
@@ -437,6 +441,7 @@ class DocumentIngester:
                 governance_result = await self._apply_governance(
                     chunks_to_index, content, created_by,
                     slack_client=getattr(self, "_slack_client", None),
+                    intake_path=getattr(self, "_intake_path", "slack_ingest"),
                 )
 
             indexer = GraphitiIndexer()
@@ -467,6 +472,7 @@ class DocumentIngester:
         content: str,
         created_by: str,
         slack_client: WebClient | None = None,
+        intake_path: str = "slack_ingest",
     ):
         """Classify content and set governance fields on all chunks.
 
@@ -475,6 +481,10 @@ class DocumentIngester:
 
         If a slack_client is provided, admin notifications are sent
         for high/medium risk content.
+
+        Args:
+            intake_path: Source path for risk classification and audit trail.
+                Use "slack_ingest" for Slack /ingest-doc, "mcp_ingest" for MCP.
         """
         from knowledge_base.governance.risk_classifier import RiskClassifier, IntakeRequest
         from knowledge_base.governance.approval_engine import ApprovalEngine
@@ -483,7 +493,7 @@ class DocumentIngester:
         total_length = sum(len(c.content) for c in chunks)
         assessment = await classifier.classify(IntakeRequest(
             author_email=f"{created_by}@unknown" if "@" not in created_by else created_by,
-            intake_path="slack_ingest",
+            intake_path=intake_path,
             content=content[:5000],  # Use beginning of content for classification
             chunk_count=len(chunks),
             content_length=total_length,
@@ -497,7 +507,7 @@ class DocumentIngester:
 
         # Record governance decision
         engine = ApprovalEngine()
-        result = await engine.submit(chunks, assessment, created_by, "slack_ingest")
+        result = await engine.submit(chunks, assessment, created_by, intake_path)
 
         # Send admin notifications when Slack client is available
         if slack_client and result.records:

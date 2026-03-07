@@ -452,6 +452,7 @@ async def _execute_ingest_document(
         url=url,
         created_by=user_email,
         channel_id="mcp",
+        intake_path="mcp_ingest",
     )
 
     if result["status"] == "success":

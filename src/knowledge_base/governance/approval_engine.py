@@ -155,7 +155,7 @@ class ApprovalEngine:
     async def revert(self, chunk_id: str, reviewed_by: str, note: str = "") -> bool:
         """Admin reverts medium-risk auto-approved content within revert window.
 
-        Returns True if successful, False if window expired or not found.
+        Returns True if successful, False if window expired, no revert window, or not found.
         """
         async with async_session_maker() as session:
             result = await session.execute(
@@ -169,8 +169,13 @@ class ApprovalEngine:
                 logger.warning(f"Cannot revert {chunk_id}: not found or not auto_approved")
                 return False
 
-            # Check revert window
-            if record.revert_deadline and datetime.utcnow() > record.revert_deadline:
+            # Only medium-risk items have a revert window; low-risk items cannot be reverted
+            if not record.revert_deadline:
+                logger.warning(f"Cannot revert {chunk_id}: no revert window (low-risk item)")
+                return False
+
+            # Check revert window hasn't expired
+            if datetime.utcnow() > record.revert_deadline:
                 logger.warning(
                     f"Cannot revert {chunk_id}: revert window expired at {record.revert_deadline}"
                 )
@@ -216,6 +221,9 @@ class ApprovalEngine:
         Returns count of auto-rejected items.
         """
         cutoff = datetime.utcnow() - timedelta(days=settings.GOVERNANCE_AUTO_REJECT_DAYS)
+        chunk_ids_to_update = []
+
+        # First: update SQLite records and collect chunk_ids
         async with async_session_maker() as session:
             result = await session.execute(
                 select(KnowledgeGovernanceRecord).where(
@@ -232,14 +240,17 @@ class ApprovalEngine:
                 record.review_note = (
                     f"Auto-rejected after {settings.GOVERNANCE_AUTO_REJECT_DAYS} days"
                 )
-                # Also update Neo4j
-                await self._update_neo4j_governance_status(record.chunk_id, "rejected")
+                chunk_ids_to_update.append(record.chunk_id)
 
             await session.commit()
 
-            if expired:
-                logger.info(f"Auto-rejected {len(expired)} expired pending items")
-            return len(expired)
+        # Then: update Neo4j outside the SQLite session to avoid lock contention
+        for chunk_id in chunk_ids_to_update:
+            await self._update_neo4j_governance_status(chunk_id, "rejected")
+
+        if expired:
+            logger.info(f"Auto-rejected {len(expired)} expired pending items")
+        return len(expired)
 
     async def _update_neo4j_governance_status(self, chunk_id: str, status: str) -> None:
         """Update governance_status in Neo4j episode source_description JSON.
