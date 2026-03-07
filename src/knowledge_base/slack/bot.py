@@ -202,6 +202,14 @@ def create_async_app() -> AsyncApp:
     except Exception as e:
         logger.warning(f"Failed to register feedback modal handlers: {e}")
 
+    # Register governance admin handlers (approve/reject/revert buttons + queue command)
+    try:
+        from knowledge_base.slack.governance_admin import register_governance_handlers
+        register_governance_handlers(app)
+        logger.info("Governance admin handlers registered")
+    except Exception as e:
+        logger.warning(f"Failed to register governance admin handlers: {e}")
+
     # Register Q&A handlers
     _register_qa_handlers(app)
 
@@ -256,6 +264,14 @@ def create_app() -> App:
         logger.info("Feedback modal handlers registered")
     except Exception as e:
         logger.warning(f"Failed to register feedback modal handlers: {e}")
+
+    # Register governance admin handlers (approve/reject/revert buttons + queue command)
+    try:
+        from knowledge_base.slack.governance_admin import register_governance_handlers
+        register_governance_handlers(app)
+        logger.info("Governance admin handlers registered")
+    except Exception as e:
+        logger.warning(f"Failed to register governance admin handlers: {e}")
 
     @app.event("app_mention")
     def handle_mention(event: dict, say: Any, client: WebClient) -> None:
