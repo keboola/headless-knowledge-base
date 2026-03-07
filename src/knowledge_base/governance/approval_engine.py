@@ -122,7 +122,8 @@ class ApprovalEngine:
 
         # Update Neo4j episode metadata
         await self._update_neo4j_governance_status(chunk_id, "approved")
-        logger.info(f"Approved content {chunk_id} by {reviewed_by}")
+        logger.info(f"Approved content {chunk_id}")
+        logger.debug(f"Approved by {reviewed_by}")
         return True
 
     async def reject(self, chunk_id: str, reviewed_by: str, note: str = "") -> bool:
@@ -149,7 +150,8 @@ class ApprovalEngine:
             await session.commit()
 
         await self._update_neo4j_governance_status(chunk_id, "rejected")
-        logger.info(f"Rejected content {chunk_id} by {reviewed_by}")
+        logger.info(f"Rejected content {chunk_id}")
+        logger.debug(f"Rejected by {reviewed_by}")
         return True
 
     async def revert(self, chunk_id: str, reviewed_by: str, note: str = "") -> bool:
@@ -188,7 +190,8 @@ class ApprovalEngine:
             await session.commit()
 
         await self._update_neo4j_governance_status(chunk_id, "reverted")
-        logger.info(f"Reverted content {chunk_id} by {reviewed_by}")
+        logger.info(f"Reverted content {chunk_id}")
+        logger.debug(f"Reverted by {reviewed_by}")
         return True
 
     async def get_pending_queue(self) -> list[KnowledgeGovernanceRecord]:
@@ -252,6 +255,9 @@ class ApprovalEngine:
             logger.info(f"Auto-rejected {len(expired)} expired pending items")
         return len(expired)
 
+    # Valid governance status values for Neo4j writes
+    _VALID_STATUSES = {"approved", "pending", "rejected", "reverted"}
+
     async def _update_neo4j_governance_status(self, chunk_id: str, status: str) -> None:
         """Update governance_status in Neo4j episode source_description JSON.
 
@@ -260,6 +266,10 @@ class ApprovalEngine:
 
         Uses graphiti.driver.execute_query() for direct Cypher access.
         """
+        if status not in self._VALID_STATUSES:
+            logger.error(f"Invalid governance status '{status}' for {chunk_id}, skipping Neo4j update")
+            return
+
         try:
             from knowledge_base.graph.graphiti_client import get_graphiti_client
 

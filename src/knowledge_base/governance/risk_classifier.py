@@ -119,7 +119,8 @@ class RiskClassifier:
             f"Risk classification: score={score:.1f}, tier={tier}, "
             f"status={governance_status}, path={intake.intake_path}"
         )
-        logger.debug(f"Risk classification author: {intake.author_email}")
+        author_domain = intake.author_email.rsplit("@", 1)[-1] if "@" in intake.author_email else "unknown"
+        logger.debug(f"Risk classification author domain: {author_domain}")
 
         return RiskAssessment(
             score=score,

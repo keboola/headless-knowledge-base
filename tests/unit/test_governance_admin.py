@@ -271,7 +271,7 @@ async def test_approve_handler_updates_message():
     # Verify "Approved" appears in the updated blocks
     blocks_text = json.dumps(call_kwargs["blocks"])
     assert "Approved" in blocks_text
-    assert "U_ADMIN_1" in blocks_text
+    assert "an admin" in blocks_text
 
 
 @pytest.mark.asyncio
@@ -537,7 +537,7 @@ async def test_mark_reviewed_updates_message():
     call_kwargs = mock_client.chat_update.call_args.kwargs
     blocks_text = json.dumps(call_kwargs["blocks"])
     assert "Reviewed" in blocks_text
-    assert "U_ADMIN_1" in blocks_text
+    assert "an admin" in blocks_text
 
 
 # ---------------------------------------------------------------------------

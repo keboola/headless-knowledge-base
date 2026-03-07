@@ -9,6 +9,7 @@ message construction and action handler registration.
 
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -58,7 +59,8 @@ def _format_risk_factors(risk_factors_json: str) -> str:
     """Parse risk_factors JSON and format as readable bullet list."""
     try:
         factors = json.loads(risk_factors_json)
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError) as e:
+        logger.debug(f"Failed to parse risk_factors JSON: {e}")
         return "_No risk factors available_"
 
     if not factors:
@@ -363,7 +365,7 @@ async def handle_governance_approve(ack: Any, body: dict, client: WebClient) -> 
                         "text": {
                             "type": "mrkdwn",
                             "text": (
-                                f"*Approved* by <@{user_id}> at "
+                                f"*Approved* by an admin at "
                                 f"<!date^{int(datetime.utcnow().timestamp())}"
                                 f"^{{date_short_pretty}} {{time}}|now>\n"
                                 f"Chunk: `{chunk_id}`"
@@ -371,7 +373,7 @@ async def handle_governance_approve(ack: Any, body: dict, client: WebClient) -> 
                         },
                     },
                 ],
-                text=f"Approved by <@{user_id}>",
+                text=f"Approved: {chunk_id}",
             )
             logger.info(f"Governance approve: {chunk_id} by admin")
         else:
@@ -488,7 +490,7 @@ async def handle_governance_reject_submit(
             await client.chat_postMessage(
                 channel=admin_channel,
                 text=(
-                    f"*Rejected* `{chunk_id}` by <@{user_id}>.\n"
+                    f"*Rejected* `{chunk_id}` by an admin.\n"
                     f"Reason: {reason or 'No reason provided'}"
                 ),
             )
@@ -616,7 +618,7 @@ async def handle_governance_revert_submit(
                         "text": {
                             "type": "mrkdwn",
                             "text": (
-                                f"*Reverted* by <@{user_id}> at "
+                                f"*Reverted* by an admin at "
                                 f"<!date^{int(datetime.utcnow().timestamp())}"
                                 f"^{{date_short_pretty}} {{time}}|now>\n"
                                 f"Chunk: `{chunk_id}`"
@@ -624,7 +626,7 @@ async def handle_governance_revert_submit(
                         },
                     },
                 ],
-                text=f"Reverted by <@{user_id}>",
+                text=f"Reverted: {chunk_id}",
             )
             logger.info(f"Governance revert: {chunk_id} by admin")
         else:
@@ -669,7 +671,7 @@ async def handle_governance_mark_reviewed(
                     "text": {
                         "type": "mrkdwn",
                         "text": (
-                            f"*Reviewed* by <@{user_id}> at "
+                            f"*Reviewed* by an admin at "
                             f"<!date^{int(datetime.utcnow().timestamp())}"
                             f"^{{date_short_pretty}} {{time}}|now>\n"
                             f"Chunk: `{chunk_id}`"
@@ -677,7 +679,7 @@ async def handle_governance_mark_reviewed(
                     },
                 },
             ],
-            text=f"Reviewed by <@{user_id}>",
+            text=f"Reviewed: {chunk_id}",
         )
         logger.info(f"Governance mark reviewed: {chunk_id} by admin")
 
@@ -821,7 +823,6 @@ async def handle_governance_queue(
 
 def register_governance_handlers(app) -> None:
     """Register all governance admin handlers with the Slack app."""
-    import re
 
     app.action(re.compile(r"governance_approve_.*"))(handle_governance_approve)
     app.action(re.compile(r"governance_reject_.*"))(handle_governance_reject)
