@@ -117,9 +117,9 @@ class RiskClassifier:
 
         logger.info(
             f"Risk classification: score={score:.1f}, tier={tier}, "
-            f"status={governance_status}, path={intake.intake_path}, "
-            f"author={intake.author_email}"
+            f"status={governance_status}, path={intake.intake_path}"
         )
+        logger.debug(f"Risk classification author: {intake.author_email}")
 
         return RiskAssessment(
             score=score,

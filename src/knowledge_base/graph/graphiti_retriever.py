@@ -26,6 +26,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Valid governance_status values for the governance filter.
+# Unknown values default to 'approved' for backward compatibility.
+VALID_GOVERNANCE_STATUSES = {"approved", "pending", "rejected", "reverted"}
+
 
 def _is_connection_error(exc: Exception) -> bool:
     """Check if an exception indicates a Neo4j connection failure.
@@ -340,7 +344,9 @@ class GraphitiRetriever:
                     # Governance filter: exclude non-approved episodes when governance is enabled
                     if settings.GOVERNANCE_ENABLED:
                         governance_status = sr.metadata.get('governance_status', 'approved')
-                        if governance_status not in ('approved',):
+                        if governance_status not in VALID_GOVERNANCE_STATUSES:
+                            governance_status = 'approved'  # Default unknown values to approved (backward compat)
+                        if governance_status != 'approved':
                             continue
 
                     # Apply filters

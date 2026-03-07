@@ -8,6 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+# The default KNOWLEDGE_ADMIN_CHANNEL is "#knowledge-admins".
+# _get_admin_channel() strips the '#', yielding "knowledge-admins".
+# We use that as the default channel_id in test bodies so the auth check passes.
+_ADMIN_CHANNEL_ID = "knowledge-admins"
+
+
 # ---------------------------------------------------------------------------
 # Helpers: mock record objects
 # ---------------------------------------------------------------------------
@@ -52,7 +58,7 @@ def _make_record(
 def _make_body(
     action_id: str,
     user_id: str = "U_ADMIN_1",
-    channel_id: str = "C_ADMIN_CH",
+    channel_id: str = _ADMIN_CHANNEL_ID,
     message_ts: str = "1234567890.123456",
     trigger_id: str = "trigger_abc",
 ) -> dict:
@@ -260,7 +266,7 @@ async def test_approve_handler_updates_message():
 
     mock_client.chat_update.assert_awaited_once()
     call_kwargs = mock_client.chat_update.call_args.kwargs
-    assert call_kwargs["channel"] == "C_ADMIN_CH"
+    assert call_kwargs["channel"] == _ADMIN_CHANNEL_ID
     assert call_kwargs["ts"] == "1234567890.123456"
     # Verify "Approved" appears in the updated blocks
     blocks_text = json.dumps(call_kwargs["blocks"])
@@ -372,18 +378,78 @@ async def test_reject_modal_submit_calls_engine():
 
 
 # ---------------------------------------------------------------------------
-# Tests: handle_governance_revert
+# Tests: handle_governance_revert (opens confirmation modal)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_revert_handler_success():
-    """Verify successful revert updates the message."""
+async def test_revert_handler_opens_confirmation_modal():
+    """Verify revert button click opens a confirmation modal."""
     from knowledge_base.slack.governance_admin import handle_governance_revert
 
     body = _make_body("governance_revert_chunk_rev1")
     mock_ack = AsyncMock()
     mock_client = AsyncMock()
+
+    await handle_governance_revert(mock_ack, body, mock_client)
+
+    mock_ack.assert_awaited_once()
+    mock_client.views_open.assert_awaited_once()
+
+    call_kwargs = mock_client.views_open.call_args.kwargs
+    view = call_kwargs["view"]
+    assert view["callback_id"] == "governance_revert_modal"
+    assert view["type"] == "modal"
+
+    # Verify private_metadata contains chunk_id, channel_id, message_ts
+    meta = json.loads(view["private_metadata"])
+    assert meta["chunk_id"] == "chunk_rev1"
+    assert meta["channel_id"] == _ADMIN_CHANNEL_ID
+    assert meta["message_ts"] == "1234567890.123456"
+
+    # Verify confirmation text
+    section_blocks = [b for b in view["blocks"] if b.get("type") == "section"]
+    assert len(section_blocks) == 1
+    assert "Are you sure" in section_blocks[0]["text"]["text"]
+    assert "unsearchable" in section_blocks[0]["text"]["text"]
+
+    # Verify optional note input
+    input_blocks = [b for b in view["blocks"] if b.get("type") == "input"]
+    assert len(input_blocks) == 1
+    assert input_blocks[0]["block_id"] == "revert_note_block"
+    assert input_blocks[0]["optional"] is True
+
+
+# ---------------------------------------------------------------------------
+# Tests: handle_governance_revert_submit (modal submit)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_revert_submit_calls_engine():
+    """Verify revert modal submission calls engine.revert and updates message."""
+    from knowledge_base.slack.governance_admin import handle_governance_revert_submit
+
+    mock_ack = AsyncMock()
+    mock_client = AsyncMock()
+
+    body = {"user": {"id": "U_ADMIN_1"}}
+    view = {
+        "private_metadata": json.dumps({
+            "chunk_id": "chunk_rev1",
+            "channel_id": _ADMIN_CHANNEL_ID,
+            "message_ts": "1234567890.123456",
+        }),
+        "state": {
+            "values": {
+                "revert_note_block": {
+                    "revert_note": {
+                        "value": "Content was wrong",
+                    }
+                }
+            }
+        },
+    }
 
     mock_engine_instance = AsyncMock()
     mock_engine_instance.revert.return_value = True
@@ -392,26 +458,47 @@ async def test_revert_handler_success():
         "knowledge_base.governance.approval_engine.ApprovalEngine",
     ) as mock_engine_cls:
         mock_engine_cls.return_value = mock_engine_instance
-        await handle_governance_revert(mock_ack, body, mock_client)
+        await handle_governance_revert_submit(mock_ack, body, view, mock_client)
 
     mock_ack.assert_awaited_once()
     mock_engine_instance.revert.assert_awaited_once_with(
         "chunk_rev1", reviewed_by="U_ADMIN_1"
     )
 
+    # Should update the original message to show reverted
     mock_client.chat_update.assert_awaited_once()
-    blocks_text = json.dumps(mock_client.chat_update.call_args.kwargs["blocks"])
+    call_kwargs = mock_client.chat_update.call_args.kwargs
+    assert call_kwargs["channel"] == _ADMIN_CHANNEL_ID
+    assert call_kwargs["ts"] == "1234567890.123456"
+    blocks_text = json.dumps(call_kwargs["blocks"])
     assert "Reverted" in blocks_text
 
 
 @pytest.mark.asyncio
-async def test_revert_handler_window_expired():
-    """When engine.revert returns False, post ephemeral about expired window."""
-    from knowledge_base.slack.governance_admin import handle_governance_revert
+async def test_revert_submit_window_expired():
+    """When engine.revert returns False, post message about expired window."""
+    from knowledge_base.slack.governance_admin import handle_governance_revert_submit
 
-    body = _make_body("governance_revert_chunk_rev2")
     mock_ack = AsyncMock()
     mock_client = AsyncMock()
+
+    body = {"user": {"id": "U_ADMIN_1"}}
+    view = {
+        "private_metadata": json.dumps({
+            "chunk_id": "chunk_rev2",
+            "channel_id": _ADMIN_CHANNEL_ID,
+            "message_ts": "1234567890.123456",
+        }),
+        "state": {
+            "values": {
+                "revert_note_block": {
+                    "revert_note": {
+                        "value": None,
+                    }
+                }
+            }
+        },
+    }
 
     mock_engine_instance = AsyncMock()
     mock_engine_instance.revert.return_value = False
@@ -420,12 +507,12 @@ async def test_revert_handler_window_expired():
         "knowledge_base.governance.approval_engine.ApprovalEngine",
     ) as mock_engine_cls:
         mock_engine_cls.return_value = mock_engine_instance
-        await handle_governance_revert(mock_ack, body, mock_client)
+        await handle_governance_revert_submit(mock_ack, body, view, mock_client)
 
     mock_client.chat_update.assert_not_awaited()
-    mock_client.chat_postEphemeral.assert_awaited_once()
-    ephemeral_text = mock_client.chat_postEphemeral.call_args.kwargs["text"]
-    assert "expired" in ephemeral_text.lower()
+    mock_client.chat_postMessage.assert_awaited_once()
+    msg_text = mock_client.chat_postMessage.call_args.kwargs["text"]
+    assert "expired" in msg_text.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +538,85 @@ async def test_mark_reviewed_updates_message():
     blocks_text = json.dumps(call_kwargs["blocks"])
     assert "Reviewed" in blocks_text
     assert "U_ADMIN_1" in blocks_text
+
+
+# ---------------------------------------------------------------------------
+# Tests: Authorization -- actions from non-admin channels are rejected
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_approve_rejects_non_admin_channel():
+    """Actions from non-admin channels should be rejected with ephemeral message."""
+    from knowledge_base.slack.governance_admin import handle_governance_approve
+
+    body = _make_body("governance_approve_chunk123", channel_id="C_RANDOM_CH")
+    mock_ack = AsyncMock()
+    mock_client = AsyncMock()
+
+    await handle_governance_approve(mock_ack, body, mock_client)
+
+    mock_ack.assert_awaited_once()
+    # Should NOT call the approval engine
+    mock_client.chat_update.assert_not_awaited()
+    # Should post ephemeral rejection
+    mock_client.chat_postEphemeral.assert_awaited_once()
+    text = mock_client.chat_postEphemeral.call_args.kwargs["text"]
+    assert "admin channel" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_reject_rejects_non_admin_channel():
+    """Reject button from non-admin channel should be rejected."""
+    from knowledge_base.slack.governance_admin import handle_governance_reject
+
+    body = _make_body("governance_reject_chunk123", channel_id="C_RANDOM_CH")
+    mock_ack = AsyncMock()
+    mock_client = AsyncMock()
+
+    await handle_governance_reject(mock_ack, body, mock_client)
+
+    mock_ack.assert_awaited_once()
+    mock_client.views_open.assert_not_awaited()
+    mock_client.chat_postEphemeral.assert_awaited_once()
+    text = mock_client.chat_postEphemeral.call_args.kwargs["text"]
+    assert "admin channel" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_revert_rejects_non_admin_channel():
+    """Revert button from non-admin channel should be rejected."""
+    from knowledge_base.slack.governance_admin import handle_governance_revert
+
+    body = _make_body("governance_revert_chunk123", channel_id="C_RANDOM_CH")
+    mock_ack = AsyncMock()
+    mock_client = AsyncMock()
+
+    await handle_governance_revert(mock_ack, body, mock_client)
+
+    mock_ack.assert_awaited_once()
+    mock_client.views_open.assert_not_awaited()
+    mock_client.chat_postEphemeral.assert_awaited_once()
+    text = mock_client.chat_postEphemeral.call_args.kwargs["text"]
+    assert "admin channel" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_mark_reviewed_rejects_non_admin_channel():
+    """Mark reviewed from non-admin channel should be rejected."""
+    from knowledge_base.slack.governance_admin import handle_governance_mark_reviewed
+
+    body = _make_body("governance_mark_reviewed_chunk123", channel_id="C_RANDOM_CH")
+    mock_ack = AsyncMock()
+    mock_client = AsyncMock()
+
+    await handle_governance_mark_reviewed(mock_ack, body, mock_client)
+
+    mock_ack.assert_awaited_once()
+    mock_client.chat_update.assert_not_awaited()
+    mock_client.chat_postEphemeral.assert_awaited_once()
+    text = mock_client.chat_postEphemeral.call_args.kwargs["text"]
+    assert "admin channel" in text.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -561,13 +727,15 @@ def test_register_governance_handlers():
 
     register_governance_handlers(mock_app)
 
-    # 4 action registrations + 1 view + 1 command = 6 total registrations
+    # 4 action registrations + 2 views (reject + revert) + 1 command = 7 total
     assert mock_app.action.call_count == 4
-    assert mock_app.view.call_count == 1
+    assert mock_app.view.call_count == 2
     assert mock_app.command.call_count == 1
 
-    # Verify the view callback_id
-    mock_app.view.assert_called_once_with("governance_reject_modal")
+    # Verify both view callback_ids were registered
+    view_calls = [call[0][0] for call in mock_app.view.call_args_list]
+    assert "governance_reject_modal" in view_calls
+    assert "governance_revert_modal" in view_calls
 
     # Verify the command name includes prefix
     cmd_call_args = mock_app.command.call_args

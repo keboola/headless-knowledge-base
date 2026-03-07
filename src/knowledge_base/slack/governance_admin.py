@@ -30,6 +30,30 @@ def _get_admin_channel() -> str:
     return channel_value
 
 
+def _is_admin_channel(channel_id: str) -> bool:
+    """Check if the given channel ID matches the configured admin channel.
+
+    Compares against settings.KNOWLEDGE_ADMIN_CHANNEL (stripped of #).
+    """
+    return channel_id == _get_admin_channel()
+
+
+async def _reject_non_admin(client: WebClient, channel_id: str, user_id: str) -> bool:
+    """If the action did not originate from the admin channel, post ephemeral and return True.
+
+    Returns True if the action should be rejected, False if it's from the admin channel.
+    """
+    if _is_admin_channel(channel_id):
+        return False
+
+    await client.chat_postEphemeral(
+        channel=channel_id,
+        user=user_id,
+        text="Governance actions can only be performed from the admin channel.",
+    )
+    return True
+
+
 def _format_risk_factors(risk_factors_json: str) -> str:
     """Parse risk_factors JSON and format as readable bullet list."""
     try:
@@ -315,6 +339,10 @@ async def handle_governance_approve(ack: Any, body: dict, client: WebClient) -> 
     action = body["actions"][0]
     action_id = action["action_id"]
 
+    # Authorization: only allow actions from the admin channel
+    if await _reject_non_admin(client, channel_id, user_id):
+        return
+
     # Extract chunk_id from action_id: governance_approve_{chunk_id}
     chunk_id = action_id.replace("governance_approve_", "", 1)
 
@@ -345,7 +373,7 @@ async def handle_governance_approve(ack: Any, body: dict, client: WebClient) -> 
                 ],
                 text=f"Approved by <@{user_id}>",
             )
-            logger.info(f"Governance approve: {chunk_id} by {user_id}")
+            logger.info(f"Governance approve: {chunk_id} by admin")
         else:
             await client.chat_postEphemeral(
                 channel=channel_id,
@@ -365,6 +393,13 @@ async def handle_governance_approve(ack: Any, body: dict, client: WebClient) -> 
 async def handle_governance_reject(ack: Any, body: dict, client: WebClient) -> None:
     """Handle [Reject] button click -- opens modal for rejection reason."""
     await ack()
+
+    user_id = body["user"]["id"]
+    channel_id = body["channel"]["id"]
+
+    # Authorization: only allow actions from the admin channel
+    if await _reject_non_admin(client, channel_id, user_id):
+        return
 
     action = body["actions"][0]
     action_id = action["action_id"]
@@ -457,7 +492,7 @@ async def handle_governance_reject_submit(
                     f"Reason: {reason or 'No reason provided'}"
                 ),
             )
-            logger.info(f"Governance reject: {chunk_id} by {user_id}, reason: {reason}")
+            logger.info(f"Governance reject: {chunk_id} by admin")
         else:
             await client.chat_postMessage(
                 channel=admin_channel,
@@ -469,17 +504,100 @@ async def handle_governance_reject_submit(
 
 
 async def handle_governance_revert(ack: Any, body: dict, client: WebClient) -> None:
-    """Handle [Revert] button for medium-risk auto-approved content."""
+    """Handle [Revert] button -- opens confirmation modal before reverting."""
     await ack()
 
     user_id = body["user"]["id"]
     channel_id = body["channel"]["id"]
-    message_ts = body["message"]["ts"]
     action = body["actions"][0]
     action_id = action["action_id"]
+    trigger_id = body["trigger_id"]
+
+    # Authorization: only allow actions from the admin channel
+    if await _reject_non_admin(client, channel_id, user_id):
+        return
 
     # Extract chunk_id from action_id: governance_revert_{chunk_id}
     chunk_id = action_id.replace("governance_revert_", "", 1)
+
+    try:
+        await client.views_open(
+            trigger_id=trigger_id,
+            view={
+                "type": "modal",
+                "callback_id": "governance_revert_modal",
+                "private_metadata": json.dumps({
+                    "chunk_id": chunk_id,
+                    "channel_id": channel_id,
+                    "message_ts": body["message"]["ts"],
+                }),
+                "title": {
+                    "type": "plain_text",
+                    "text": "Revert Content",
+                },
+                "submit": {
+                    "type": "plain_text",
+                    "text": "Revert",
+                },
+                "close": {
+                    "type": "plain_text",
+                    "text": "Cancel",
+                },
+                "blocks": [
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": (
+                                f"Are you sure you want to revert chunk `{chunk_id}`?\n"
+                                "It will become unsearchable."
+                            ),
+                        },
+                    },
+                    {
+                        "type": "input",
+                        "block_id": "revert_note_block",
+                        "optional": True,
+                        "element": {
+                            "type": "plain_text_input",
+                            "action_id": "revert_note",
+                            "multiline": True,
+                            "placeholder": {
+                                "type": "plain_text",
+                                "text": "Optional note about why this is being reverted",
+                            },
+                        },
+                        "label": {
+                            "type": "plain_text",
+                            "text": "Note",
+                        },
+                    },
+                ],
+            },
+        )
+    except Exception as e:
+        logger.error(f"Failed to open revert confirmation modal: {e}", exc_info=True)
+
+
+async def handle_governance_revert_submit(
+    ack: Any, body: dict, view: dict, client: WebClient
+) -> None:
+    """Handle revert confirmation modal submission."""
+    await ack()
+
+    user_id = body["user"]["id"]
+    meta = json.loads(view["private_metadata"])
+    chunk_id = meta["chunk_id"]
+    channel_id = meta["channel_id"]
+    message_ts = meta["message_ts"]
+
+    # Extract optional note from modal input
+    note = (
+        view["state"]["values"]
+        .get("revert_note_block", {})
+        .get("revert_note", {})
+        .get("value", "")
+    ) or ""
 
     try:
         from knowledge_base.governance.approval_engine import ApprovalEngine
@@ -508,21 +626,15 @@ async def handle_governance_revert(ack: Any, body: dict, client: WebClient) -> N
                 ],
                 text=f"Reverted by <@{user_id}>",
             )
-            logger.info(f"Governance revert: {chunk_id} by {user_id}")
+            logger.info(f"Governance revert: {chunk_id} by admin")
         else:
-            await client.chat_postEphemeral(
+            await client.chat_postMessage(
                 channel=channel_id,
-                user=user_id,
                 text=f"Revert window has expired for `{chunk_id}`. Content cannot be reverted.",
             )
 
     except Exception as e:
-        logger.error(f"Failed to handle governance revert: {e}", exc_info=True)
-        await client.chat_postEphemeral(
-            channel=channel_id,
-            user=user_id,
-            text=f"Error reverting content: {e}",
-        )
+        logger.error(f"Failed to handle governance revert submit: {e}", exc_info=True)
 
 
 async def handle_governance_mark_reviewed(
@@ -540,6 +652,10 @@ async def handle_governance_mark_reviewed(
     message_ts = body["message"]["ts"]
     action = body["actions"][0]
     action_id = action["action_id"]
+
+    # Authorization: only allow actions from the admin channel
+    if await _reject_non_admin(client, channel_id, user_id):
+        return
 
     chunk_id = action_id.replace("governance_mark_reviewed_", "", 1)
 
@@ -563,7 +679,7 @@ async def handle_governance_mark_reviewed(
             ],
             text=f"Reviewed by <@{user_id}>",
         )
-        logger.info(f"Governance mark reviewed: {chunk_id} by {user_id}")
+        logger.info(f"Governance mark reviewed: {chunk_id} by admin")
 
     except Exception as e:
         logger.error(f"Failed to handle governance mark reviewed: {e}", exc_info=True)
@@ -712,6 +828,7 @@ def register_governance_handlers(app) -> None:
     app.action(re.compile(r"governance_revert_.*"))(handle_governance_revert)
     app.action(re.compile(r"governance_mark_reviewed_.*"))(handle_governance_mark_reviewed)
     app.view("governance_reject_modal")(handle_governance_reject_submit)
+    app.view("governance_revert_modal")(handle_governance_revert_submit)
 
     cmd_prefix = settings.SLACK_COMMAND_PREFIX
     app.command(f"/{cmd_prefix}governance-queue")(handle_governance_queue)
