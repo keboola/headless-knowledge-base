@@ -93,7 +93,7 @@ class TestSearchChunksRetry:
         mock_result = MagicMock()
         mock_result.episodes = []
         mock_result.score = 0.9
-        mock_result.content = "test content"
+        mock_result.content = "This is test content that is long enough to pass the minimum content length filter"
         mock_result.name = "test"
         mock_result.source_description = None
         mock_result.fact = None
@@ -153,7 +153,7 @@ class TestSearchChunksRetry:
         mock_result = MagicMock()
         mock_result.episodes = []
         mock_result.score = 0.9
-        mock_result.content = "test content"
+        mock_result.content = "This is test content that is long enough to pass the minimum content length filter"
         mock_result.name = "test"
         mock_result.source_description = None
         mock_result.fact = None
