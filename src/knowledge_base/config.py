@@ -94,6 +94,16 @@ class Settings(BaseSettings):
     SEARCH_QUERY_EXPANSION_MAX_VARIANTS: int = 3  # Max query variants including original
     SEARCH_MIN_CONTENT_LENGTH: int = 20  # Min chars for a result to be considered meaningful
 
+    # Knowledge Governance (Phase 15)
+    GOVERNANCE_ENABLED: bool = False  # Feature flag for gradual rollout
+    GOVERNANCE_LOW_RISK_THRESHOLD: int = 35  # Score 0-35 = auto-approve
+    GOVERNANCE_HIGH_RISK_THRESHOLD: int = 66  # Score 66-100 = require approval
+    GOVERNANCE_TRUSTED_DOMAINS: str = "keboola.com"  # Comma-separated trusted email domains
+    GOVERNANCE_REVERT_WINDOW_HOURS: int = 24  # Hours for medium-risk revert window
+    GOVERNANCE_AUTO_REJECT_DAYS: int = 14  # Days before pending items auto-rejected
+    GOVERNANCE_CONTRADICTION_CHECK_ENABLED: bool = True  # LLM contradiction detection
+    GOVERNANCE_NOVELTY_SIMILARITY_THRESHOLD: float = 0.7  # Cosine sim for "existing topic"
+
     # Graph Database (Graphiti + Neo4j)
     GRAPH_BACKEND: str = "neo4j"  # "neo4j" for all environments
     GRAPH_KUZU_PATH: str = "data/kuzu_graph"  # DEPRECATED: Kuzu no longer used
@@ -155,6 +165,11 @@ class Settings(BaseSettings):
     BATCH_EMBEDDING_CONCURRENCY: int = 3  # Max parallel embedding batches (keep low to avoid 429)
     BATCH_POLL_INTERVAL: int = 60  # Seconds between batch job polls
     BATCH_MAX_POLL_DURATION: int = 21600  # Max wait for batch job (6 hours)
+
+    @property
+    def governance_trusted_domain_list(self) -> list[str]:
+        """Get governance trusted domains as a list."""
+        return [d.strip() for d in self.GOVERNANCE_TRUSTED_DOMAINS.split(",") if d.strip()]
 
     @property
     def is_gcp_deployment(self) -> bool:

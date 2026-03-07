@@ -337,6 +337,12 @@ class GraphitiRetriever:
                     if sr.metadata.get('deleted'):
                         continue
 
+                    # Governance filter: exclude non-approved episodes when governance is enabled
+                    if settings.GOVERNANCE_ENABLED:
+                        governance_status = sr.metadata.get('governance_status', 'approved')
+                        if governance_status not in ('approved',):
+                            continue
+
                     # Apply filters
                     if space_key and sr.metadata.get('space_key') != space_key:
                         continue

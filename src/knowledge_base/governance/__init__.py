@@ -12,6 +12,11 @@ from knowledge_base.governance.reports import (
     SpaceStats,
     TopicCoverage,
 )
+from knowledge_base.governance.risk_classifier import (
+    IntakeRequest,
+    RiskAssessment,
+    RiskClassifier,
+)
 
 __all__ = [
     "FeedbackStats",
@@ -19,9 +24,12 @@ __all__ = [
     "GapInfo",
     "GovernanceReport",
     "GovernanceReporter",
+    "IntakeRequest",
     "ObsoleteDetector",
     "ObsoleteDocument",
     "QueryCluster",
+    "RiskAssessment",
+    "RiskClassifier",
     "SpaceStats",
     "TopicCoverage",
 ]
