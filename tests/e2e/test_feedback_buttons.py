@@ -56,7 +56,7 @@ class TestFeedbackButtonClicks:
         logger.info(f"Sent question, message_ts: {msg_ts}")
 
         # 2. Wait for bot reply and verify it's substantive
-        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=90)
+        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts)
         slack_client.assert_substantive_response(reply)
         logger.info(f"Got bot reply: {reply.get('text', '')[:100]}...")
 
@@ -92,7 +92,7 @@ class TestFeedbackButtonClicks:
         msg_ts = await slack_client.send_message(question)
 
         # 2. Wait for bot reply and verify it's substantive
-        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=90)
+        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts)
         slack_client.assert_substantive_response(reply)
 
         # 3. Wait for feedback buttons
@@ -125,7 +125,7 @@ class TestFeedbackButtonsPresent:
         msg_ts = await slack_client.send_message(question)
 
         # Wait for reply and verify it's substantive
-        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=90)
+        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts)
         slack_client.assert_substantive_response(reply)
 
         # Check for feedback buttons message

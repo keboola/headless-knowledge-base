@@ -233,6 +233,7 @@ def build_incorrect_feedback_modal(
     chunk_ids: list[str],
     channel_id: str,
     reporter_id: str,
+    feedback_buttons_ts: str | None = None,
 ) -> dict:
     """Build modal for 'Incorrect' feedback - captures what's wrong and correction.
 
@@ -241,6 +242,7 @@ def build_incorrect_feedback_modal(
         chunk_ids: List of chunk IDs associated with the response
         channel_id: Channel where feedback originated
         reporter_id: User reporting the issue
+        feedback_buttons_ts: Timestamp of the feedback buttons message (to update after submit)
     """
     import json
 
@@ -252,6 +254,7 @@ def build_incorrect_feedback_modal(
             "chunk_ids": chunk_ids,
             "channel_id": channel_id,
             "reporter_id": reporter_id,
+            "feedback_buttons_ts": feedback_buttons_ts,
         }),
         "title": {"type": "plain_text", "text": "Report Incorrect Info"},
         "submit": {"type": "plain_text", "text": "Submit Report"},
@@ -321,6 +324,7 @@ def build_outdated_feedback_modal(
     chunk_ids: list[str],
     channel_id: str,
     reporter_id: str,
+    feedback_buttons_ts: str | None = None,
 ) -> dict:
     """Build modal for 'Outdated' feedback - captures what changed.
 
@@ -329,6 +333,7 @@ def build_outdated_feedback_modal(
         chunk_ids: List of chunk IDs associated with the response
         channel_id: Channel where feedback originated
         reporter_id: User reporting the issue
+        feedback_buttons_ts: Timestamp of the feedback buttons message (to update after submit)
     """
     import json
 
@@ -340,6 +345,7 @@ def build_outdated_feedback_modal(
             "chunk_ids": chunk_ids,
             "channel_id": channel_id,
             "reporter_id": reporter_id,
+            "feedback_buttons_ts": feedback_buttons_ts,
         }),
         "title": {"type": "plain_text", "text": "Report Outdated Info"},
         "submit": {"type": "plain_text", "text": "Submit Report"},
@@ -406,6 +412,7 @@ def build_confusing_feedback_modal(
     chunk_ids: list[str],
     channel_id: str,
     reporter_id: str,
+    feedback_buttons_ts: str | None = None,
 ) -> dict:
     """Build modal for 'Confusing' feedback - captures what was unclear.
 
@@ -414,6 +421,7 @@ def build_confusing_feedback_modal(
         chunk_ids: List of chunk IDs associated with the response
         channel_id: Channel where feedback originated
         reporter_id: User reporting the issue
+        feedback_buttons_ts: Timestamp of the feedback buttons message (to update after submit)
     """
     import json
 
@@ -425,6 +433,7 @@ def build_confusing_feedback_modal(
             "chunk_ids": chunk_ids,
             "channel_id": channel_id,
             "reporter_id": reporter_id,
+            "feedback_buttons_ts": feedback_buttons_ts,
         }),
         "title": {"type": "plain_text", "text": "Report Confusing Info"},
         "submit": {"type": "plain_text", "text": "Submit Report"},

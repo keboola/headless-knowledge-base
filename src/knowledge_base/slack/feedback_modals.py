@@ -20,6 +20,40 @@ from knowledge_base.slack.owner_notification import (
 
 logger = logging.getLogger(__name__)
 
+FEEDBACK_THANK_YOU = {
+    "incorrect": "Thanks! We'll investigate this.",
+    "outdated": "Thanks! We'll review this content.",
+    "confusing": "Thanks! We'll try to clarify.",
+}
+
+
+async def _update_feedback_buttons(
+    client: WebClient,
+    channel_id: str,
+    feedback_buttons_ts: str | None,
+    feedback_type: str,
+) -> None:
+    """Replace feedback buttons with a thank-you message after modal submit."""
+    if not feedback_buttons_ts:
+        return
+    try:
+        await client.chat_update(
+            channel=channel_id,
+            ts=feedback_buttons_ts,
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"_{FEEDBACK_THANK_YOU.get(feedback_type, 'Thanks for your feedback!')}_",
+                    },
+                }
+            ],
+            text=FEEDBACK_THANK_YOU.get(feedback_type, "Thanks!"),
+        )
+    except Exception as e:
+        logger.error(f"Failed to update feedback buttons: {e}")
+
 
 async def handle_incorrect_modal_submit(
     ack: Any, body: dict, client: WebClient, view: dict
@@ -43,6 +77,10 @@ async def handle_incorrect_modal_submit(
         chunk_ids = metadata.get("chunk_ids", [])
         channel_id = metadata.get("channel_id")
         reporter_id = metadata.get("reporter_id")
+        feedback_buttons_ts = metadata.get("feedback_buttons_ts")
+
+        # Replace feedback buttons with thank-you immediately
+        await _update_feedback_buttons(client, channel_id, feedback_buttons_ts, "incorrect")
 
         # Extract form values
         values = view["state"]["values"]
@@ -117,13 +155,14 @@ async def handle_incorrect_modal_submit(
             message_ts=message_ts,
         )
 
-        # Confirm to reporter
+        # Confirm to reporter (in-thread)
         await confirm_feedback_to_reporter(
             client=client,
             channel_id=channel_id,
             reporter_id=reporter_id,
             feedback_type="incorrect",
             owner_notified=owner_notified,
+            thread_ts=message_ts,
         )
 
         logger.info(
@@ -157,6 +196,10 @@ async def handle_outdated_modal_submit(
         chunk_ids = metadata.get("chunk_ids", [])
         channel_id = metadata.get("channel_id")
         reporter_id = metadata.get("reporter_id")
+        feedback_buttons_ts = metadata.get("feedback_buttons_ts")
+
+        # Replace feedback buttons with thank-you immediately
+        await _update_feedback_buttons(client, channel_id, feedback_buttons_ts, "outdated")
 
         # Extract form values
         values = view["state"]["values"]
@@ -167,13 +210,13 @@ async def handle_outdated_modal_submit(
             .get("value", "")
         )
         current_info = (
-            values.get("current_block", {})
-            .get("current_input", {})
+            values.get("current_info_block", {})
+            .get("current_info_input", {})
             .get("value")
         )
         when_changed = (
-            values.get("when_block", {})
-            .get("when_input", {})
+            values.get("when_changed_block", {})
+            .get("when_changed_input", {})
             .get("value")
         )
 
@@ -230,13 +273,14 @@ async def handle_outdated_modal_submit(
             message_ts=message_ts,
         )
 
-        # Confirm to reporter
+        # Confirm to reporter (in-thread)
         await confirm_feedback_to_reporter(
             client=client,
             channel_id=channel_id,
             reporter_id=reporter_id,
             feedback_type="outdated",
             owner_notified=owner_notified,
+            thread_ts=message_ts,
         )
 
         logger.info(
@@ -269,13 +313,17 @@ async def handle_confusing_modal_submit(
         chunk_ids = metadata.get("chunk_ids", [])
         channel_id = metadata.get("channel_id")
         reporter_id = metadata.get("reporter_id")
+        feedback_buttons_ts = metadata.get("feedback_buttons_ts")
+
+        # Replace feedback buttons with thank-you immediately
+        await _update_feedback_buttons(client, channel_id, feedback_buttons_ts, "confusing")
 
         # Extract form values
         values = view["state"]["values"]
 
         confusion_option = (
-            values.get("confusion_block", {})
-            .get("confusion_select", {})
+            values.get("confusion_type_block", {})
+            .get("confusion_type_select", {})
             .get("selected_option")
         )
         confusion_type = confusion_option.get("value") if confusion_option else "unclear"
@@ -324,13 +372,14 @@ async def handle_confusing_modal_submit(
             message_ts=message_ts,
         )
 
-        # Confirm to reporter
+        # Confirm to reporter (in-thread)
         await confirm_feedback_to_reporter(
             client=client,
             channel_id=channel_id,
             reporter_id=reporter_id,
             feedback_type="confusing",
             owner_notified=owner_notified,
+            thread_ts=message_ts,
         )
 
         logger.info(
@@ -342,14 +391,81 @@ async def handle_confusing_modal_submit(
         logger.error(f"Failed to process confusing feedback modal: {e}", exc_info=True)
 
 
+async def handle_ack_feedback(ack: Any, body: dict, client: WebClient) -> None:
+    """Handle content owner clicking 'Acknowledge' on feedback DM."""
+    await ack()
+
+    user_id = body["user"]["id"]
+    channel_id = body["channel"]["id"]
+    message_ts = body["message"]["ts"]
+
+    try:
+        await client.chat_update(
+            channel=channel_id,
+            ts=message_ts,
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f":white_check_mark: *Acknowledged* by <@{user_id}>",
+                    },
+                },
+            ],
+            text="Feedback acknowledged",
+        )
+    except Exception as e:
+        logger.error(f"Failed to acknowledge feedback: {e}")
+
+
+async def handle_resolve_feedback(ack: Any, body: dict, client: WebClient) -> None:
+    """Handle admin clicking 'Mark Resolved' on feedback notification."""
+    await ack()
+
+    user_id = body["user"]["id"]
+    channel_id = body["channel"]["id"]
+    message_ts = body["message"]["ts"]
+
+    try:
+        from datetime import datetime
+
+        await client.chat_update(
+            channel=channel_id,
+            ts=message_ts,
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f":white_check_mark: *Resolved* by <@{user_id}> at <!date^{int(datetime.utcnow().timestamp())}^{{date_short_pretty}} {{time}}|now>",
+                    },
+                },
+            ],
+            text="Feedback resolved",
+        )
+    except Exception as e:
+        logger.error(f"Failed to resolve feedback: {e}")
+
+
 def register_feedback_modal_handlers(app) -> None:
     """Register feedback modal view handlers with the Slack app.
 
     Args:
         app: Slack Bolt app instance
     """
+    import re
+
     app.view("feedback_incorrect_modal")(handle_incorrect_modal_submit)
     app.view("feedback_outdated_modal")(handle_outdated_modal_submit)
     app.view("feedback_confusing_modal")(handle_confusing_modal_submit)
+
+    # Action handlers for owner notification / admin channel buttons
+    app.action(re.compile(r"ack_feedback_.*"))(handle_ack_feedback)
+    app.action(re.compile(r"resolve_feedback_.*"))(handle_resolve_feedback)
+
+    async def _ack_view_feedback(ack, body, client):
+        await ack()
+
+    app.action("view_feedback_thread")(_ack_view_feedback)
 
     logger.info("Registered feedback modal handlers")

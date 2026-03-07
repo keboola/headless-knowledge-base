@@ -290,8 +290,8 @@ class GraphitiRetriever:
             try:
                 graphiti = await self._get_graphiti()
 
-                # Over-fetch to account for filtering
-                fetch_count = num_results * 3 if (space_key or doc_type or min_quality_score) else num_results
+                # Always over-fetch to account for empty-content results being filtered
+                fetch_count = num_results * 3
 
                 results = await graphiti.search(
                     query=query,
@@ -320,6 +320,7 @@ class GraphitiRetriever:
                 # Convert and filter results
                 search_results = []
                 seen_episodes = set()  # Deduplicate by episode
+                empty_content_count = 0
                 for result in results:
                     # Get episode data for this result (use first episode)
                     episodes = getattr(result, 'episodes', None) or []
@@ -344,10 +345,21 @@ class GraphitiRetriever:
                     if min_quality_score and sr.quality_score < min_quality_score:
                         continue
 
+                    # Skip results with no meaningful content (edge-only facts without episode data)
+                    if len(sr.content.strip()) < settings.SEARCH_MIN_CONTENT_LENGTH:
+                        empty_content_count += 1
+                        continue
+
                     search_results.append(sr)
 
                     if len(search_results) >= num_results:
                         break
+
+                if empty_content_count > 0:
+                    logger.info(
+                        f"Filtered out {empty_content_count}/{len(results)} empty-content results "
+                        f"(min_length={settings.SEARCH_MIN_CONTENT_LENGTH})"
+                    )
 
                 if len(results) > 0 and len(search_results) == 0:
                     logger.warning(

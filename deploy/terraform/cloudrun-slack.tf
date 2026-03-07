@@ -101,6 +101,11 @@ resource "google_cloud_run_v2_service" "slack_bot" {
         value = "true"
       }
 
+      env {
+        name  = "KNOWLEDGE_ADMIN_CHANNEL"
+        value = var.knowledge_admin_channel_prod
+      }
+
       # Health check
       startup_probe {
         http_get {

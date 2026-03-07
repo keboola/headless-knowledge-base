@@ -8,6 +8,7 @@ Prerequisites:
 - Bot has required Slack permissions (chat:write, etc.)
 """
 
+import json
 import pytest
 import uuid
 import asyncio
@@ -57,7 +58,6 @@ class TestAdminEscalationLive:
         # Wait for bot to respond
         reply = await slack_client.wait_for_bot_reply(
             parent_ts=msg_ts,
-            timeout=90
         )
 
         # The reply might be "I don't have information" which is fine
@@ -450,7 +450,6 @@ class TestFeedbackButtonsLive:
         # Wait for bot response (the answer)
         reply = await slack_client.wait_for_bot_reply(
             parent_ts=msg_ts,
-            timeout=90
         )
 
         assert reply is not None, "Bot did not respond"
@@ -515,7 +514,6 @@ class TestFeedbackButtonsLive:
         # Wait for bot response
         reply = await slack_client.wait_for_bot_reply(
             parent_ts=msg_ts,
-            timeout=90
         )
 
         assert reply is not None, "Bot did not respond"
@@ -602,7 +600,6 @@ class TestFeedbackFlowLive:
         # Wait for bot to respond
         reply = await slack_client.wait_for_bot_reply(
             parent_ts=msg_ts,
-            timeout=90
         )
 
         assert reply is not None, "Bot did not respond"
@@ -662,7 +659,6 @@ class TestFeedbackFlowLive:
         # Wait for bot to respond
         reply = await slack_client.wait_for_bot_reply(
             parent_ts=msg_ts,
-            timeout=90
         )
 
         assert reply is not None, "Bot did not respond"
@@ -733,7 +729,6 @@ class TestFeedbackFlowLive:
         # Wait for bot to respond
         reply = await slack_client.wait_for_bot_reply(
             parent_ts=msg_ts,
-            timeout=90
         )
 
         assert reply is not None, "Bot did not respond"
@@ -810,7 +805,6 @@ class TestInformationGuardianLive:
 
             reply = await slack_client.wait_for_bot_reply(
                 parent_ts=msg_ts,
-                timeout=90
             )
 
             assert reply is not None, f"Bot did not respond to: {question}"
@@ -858,7 +852,6 @@ class TestInformationGuardianLive:
 
         reply = await slack_client.wait_for_bot_reply(
             parent_ts=msg_ts,
-            timeout=90
         )
 
         assert reply is not None, "Bot did not respond"
@@ -934,3 +927,313 @@ class TestInformationGuardianLive:
         )
 
         assert result["ok"], "Cannot post to admin channel"
+
+
+def _find_message_with_id(messages: list, unique_id: str) -> bool:
+    """Search Slack messages for a unique test ID in text or blocks."""
+    for msg in messages:
+        if unique_id in msg.get("text", ""):
+            return True
+        for block in msg.get("blocks", []):
+            block_str = json.dumps(block)
+            if unique_id in block_str:
+                return True
+    return False
+
+
+# =============================================================================
+# REAL FEEDBACK → ADMIN CHANNEL NOTIFICATION TESTS
+# =============================================================================
+
+class TestFeedbackNotifiesAdminChannel:
+    """
+    Live E2E tests that exercise the REAL notify_content_owner → send_to_admin_channel
+    code path. Unlike other tests, these do NOT mock notify_content_owner.
+
+    Only Graphiti dependencies are mocked (owner email lookup, source titles)
+    since those need live Neo4j. The actual Slack posting is real.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.e2e
+    async def test_notify_content_owner_posts_to_admin_channel(
+        self,
+        slack_client,
+        e2e_config,
+        admin_channel_id,
+        unique_test_id,
+    ):
+        """
+        Verify: notify_content_owner() actually posts a message to the admin channel.
+
+        Exercises the REAL send_to_admin_channel() function — not mocked.
+        Only Graphiti calls are mocked (owner email, source titles).
+        """
+        from slack_sdk.web.async_client import AsyncWebClient
+        from knowledge_base.slack.owner_notification import notify_content_owner
+
+        async_client = AsyncWebClient(token=e2e_config["bot_token"])
+
+        # Mock only Graphiti deps (no live Neo4j for owner/source lookups)
+        with patch(
+            "knowledge_base.slack.owner_notification.get_owner_email_for_chunks",
+            new_callable=AsyncMock,
+            return_value=None,  # No owner — falls through to admin channel
+        ):
+            with patch(
+                "knowledge_base.slack.owner_notification._get_feedback_context",
+                new_callable=AsyncMock,
+                return_value={
+                    "query": f"Test question {unique_test_id}",
+                    "response": "Test response",
+                    "source_titles": ["Test Document"],
+                },
+            ):
+                # Override ADMIN_CHANNEL to use the known channel ID
+                with patch(
+                    "knowledge_base.slack.owner_notification.ADMIN_CHANNEL",
+                    admin_channel_id,
+                ):
+                    result = await notify_content_owner(
+                        client=async_client,
+                        chunk_ids=[f"test_chunk_{unique_test_id}"],
+                        feedback_type="confusing",
+                        issue_description=f"[E2E Test] Confusing feedback notification {unique_test_id}",
+                        suggested_correction="Please simplify the explanation",
+                        reporter_id=e2e_config["bot_user_id"],
+                        channel_id=e2e_config["channel_id"],
+                        message_ts="1234567890.123456",
+                    )
+
+        # result should be False (no owner notified, only admin channel)
+        assert result is False, "Should return False when no owner found"
+
+        # Verify the message actually appeared in the admin channel
+        await asyncio.sleep(3)
+
+        history = slack_client.bot_client.conversations_history(
+            channel=admin_channel_id,
+            limit=20,
+        )
+
+        messages = history.get("messages", [])
+        found = _find_message_with_id(messages, unique_test_id)
+
+        assert found, (
+            f"notify_content_owner() should post to admin channel. "
+            f"Searched {len(messages)} recent messages — "
+            f"unique_test_id '{unique_test_id}' not found."
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.e2e
+    async def test_confusing_modal_submit_posts_to_admin_channel(
+        self,
+        slack_client,
+        e2e_config,
+        admin_channel_id,
+        unique_test_id,
+    ):
+        """
+        Verify: The full confusing modal submit flow posts to admin channel.
+
+        Exercises handle_confusing_modal_submit() with a real Slack client.
+        Mocks: init_db, submit_feedback, Graphiti deps, confirm_feedback_to_reporter.
+        NOT mocked: notify_content_owner, send_to_admin_channel.
+        """
+        from slack_sdk.web.async_client import AsyncWebClient
+        from knowledge_base.slack.feedback_modals import handle_confusing_modal_submit
+
+        async_client = AsyncWebClient(token=e2e_config["bot_token"])
+
+        view = {
+            "private_metadata": json.dumps({
+                "message_ts": "1234567890.123456",
+                "chunk_ids": [f"test_chunk_{unique_test_id}"],
+                "channel_id": e2e_config["channel_id"],
+                "reporter_id": e2e_config["bot_user_id"],
+            }),
+            "state": {
+                "values": {
+                    "confusion_type_block": {
+                        "confusion_type_select": {
+                            "selected_option": {
+                                "value": "too_technical",
+                                "text": {"text": "Too technical"},
+                            }
+                        }
+                    },
+                    "clarification_block": {
+                        "clarification_input": {
+                            "value": f"[E2E Test] Please simplify {unique_test_id}",
+                        }
+                    },
+                }
+            },
+        }
+
+        ack = AsyncMock()
+
+        with patch("knowledge_base.slack.feedback_modals.init_db", new_callable=AsyncMock):
+            with patch("knowledge_base.slack.feedback_modals.submit_feedback", new_callable=AsyncMock):
+                with patch(
+                    "knowledge_base.slack.feedback_modals.confirm_feedback_to_reporter",
+                    new_callable=AsyncMock,
+                ):
+                    # Mock only Graphiti deps inside notify_content_owner
+                    with patch(
+                        "knowledge_base.slack.owner_notification.get_owner_email_for_chunks",
+                        new_callable=AsyncMock,
+                        return_value=None,
+                    ):
+                        with patch(
+                            "knowledge_base.slack.owner_notification._get_feedback_context",
+                            new_callable=AsyncMock,
+                            return_value={
+                                "query": f"Test confusing question {unique_test_id}",
+                                "response": "Test response",
+                                "source_titles": ["Confusing Document"],
+                            },
+                        ):
+                            with patch(
+                                "knowledge_base.slack.owner_notification.ADMIN_CHANNEL",
+                                admin_channel_id,
+                            ):
+                                await handle_confusing_modal_submit(
+                                    ack, {}, async_client, view,
+                                )
+
+        ack.assert_called_once()
+
+        # Verify the message actually appeared in the admin channel
+        await asyncio.sleep(3)
+
+        history = slack_client.bot_client.conversations_history(
+            channel=admin_channel_id,
+            limit=20,
+        )
+
+        messages = history.get("messages", [])
+        found_admin_msg = False
+        for msg in messages:
+            msg_text = msg.get("text", "")
+            blocks_text = json.dumps(msg.get("blocks", []))
+            if unique_test_id in msg_text or unique_test_id in blocks_text:
+                found_admin_msg = True
+                # Verify it's a confusing feedback notification
+                assert "confusing" in msg_text.lower() or "confusing" in blocks_text.lower(), (
+                    "Admin channel message should mention 'confusing' feedback type"
+                )
+                break
+
+        assert found_admin_msg, (
+            f"handle_confusing_modal_submit() should post to admin channel. "
+            f"Searched {len(messages)} recent messages — "
+            f"unique_test_id '{unique_test_id}' not found."
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.e2e
+    async def test_incorrect_modal_submit_posts_to_admin_channel(
+        self,
+        slack_client,
+        e2e_config,
+        admin_channel_id,
+        unique_test_id,
+    ):
+        """
+        Verify: Incorrect modal submit also posts to admin channel.
+
+        Same pattern as confusing — exercises the real notify_content_owner path.
+        """
+        from slack_sdk.web.async_client import AsyncWebClient
+        from knowledge_base.slack.feedback_modals import handle_incorrect_modal_submit
+
+        async_client = AsyncWebClient(token=e2e_config["bot_token"])
+
+        view = {
+            "private_metadata": json.dumps({
+                "message_ts": "1234567890.123456",
+                "chunk_ids": [f"test_chunk_{unique_test_id}"],
+                "channel_id": e2e_config["channel_id"],
+                "reporter_id": e2e_config["bot_user_id"],
+            }),
+            "state": {
+                "values": {
+                    "incorrect_block": {
+                        "incorrect_input": {
+                            "value": f"[E2E Test] Incorrect info {unique_test_id}",
+                        }
+                    },
+                    "correction_block": {
+                        "correction_input": {"value": None},
+                    },
+                    "evidence_block": {
+                        "evidence_select": {
+                            "selected_option": {
+                                "value": "tested_myself",
+                                "text": {"text": "Tested myself"},
+                            }
+                        }
+                    },
+                }
+            },
+        }
+
+        ack = AsyncMock()
+
+        with patch("knowledge_base.slack.feedback_modals.init_db", new_callable=AsyncMock):
+            with patch("knowledge_base.slack.feedback_modals.submit_feedback", new_callable=AsyncMock):
+                with patch(
+                    "knowledge_base.slack.feedback_modals.confirm_feedback_to_reporter",
+                    new_callable=AsyncMock,
+                ):
+                    with patch(
+                        "knowledge_base.slack.owner_notification.get_owner_email_for_chunks",
+                        new_callable=AsyncMock,
+                        return_value=None,
+                    ):
+                        with patch(
+                            "knowledge_base.slack.owner_notification._get_feedback_context",
+                            new_callable=AsyncMock,
+                            return_value={
+                                "query": f"Test incorrect question {unique_test_id}",
+                                "response": "Test response",
+                                "source_titles": ["Wrong Document"],
+                            },
+                        ):
+                            with patch(
+                                "knowledge_base.slack.owner_notification.ADMIN_CHANNEL",
+                                admin_channel_id,
+                            ):
+                                await handle_incorrect_modal_submit(
+                                    ack, {}, async_client, view,
+                                )
+
+        ack.assert_called_once()
+
+        # Verify the message appeared in the admin channel
+        await asyncio.sleep(3)
+
+        history = slack_client.bot_client.conversations_history(
+            channel=admin_channel_id,
+            limit=20,
+        )
+
+        messages = history.get("messages", [])
+        found_admin_msg = False
+        for msg in messages:
+            msg_text = msg.get("text", "")
+            blocks_text = json.dumps(msg.get("blocks", []))
+            if unique_test_id in msg_text or unique_test_id in blocks_text:
+                found_admin_msg = True
+                assert "incorrect" in msg_text.lower() or "incorrect" in blocks_text.lower(), (
+                    "Admin channel message should mention 'incorrect' feedback type"
+                )
+                break
+
+        assert found_admin_msg, (
+            f"handle_incorrect_modal_submit() should post to admin channel. "
+            f"Searched {len(messages)} recent messages — "
+            f"unique_test_id '{unique_test_id}' not found."
+        )

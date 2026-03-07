@@ -136,11 +136,17 @@ async def generate_answer(
 
     content_limit = settings.SEARCH_CHUNK_CONTENT_LIMIT
 
+    # Filter chunks with meaningful content before building LLM context
+    valid_chunks = [c for c in chunks if c.content and c.content.strip()]
+    if not valid_chunks:
+        return "I couldn't find relevant information in the knowledge base to answer your question."
+
     # Build context from chunks (SearchResult has page_title property and content attribute)
     context_parts = []
-    for i, chunk in enumerate(chunks, 1):
+    for i, chunk in enumerate(valid_chunks, 1):
+        title = chunk.page_title or chunk.url or f"Chunk {chunk.chunk_id}"
         context_parts.append(
-            f"[Source {i}: {chunk.page_title}]\n{chunk.content[:content_limit]}"
+            f"[Source {i}: {title}]\n{chunk.content[:content_limit]}"
         )
     context = "\n\n---\n\n".join(context_parts)
 

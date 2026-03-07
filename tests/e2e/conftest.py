@@ -14,12 +14,14 @@ from knowledge_base.config import settings
 def graphiti_available():
     """Check if Graphiti is available and skip tests if not.
 
-    This fixture attempts to connect to Graphiti and skips the test
-    if the connection fails.
+    Validates configuration and network connectivity WITHOUT creating any
+    async Graphiti/Neo4j resources. This avoids 'Future attached to a different
+    loop' errors that occur when async resources are created in a synchronous
+    fixture and later used in async test functions on a different event loop.
 
     IMPORTANT: Tests that require this fixture need:
     1. GRAPH_ENABLE_GRAPHITI=true
-    2. ANTHROPIC_API_KEY set (for entity extraction)
+    2. An LLM API key (GOOGLE_API_KEY or ANTHROPIC_API_KEY) for entity extraction
     3. Network access to Neo4j (not possible from GitHub Actions to VPC internal IPs)
     """
     from knowledge_base.config import settings
@@ -27,58 +29,56 @@ def graphiti_available():
     if not settings.GRAPH_ENABLE_GRAPHITI:
         pytest.skip("Graphiti is disabled in settings.")
 
-    # Check for Anthropic API key (required for entity extraction)
-    if not os.environ.get("ANTHROPIC_API_KEY") and not settings.ANTHROPIC_API_KEY:
+    # Check for any LLM provider key (Graphiti needs LLM for entity extraction)
+    has_llm_key = (
+        os.environ.get("GOOGLE_API_KEY") or
+        os.environ.get("ANTHROPIC_API_KEY") or
+        getattr(settings, 'ANTHROPIC_API_KEY', None) or
+        getattr(settings, 'GOOGLE_API_KEY', None)
+    )
+    if not has_llm_key:
         pytest.skip(
-            "ANTHROPIC_API_KEY not available. "
-            "Graphiti requires this for entity extraction."
+            "No LLM API key available (GOOGLE_API_KEY or ANTHROPIC_API_KEY). "
+            "Graphiti requires an LLM for entity extraction."
         )
 
-    # Check for Neo4j connection by actually trying to create a client
+    # Verify Neo4j is reachable with a simple TCP connectivity check.
+    # Do NOT create a Graphiti client here — that creates async resources
+    # (Neo4j driver, asyncio.Lock) bound to the current event loop, which
+    # conflicts with pytest-asyncio's loop used by async test functions.
+    import socket
+    from urllib.parse import urlparse
+
+    neo4j_uri = settings.NEO4J_URI
+    if not neo4j_uri:
+        pytest.skip("NEO4J_URI not configured.")
+
+    parsed = urlparse(neo4j_uri)
+    host = parsed.hostname
+    # bolt+s default port is 7687, but staging uses 443 via SSL proxy
+    port = parsed.port or 7687
+
     try:
-        from knowledge_base.graph.graphiti_client import GraphitiClient, GraphitiClientError
-
-        # Create a new client instance (don't use singleton to avoid polluting other tests)
-        client = GraphitiClient()
-
-        # Try to actually connect using the session event loop
-        # IMPORTANT: Do NOT create a new event loop here — it conflicts with
-        # pytest-asyncio's session loop and causes "Future attached to a different loop"
-        # errors in downstream async tests.
-        import asyncio
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        try:
-            # Use a short timeout to fail fast if Neo4j is not reachable
-            async def test_connection():
-                try:
-                    graphiti = await asyncio.wait_for(client.get_client(), timeout=10.0)
-                    return True
-                except asyncio.TimeoutError:
-                    raise GraphitiClientError("Connection to Neo4j timed out")
-                except Exception as e:
-                    raise GraphitiClientError(f"Failed to connect: {e}")
-                finally:
-                    # Clean up
-                    GraphitiClient.reset()
-
-            loop.run_until_complete(test_connection())
-        finally:
-            # Do NOT close the loop — it's shared with the test session
-            pass
-
-        return True
-
-    except Exception as e:
+        sock = socket.create_connection((host, port), timeout=10)
+        sock.close()
+    except (socket.timeout, socket.error, OSError) as e:
         pytest.skip(
-            f"Graphiti/Neo4j not reachable: {e}. "
+            f"Neo4j not reachable at {host}:{port}: {e}. "
             "These tests require network access to the staging Neo4j VM. "
             "When running from GitHub Actions, the runner cannot reach VPC internal IPs. "
             "Run these tests from within GCP VPC or with a local Neo4j instance."
         )
+
+    # Ensure all singletons are clean (no stale locks/connections from previous sessions)
+    from knowledge_base.graph.graphiti_client import GraphitiClient
+    import knowledge_base.graph.graphiti_builder as _builder_mod
+    import knowledge_base.graph.graphiti_indexer as _indexer_mod
+
+    GraphitiClient.reset()
+    _builder_mod._default_builder = None
+    _indexer_mod._default_indexer = None
+
+    return True
 
 @pytest.fixture(scope="session")
 def event_loop():

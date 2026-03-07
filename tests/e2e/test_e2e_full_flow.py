@@ -63,15 +63,16 @@ async def test_create_and_retrieve_knowledge(slack_client, db_session, e2e_confi
         "channel_id": e2e_config["channel_id"]
     }
 
-    # Mock the Graphiti builder to prevent actual Neo4j connection
-    mock_builder = MagicMock()
-    mock_builder.add_chunk_episode = AsyncMock(return_value={"success": True, "episode_id": "test123"})
+    # Mock GraphitiIndexer to prevent actual Neo4j connection.
+    # quick_knowledge.py instantiates GraphitiIndexer() directly,
+    # so we must patch the class in the module where it's imported.
+    with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_indexer_cls:
+        mock_indexer = mock_indexer_cls.return_value
+        mock_indexer.index_single_chunk = AsyncMock()
 
-    with patch("knowledge_base.graph.graphiti_indexer.get_graphiti_builder", return_value=mock_builder):
         await handle_create_knowledge(ack, command, mock_client)
-
-    # Wait for background task to complete
-    await asyncio.sleep(2)
+        # Wait INSIDE the mock scope so the background task uses the mock
+        await asyncio.sleep(2)
 
     # Verify the handler called the mock correctly
     assert ack.called, "Handler should acknowledge the command"
@@ -81,7 +82,7 @@ async def test_create_and_retrieve_knowledge(slack_client, db_session, e2e_confi
     user_msg_ts = await slack_client.send_message(f"<@{e2e_config['bot_user_id']}> {question}")
 
     # 3. Wait for reply from the staging bot
-    reply = await slack_client.wait_for_bot_reply(parent_ts=user_msg_ts, timeout=60)
+    reply = await slack_client.wait_for_bot_reply(parent_ts=user_msg_ts)
     assert reply is not None, "Staging bot did not reply"
     # Note: Bot may not know the answer since we mocked indexing
     # This test verifies the bot responds, not that it has the specific knowledge
@@ -109,19 +110,19 @@ async def test_feedback_improves_score(slack_client, db_session, e2e_config):
         "channel_id": e2e_config["channel_id"]
     }
 
-    # Mock the Graphiti builder to prevent actual Neo4j connection
-    mock_builder = MagicMock()
-    mock_builder.add_chunk_episode = AsyncMock(return_value={"success": True, "episode_id": "test123"})
+    # Mock GraphitiIndexer to prevent actual Neo4j connection.
+    # quick_knowledge.py instantiates GraphitiIndexer() directly.
+    with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_indexer_cls:
+        mock_indexer = mock_indexer_cls.return_value
+        mock_indexer.index_single_chunk = AsyncMock()
 
-    with patch("knowledge_base.graph.graphiti_indexer.get_graphiti_builder", return_value=mock_builder):
         await handle_create_knowledge(ack, command, mock_client)
-
-    # Wait for background task
-    await asyncio.sleep(2)
+        # Wait INSIDE the mock scope so the background task uses the mock
+        await asyncio.sleep(2)
 
     # Verification: Ask bot (tests responsiveness)
     user_msg_ts = await slack_client.send_message(f"<@{e2e_config['bot_user_id']}> what is the feedback test value for {unique_id}?")
-    reply = await slack_client.wait_for_bot_reply(parent_ts=user_msg_ts, timeout=60)
+    reply = await slack_client.wait_for_bot_reply(parent_ts=user_msg_ts)
     assert reply is not None, "Bot should respond"
     # Note: Bot may not know the specific answer since indexer was mocked
     assert len(reply.get("text", "")) > 0, "Bot should provide some response"
@@ -141,18 +142,18 @@ async def test_negative_feedback_demotes(slack_client, db_session, e2e_config):
     mock_client.chat_postEphemeral = AsyncMock()
     command = {"text": fact_text, "user_id": e2e_config["bot_user_id"], "user_name": "e2e_bot", "channel_id": e2e_config["channel_id"]}
 
-    # Mock the Graphiti builder to prevent actual Neo4j connection
-    mock_builder = MagicMock()
-    mock_builder.add_chunk_episode = AsyncMock(return_value={"success": True, "episode_id": "test123"})
+    # Mock GraphitiIndexer to prevent actual Neo4j connection.
+    # quick_knowledge.py instantiates GraphitiIndexer() directly.
+    with patch("knowledge_base.slack.quick_knowledge.GraphitiIndexer") as mock_indexer_cls:
+        mock_indexer = mock_indexer_cls.return_value
+        mock_indexer.index_single_chunk = AsyncMock()
 
-    with patch("knowledge_base.graph.graphiti_indexer.get_graphiti_builder", return_value=mock_builder):
         await handle_create_knowledge(ack, command, mock_client)
-
-    # Wait for background task
-    await asyncio.sleep(2)
+        # Wait INSIDE the mock scope so the background task uses the mock
+        await asyncio.sleep(2)
 
     user_msg_ts = await slack_client.send_message(f"<@{e2e_config['bot_user_id']}> what is the negative feedback test key for {unique_id}?")
-    reply = await slack_client.wait_for_bot_reply(parent_ts=user_msg_ts, timeout=60)
+    reply = await slack_client.wait_for_bot_reply(parent_ts=user_msg_ts)
     assert reply is not None, "Bot should respond"
     # Note: Bot may not know the specific answer since indexer was mocked
     assert len(reply.get("text", "")) > 0, "Bot should provide some response"
@@ -169,7 +170,7 @@ async def test_behavioral_signals(slack_client, db_session, e2e_config):
     user_msg_ts = await slack_client.send_message(f"<@{e2e_config['bot_user_id']}> {question}")
     
     # Wait for reply in thread
-    bot_reply = await slack_client.wait_for_bot_reply(parent_ts=user_msg_ts, timeout=60)
+    bot_reply = await slack_client.wait_for_bot_reply(parent_ts=user_msg_ts)
     assert bot_reply is not None
     thread_ts = bot_reply["ts"]
     

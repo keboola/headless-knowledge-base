@@ -251,15 +251,31 @@ async def send_to_admin_channel(
         owner_notified=owner_notified,
     )
 
+    logger.info(f"Posting to admin channel ID={admin_channel_id} (env={ADMIN_CHANNEL})")
     try:
         await client.chat_postMessage(
             channel=admin_channel_id,
             blocks=blocks,
             text=f"Knowledge feedback: {feedback_type} from <@{reporter_id}>",
         )
+        logger.info("Successfully posted to admin channel")
         return True
     except SlackApiError as e:
-        logger.error(f"Failed to send to admin channel: {e}")
+        error_code = e.response.get("error", "unknown")
+        logger.error(f"chat.postMessage to admin channel failed: error={error_code}, channel={admin_channel_id}")
+        if error_code in ("channel_not_found", "not_in_channel"):
+            # Bot may not be a member — try to join first
+            try:
+                await client.conversations_join(channel=admin_channel_id)
+                await client.chat_postMessage(
+                    channel=admin_channel_id,
+                    blocks=blocks,
+                    text=f"Knowledge feedback: {feedback_type} from <@{reporter_id}>",
+                )
+                return True
+            except SlackApiError as join_err:
+                logger.error(f"Failed to join and send to admin channel: {join_err}")
+                return False
         return False
 
 
@@ -598,6 +614,7 @@ async def confirm_feedback_to_reporter(
     reporter_id: str,
     feedback_type: str,
     owner_notified: bool,
+    thread_ts: str | None = None,
 ) -> None:
     """Send confirmation to reporter that feedback was received.
 
@@ -607,6 +624,7 @@ async def confirm_feedback_to_reporter(
         reporter_id: User who reported the issue
         feedback_type: Type of feedback submitted
         owner_notified: Whether owner was notified (vs admin channel)
+        thread_ts: Thread timestamp to post confirmation in-thread
     """
     if owner_notified:
         message = (
@@ -620,10 +638,13 @@ async def confirm_feedback_to_reporter(
         )
 
     try:
-        await client.chat_postEphemeral(
-            channel=channel_id,
-            user=reporter_id,
-            text=message,
-        )
+        kwargs: dict = {
+            "channel": channel_id,
+            "user": reporter_id,
+            "text": message,
+        }
+        if thread_ts:
+            kwargs["thread_ts"] = thread_ts
+        await client.chat_postEphemeral(**kwargs)
     except SlackApiError as e:
         logger.error(f"Failed to confirm feedback to reporter: {e}")

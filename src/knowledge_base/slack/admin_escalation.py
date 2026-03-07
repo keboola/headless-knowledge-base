@@ -511,7 +511,7 @@ async def _get_admin_channel(client: WebClient) -> str | None:
 
     try:
         # Try to find channel by name
-        result = client.conversations_list(types="public_channel,private_channel")
+        result = await client.conversations_list(types="public_channel,private_channel")
 
         for channel in result.get("channels", []):
             if channel.get("name") == channel_value:
@@ -561,4 +561,7 @@ def register_escalation_handlers(app):
     app.action(re.compile(r"escalate_to_admin_.*"))(handle_escalate_to_admin)
     app.action(re.compile(r"dismiss_escalation_.*"))(handle_dismiss_escalation)
     app.action(re.compile(r"resolve_escalation_.*"))(handle_resolve_escalation)
-    app.action("view_escalation_thread")(lambda ack, body, client: ack())  # Just acknowledge URL button
+    async def _ack_view_thread(ack, body, client):
+        await ack()
+
+    app.action("view_escalation_thread")(_ack_view_thread)

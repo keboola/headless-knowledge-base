@@ -28,6 +28,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy import select
 
+from knowledge_base.db.database import init_db
 from knowledge_base.db.models import BehavioralSignal, BotResponse
 from knowledge_base.slack.quick_knowledge import handle_create_knowledge
 from knowledge_base.slack.bot import _handle_feedback_action, pending_feedback
@@ -44,6 +45,29 @@ logger = logging.getLogger(__name__)
 
 # Mark all tests as e2e
 pytestmark = pytest.mark.e2e
+
+
+async def _call_feedback_action_and_wait(body, client):
+    """Call _handle_feedback_action and deterministically wait for its background task.
+
+    _handle_feedback_action uses asyncio.ensure_future() to schedule
+    _submit_feedback_background as a fire-and-forget task. Using asyncio.sleep()
+    to wait for it is inherently racy. Instead, we patch asyncio.ensure_future
+    in the bot module to capture the spawned task, then explicitly await it.
+    """
+    captured_tasks = []
+    original_ensure_future = asyncio.ensure_future
+
+    def capturing_ensure_future(coro, *args, **kwargs):
+        task = original_ensure_future(coro, *args, **kwargs)
+        captured_tasks.append(task)
+        return task
+
+    with patch("knowledge_base.slack.bot.asyncio.ensure_future", side_effect=capturing_ensure_future):
+        await _handle_feedback_action(body, client)
+
+    for task in captured_tasks:
+        await task
 
 
 # =============================================================================
@@ -69,7 +93,7 @@ class TestKnowledgeDiscovery:
         )
 
         # Wait for bot to respond in thread
-        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=90)
+        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts)
 
         # Bot must return a substantive answer from the knowledge base, not a fallback
         slack_client.assert_substantive_response(reply)
@@ -88,7 +112,7 @@ class TestKnowledgeDiscovery:
             f"<@{e2e_config['bot_user_id']}> {initial_q}"
         )
 
-        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=90)
+        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts)
         # First reply must be substantive
         slack_client.assert_substantive_response(reply)
 
@@ -104,7 +128,6 @@ class TestKnowledgeDiscovery:
         follow_up_reply = await slack_client.wait_for_bot_reply(
             parent_ts=msg_ts,
             after_ts=reply["ts"],
-            timeout=60
         )
 
         # Follow-up reply must also be substantive
@@ -123,7 +146,7 @@ class TestKnowledgeDiscovery:
             f"<@{e2e_config['bot_user_id']}> {obscure_q}"
         )
 
-        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=60)
+        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts)
 
         assert reply is not None, "Bot should still respond even without relevant info"
         # Bot should indicate it doesn't have this information
@@ -274,14 +297,16 @@ class TestFeedbackLoop:
 
         This should record positive feedback and maintain quality score.
         """
+        await init_db()
         unique_id = uuid.uuid4().hex[:8]
 
         # Create test content
         ack = AsyncMock()
         mock_client = MagicMock()
         mock_client.chat_postEphemeral = AsyncMock()
-        mock_client.chat_update = MagicMock()
-        mock_client.users_info.return_value = {"ok": True, "user": {"name": "test_user"}}
+        mock_client.chat_update = AsyncMock()
+        mock_client.chat_postMessage = AsyncMock()
+        mock_client.users_info = AsyncMock(return_value={"ok": True, "user": {"name": "test_user"}})
 
         fact = f"Helpful content test {unique_id}"
         command = {
@@ -325,7 +350,7 @@ class TestFeedbackLoop:
                 "message": {"ts": fake_ts}
             }
 
-            await _handle_feedback_action(feedback_body, mock_client)
+            await _call_feedback_action_and_wait(feedback_body, mock_client)
 
         # Verify feedback recorded in analytics DB
         feedbacks = await get_feedback_for_chunk(chunk_id)
@@ -338,14 +363,16 @@ class TestFeedbackLoop:
 
         This should decrease quality score significantly (-15 points).
         """
+        await init_db()
         unique_id = uuid.uuid4().hex[:8]
 
         # Create content
         ack = AsyncMock()
         mock_client = MagicMock()
         mock_client.chat_postEphemeral = AsyncMock()
-        mock_client.chat_update = MagicMock()
-        mock_client.users_info.return_value = {"ok": True, "user": {"name": "reporter"}}
+        mock_client.chat_update = AsyncMock()
+        mock_client.chat_postMessage = AsyncMock()
+        mock_client.users_info = AsyncMock(return_value={"ok": True, "user": {"name": "reporter"}})
 
         fact = f"Outdated content test {unique_id}"
         command = {"text": fact, "user_id": "U1", "user_name": "u1", "channel_id": "C1"}
@@ -394,7 +421,7 @@ class TestFeedbackLoop:
                 "message": {"ts": fake_ts}
             }
 
-            await _handle_feedback_action(feedback_body, mock_client)
+            await _call_feedback_action_and_wait(feedback_body, mock_client)
 
         # Verify score decreased
         assert quality_score == 100.0 - 15.0  # Outdated = -15
@@ -406,13 +433,15 @@ class TestFeedbackLoop:
 
         This is the most severe feedback (-25 points).
         """
+        await init_db()
         unique_id = uuid.uuid4().hex[:8]
 
         ack = AsyncMock()
         mock_client = MagicMock()
         mock_client.chat_postEphemeral = AsyncMock()
-        mock_client.chat_update = MagicMock()
-        mock_client.users_info.return_value = {"ok": True, "user": {"name": "reporter"}}
+        mock_client.chat_update = AsyncMock()
+        mock_client.chat_postMessage = AsyncMock()
+        mock_client.users_info = AsyncMock(return_value={"ok": True, "user": {"name": "reporter"}})
 
         fact = f"Incorrect content test {unique_id}"
         command = {"text": fact, "user_id": "U1", "user_name": "u1", "channel_id": "C1"}
@@ -460,7 +489,7 @@ class TestFeedbackLoop:
                 "message": {"ts": fake_ts}
             }
 
-            await _handle_feedback_action(feedback_body, mock_client)
+            await _call_feedback_action_and_wait(feedback_body, mock_client)
 
         assert quality_score == 100.0 - 25.0  # Incorrect = -25
 
@@ -480,6 +509,7 @@ class TestBehavioralLearning:
 
         This is a positive behavioral signal (+0.4).
         """
+        await init_db()
         unique_id = uuid.uuid4().hex[:8]
         response_ts = f"thanks_test_{unique_id}"
         thread_ts = response_ts
@@ -516,6 +546,7 @@ class TestBehavioralLearning:
 
         This indicates the first answer wasn't complete (-0.3).
         """
+        await init_db()
         unique_id = uuid.uuid4().hex[:8]
         response_ts = f"followup_test_{unique_id}"
         thread_ts = response_ts
@@ -550,6 +581,7 @@ class TestBehavioralLearning:
 
         This is a strong negative signal (-0.5).
         """
+        await init_db()
         unique_id = uuid.uuid4().hex[:8]
         response_ts = f"frustration_test_{unique_id}"
         thread_ts = response_ts
@@ -584,6 +616,7 @@ class TestBehavioralLearning:
 
         This is a positive signal (+0.5).
         """
+        await init_db()
         unique_id = uuid.uuid4().hex[:8]
         response_ts = f"thumbsup_test_{unique_id}"
         user_id = "U_HAPPY_USER"
@@ -617,6 +650,7 @@ class TestBehavioralLearning:
 
         This is a negative signal (-0.5).
         """
+        await init_db()
         unique_id = uuid.uuid4().hex[:8]
         response_ts = f"thumbsdown_test_{unique_id}"
         user_id = "U_UNHAPPY_USER"
@@ -660,14 +694,16 @@ class TestQualityRanking:
         When users consistently mark content as helpful, it should stay
         prominent in search results.
         """
+        await init_db()
         unique_id = uuid.uuid4().hex[:8]
 
         # Create content
         ack = AsyncMock()
         mock_client = MagicMock()
         mock_client.chat_postEphemeral = AsyncMock()
-        mock_client.chat_update = MagicMock()
-        mock_client.users_info.return_value = {"ok": True, "user": {"name": "user"}}
+        mock_client.chat_update = AsyncMock()
+        mock_client.chat_postMessage = AsyncMock()
+        mock_client.users_info = AsyncMock(return_value={"ok": True, "user": {"name": "user"}})
 
         fact = f"Popular content {unique_id}"
         command = {"text": fact, "user_id": "U1", "user_name": "u1", "channel_id": "C1"}
@@ -706,7 +742,7 @@ class TestQualityRanking:
                     "message": {"ts": fake_ts}
                 }
 
-                await _handle_feedback_action(body, mock_client)
+                await _call_feedback_action_and_wait(body, mock_client)
 
         # Verify feedback count in analytics DB
         feedbacks = await get_feedback_for_chunk(chunk_id)
@@ -721,13 +757,15 @@ class TestQualityRanking:
 
         Multiple incorrect/outdated marks should significantly lower the score.
         """
+        await init_db()
         unique_id = uuid.uuid4().hex[:8]
 
         ack = AsyncMock()
         mock_client = MagicMock()
         mock_client.chat_postEphemeral = AsyncMock()
-        mock_client.chat_update = MagicMock()
-        mock_client.users_info.return_value = {"ok": True, "user": {"name": "user"}}
+        mock_client.chat_update = AsyncMock()
+        mock_client.chat_postMessage = AsyncMock()
+        mock_client.users_info = AsyncMock(return_value={"ok": True, "user": {"name": "user"}})
 
         fact = f"Poor quality content {unique_id}"
         command = {"text": fact, "user_id": "U1", "user_name": "u1", "channel_id": "C1"}
@@ -777,7 +815,7 @@ class TestQualityRanking:
                     "message": {"ts": fake_ts}
                 }
 
-                await _handle_feedback_action(body, mock_client)
+                await _call_feedback_action_and_wait(body, mock_client)
 
         # Verify score dropped significantly
         # 100 - 25 - 25 = 50
@@ -808,7 +846,7 @@ class TestRealisticUserJourneys:
             f"<@{e2e_config['bot_user_id']}> {q1}"
         )
 
-        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts, timeout=90)
+        reply = await slack_client.wait_for_bot_reply(parent_ts=msg_ts)
         # Bot must provide a real answer about laptop setup, not a fallback
         slack_client.assert_substantive_response(reply)
         thread_ts = reply["ts"]
@@ -861,13 +899,15 @@ class TestRealisticUserJourneys:
         3. One user marks it outdated
         4. Another user creates updated version
         """
+        await init_db()
         unique_id = uuid.uuid4().hex[:8]
 
         ack = AsyncMock()
         mock_client = MagicMock()
         mock_client.chat_postEphemeral = AsyncMock()
-        mock_client.chat_update = MagicMock()
-        mock_client.users_info.return_value = {"ok": True, "user": {"name": "user"}}
+        mock_client.chat_update = AsyncMock()
+        mock_client.chat_postMessage = AsyncMock()
+        mock_client.users_info = AsyncMock(return_value={"ok": True, "user": {"name": "user"}})
 
         # Step 1: Initial knowledge
         old_fact = f"The deployment URL is deploy-old-{unique_id}.example.com"
@@ -913,7 +953,7 @@ class TestRealisticUserJourneys:
             for i in range(2):
                 ts = f"helpful_{unique_id}_{i}"
                 pending_feedback[ts] = [old_chunk_id]
-                await _handle_feedback_action({
+                await _call_feedback_action_and_wait({
                     "user": {"id": f"U_{i}"},
                     "actions": [{"action_id": f"feedback_helpful_{ts}"}],
                     "channel": {"id": "C1"},
@@ -923,7 +963,7 @@ class TestRealisticUserJourneys:
             # Step 3: Someone marks it outdated
             ts = f"outdated_{unique_id}"
             pending_feedback[ts] = [old_chunk_id]
-            await _handle_feedback_action({
+            await _call_feedback_action_and_wait({
                 "user": {"id": "U_DISCOVERER"},
                 "actions": [{"action_id": f"feedback_outdated_{ts}"}],
                 "channel": {"id": "C1"},
@@ -1015,35 +1055,6 @@ class TestThreadToKnowledge:
                 "thread_ts": thread_ts,
             })
         }
-
-        # Mock the document creator
-        with patch("knowledge_base.slack.doc_creation._get_document_creator") as mock_get_creator:
-            mock_creator = MagicMock()
-            mock_creator.drafter = MagicMock()  # LLM is available
-
-            # Mock the create_from_thread async method
-            mock_doc = MagicMock()
-            mock_doc.doc_id = f"doc_{unique_id}"
-            mock_doc.title = f"Build Error XYZ Resolution"
-            mock_doc.status = "published"
-            mock_doc.doc_type = "information"
-            mock_doc.area = "engineering"
-
-            mock_draft_result = MagicMock()
-            mock_draft_result.confidence = 0.85
-
-            async def mock_create_from_thread(**kwargs):
-                return (mock_doc, mock_draft_result)
-
-            mock_creator.create_from_thread = mock_create_from_thread
-            mock_get_creator.return_value = mock_creator
-
-            with patch("knowledge_base.slack.doc_creation.init_db"):
-                with patch("knowledge_base.slack.doc_creation._run_async") as mock_run:
-                    mock_run.side_effect = lambda coro: asyncio.get_event_loop().run_until_complete(coro) if asyncio.iscoroutine(coro) else coro
-
-                    # This would normally be called, but we're testing the flow
-                    # The actual implementation calls the creator
 
         # Verify the expected flow works
         assert thread_messages[0]["text"].startswith("The build is failing")
@@ -1267,7 +1278,6 @@ class TestExternalDocumentIngestion:
             mock_get.assert_called_once()
 
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="Notion integration requires API key - skipping for now")
     async def test_ingest_notion_page(self, slack_client, db_session, e2e_config):
         """
         Scenario: User shares a Notion page to be ingested.
@@ -1278,9 +1288,42 @@ class TestExternalDocumentIngestion:
         3. Notion blocks are converted to text
         4. Content is indexed
         """
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from knowledge_base.slack.ingest_doc import DocumentIngester
+
         notion_url = "https://www.notion.so/company/Engineering-Runbooks-abc123"
 
-        assert "notion.so" in notion_url
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = b"<html><body><h1>Engineering Runbooks</h1><p>Standard operating procedures.</p></body></html>"
+        mock_response.text = mock_response.content.decode()
+        mock_response.headers = {"content-type": "text/html"}
+
+        ingester = DocumentIngester()
+
+        with patch.object(ingester.http_client, "get", new_callable=AsyncMock) as mock_get, \
+             patch.object(ingester, "_create_and_index", new_callable=AsyncMock) as mock_index:
+
+            mock_get.return_value = mock_response
+            mock_index.return_value = {
+                "status": "success",
+                "source_type": "notion",
+                "chunks_created": 4,
+                "title": "Engineering Runbooks",
+                "url": notion_url,
+                "page_id": "notion_page_id",
+            }
+
+            result = await ingester.ingest_url(
+                url=notion_url,
+                created_by="test_user",
+                channel_id="C123",
+            )
+
+            assert result["status"] == "success"
+            assert result["source_type"] == "notion"
+            assert result["chunks_created"] > 0
+            mock_get.assert_called_once()
 
 
 # =============================================================================
@@ -1310,14 +1353,16 @@ class TestKnowledgeAdminEscalation:
         6. Admin joins thread, provides correct info
         7. Thread can be saved as updated knowledge
         """
+        await init_db()
         unique_id = uuid.uuid4().hex[:8]
 
         # Create content that will receive incorrect feedback
         ack = AsyncMock()
         mock_client = MagicMock()
         mock_client.chat_postEphemeral = AsyncMock()
-        mock_client.chat_update = MagicMock()
-        mock_client.users_info.return_value = {"ok": True, "user": {"name": "user"}}
+        mock_client.chat_update = AsyncMock()
+        mock_client.chat_postMessage = AsyncMock()
+        mock_client.users_info = AsyncMock(return_value={"ok": True, "user": {"name": "user"}})
 
         fact = f"Incorrect info that needs admin review {unique_id}"
         command = {"text": fact, "user_id": "U1", "user_name": "u1", "channel_id": "C1"}
@@ -1355,7 +1400,7 @@ class TestKnowledgeAdminEscalation:
                 "message": {"ts": fake_ts}
             }
 
-            await _handle_feedback_action(body, mock_client)
+            await _call_feedback_action_and_wait(body, mock_client)
 
         # Verify feedback was recorded in analytics DB
         feedbacks = await get_feedback_for_chunk(chunk_id)
@@ -1378,6 +1423,7 @@ class TestKnowledgeAdminEscalation:
         - User's feedback (why it's wrong)
         - Link to thread
         """
+        await init_db()
         unique_id = uuid.uuid4().hex[:8]
         response_ts = f"admin_context_{unique_id}"
         thread_ts = response_ts
@@ -1456,14 +1502,16 @@ class TestKnowledgeAdminEscalation:
         When 3+ users mark the same chunk as incorrect/outdated within 24h,
         automatically notify knowledge admins without user clicking button.
         """
+        await init_db()
         unique_id = uuid.uuid4().hex[:8]
 
         # Create content
         ack = AsyncMock()
         mock_client = MagicMock()
         mock_client.chat_postEphemeral = AsyncMock()
-        mock_client.chat_update = MagicMock()
-        mock_client.users_info.return_value = {"ok": True, "user": {"name": "user"}}
+        mock_client.chat_update = AsyncMock()
+        mock_client.chat_postMessage = AsyncMock()
+        mock_client.users_info = AsyncMock(return_value={"ok": True, "user": {"name": "user"}})
 
         fact = f"Widely reported incorrect content {unique_id}"
         command = {"text": fact, "user_id": "U1", "user_name": "u1", "channel_id": "C1"}
@@ -1514,7 +1562,7 @@ class TestKnowledgeAdminEscalation:
                     "message": {"ts": fake_ts}
                 }
 
-                await _handle_feedback_action(body, mock_client)
+                await _call_feedback_action_and_wait(body, mock_client)
 
         # Verify multiple feedbacks recorded in analytics DB
         feedbacks = await get_feedback_for_chunk(chunk_id)
