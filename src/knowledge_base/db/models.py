@@ -637,6 +637,34 @@ class GovernanceIssue(Base):
         return f"<GovernanceIssue(type={self.issue_type}, severity={self.severity}, status={self.status})>"
 
 
+class KnowledgeGovernanceRecord(Base):
+    """Audit trail for knowledge intake governance decisions."""
+
+    __tablename__ = "knowledge_governance"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chunk_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    risk_score: Mapped[float] = mapped_column(Float, default=0.0)
+    risk_tier: Mapped[str] = mapped_column(String(16), index=True)  # low / medium / high
+    risk_factors: Mapped[str] = mapped_column(Text, default="{}")  # JSON dict
+    intake_path: Mapped[str] = mapped_column(String(32), index=True)
+    submitted_by: Mapped[str] = mapped_column(String(128))
+    submitted_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    content_preview: Mapped[str] = mapped_column(Text, default="")
+
+    status: Mapped[str] = mapped_column(String(32), default="pending_review", index=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    revert_deadline: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    slack_notification_ts: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    slack_notification_channel: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<KnowledgeGovernanceRecord(chunk_id={self.chunk_id}, tier={self.risk_tier}, status={self.status})>"
+
+
 class DocumentationGap(Base):
     """Identified documentation gaps from unanswered queries."""
 

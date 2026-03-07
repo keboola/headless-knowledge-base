@@ -47,6 +47,11 @@ class ChunkData:
     reviewed_at: str = ""
     classification: str = "internal"  # public, internal, confidential
 
+    # Governance (Phase 15 — risk-based intake)
+    governance_status: str = "approved"  # approved / pending / rejected / reverted
+    governance_risk_score: float = 0.0
+    governance_risk_tier: str = "low"
+
     # AI metadata
     doc_type: str = ""  # policy, how-to, reference, FAQ, quick_fact
     topics: str = "[]"  # JSON array
@@ -80,4 +85,7 @@ class ChunkData:
             "audience": self.audience,
             "complexity": self.complexity,
             "summary": self.summary[:500] if self.summary else "",
+            "governance_status": self.governance_status,
+            "governance_risk_score": self.governance_risk_score,
+            "governance_risk_tier": self.governance_risk_tier,
         }

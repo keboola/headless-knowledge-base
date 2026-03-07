@@ -17,6 +17,7 @@ from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 from slack_sdk import WebClient
 
+from knowledge_base.config import settings
 from knowledge_base.db.database import async_session_maker
 # RawPage kept for sync tracking only
 from knowledge_base.db.models import RawPage
@@ -56,6 +57,8 @@ class DocumentIngester:
         url: str,
         created_by: str,
         channel_id: str,
+        slack_client: WebClient | None = None,
+        intake_path: str = "slack_ingest",
     ) -> dict:
         """Ingest a document from a URL.
 
@@ -63,10 +66,15 @@ class DocumentIngester:
             url: URL to ingest
             created_by: Slack user ID of creator
             channel_id: Channel where command was issued
+            slack_client: Optional Slack client for governance admin notifications
+            intake_path: Source path for governance audit trail ("slack_ingest" or "mcp_ingest")
 
         Returns:
             Result dict with status, chunks_created, title, etc.
         """
+        # Store slack_client and intake_path for use in _apply_governance during _create_and_index
+        self._slack_client = slack_client
+        self._intake_path = intake_path
         try:
             # Detect document type
             doc_type = self._detect_doc_type(url)
@@ -85,6 +93,9 @@ class DocumentIngester:
                 "error": str(e),
                 "url": url,
             }
+        finally:
+            self._slack_client = None
+            self._intake_path = "slack_ingest"
 
     def _detect_doc_type(self, url: str) -> str:
         """Detect the type of document from URL."""
@@ -424,6 +435,15 @@ class DocumentIngester:
 
         # Index directly to Graphiti (source of truth)
         try:
+            governance_result = None
+
+            if settings.GOVERNANCE_ENABLED:
+                governance_result = await self._apply_governance(
+                    chunks_to_index, content, created_by,
+                    slack_client=getattr(self, "_slack_client", None),
+                    intake_path=getattr(self, "_intake_path", "slack_ingest"),
+                )
+
             indexer = GraphitiIndexer()
             await indexer.index_chunks_direct(chunks_to_index)
             logger.info(f"Ingested and indexed {len(chunks_to_index)} chunks from {url}")
@@ -432,7 +452,7 @@ class DocumentIngester:
             logger.error(f"Failed to index ingested content: {e}")
             raise  # Don't silently fail - Graphiti is source of truth
 
-        return {
+        result = {
             "status": "success",
             "url": url,
             "title": title,
@@ -440,6 +460,68 @@ class DocumentIngester:
             "chunks_created": len(chunks_to_index),
             "page_id": page_id,
         }
+        if governance_result:
+            result["governance_status"] = governance_result.status
+            result["risk_tier"] = governance_result.risk_assessment.tier
+            result["risk_score"] = governance_result.risk_assessment.score
+        return result
+
+    async def _apply_governance(
+        self,
+        chunks: list[ChunkData],
+        content: str,
+        created_by: str,
+        slack_client: WebClient | None = None,
+        intake_path: str = "slack_ingest",
+    ):
+        """Classify content and set governance fields on all chunks.
+
+        Returns the GovernanceResult so callers can include governance
+        metadata in their response dicts.
+
+        If a slack_client is provided, admin notifications are sent
+        for high/medium risk content.
+
+        Args:
+            intake_path: Source path for risk classification and audit trail.
+                Use "slack_ingest" for Slack /ingest-doc, "mcp_ingest" for MCP.
+        """
+        from knowledge_base.governance.risk_classifier import RiskClassifier, IntakeRequest
+        from knowledge_base.governance.approval_engine import ApprovalEngine
+
+        classifier = RiskClassifier()
+        total_length = sum(len(c.content) for c in chunks)
+        assessment = await classifier.classify(IntakeRequest(
+            author_email=f"{created_by}@unknown" if "@" not in created_by else created_by,
+            intake_path=intake_path,
+            content=content[:5000],  # Use beginning of content for classification
+            chunk_count=len(chunks),
+            content_length=total_length,
+        ))
+
+        # Set governance fields on ALL chunks
+        for chunk in chunks:
+            chunk.governance_status = assessment.governance_status
+            chunk.governance_risk_score = assessment.score
+            chunk.governance_risk_tier = assessment.tier
+
+        # Record governance decision
+        engine = ApprovalEngine()
+        result = await engine.submit(chunks, assessment, created_by, intake_path)
+
+        # Send admin notifications when Slack client is available
+        if slack_client and result.records:
+            try:
+                if result.status == "pending_review":
+                    from knowledge_base.slack.governance_admin import notify_admin_high_risk
+                    await notify_admin_high_risk(slack_client, result.records[0])
+                elif result.status == "approved_with_revert":
+                    from knowledge_base.slack.governance_admin import notify_admin_medium_risk
+                    await notify_admin_medium_risk(slack_client, result.records[0])
+            except Exception as e:
+                logger.error(f"Failed to send governance admin notification: {e}", exc_info=True)
+
+        return result
 
     async def close(self):
         """Close HTTP client."""
@@ -517,25 +599,47 @@ async def handle_ingest_doc(ack: Any, command: dict, client: WebClient) -> None:
         """Background task to handle the actual ingestion work."""
         try:
             ingester = get_ingester()
-            result = await ingester.ingest_url(text, user_id, channel_id)
+            result = await ingester.ingest_url(text, user_id, channel_id, slack_client=client)
 
             if result["status"] == "success":
-                await client.chat_postEphemeral(
-                    channel=channel_id,
-                    user=user_id,
-                    text=(
-                        f"✅ *Document ingested successfully!*\n\n"
+                # Build governance-aware success message
+                gov_status = result.get("governance_status")
+                if gov_status == "pending_review":
+                    success_text = (
+                        f"*Document ingested* (pending admin review)\n\n"
+                        f"*Title:* {result['title']}\n"
+                        f"*Source:* {result['source_type']}\n"
+                        f"*Chunks created:* {result['chunks_created']}\n\n"
+                        f"_Content will become searchable after admin approval._"
+                    )
+                elif gov_status == "approved_with_revert":
+                    success_text = (
+                        f"*Document ingested successfully!*\n\n"
+                        f"*Title:* {result['title']}\n"
+                        f"*Source:* {result['source_type']}\n"
+                        f"*Chunks created:* {result['chunks_created']}\n"
+                        f"(Under {settings.GOVERNANCE_REVERT_WINDOW_HOURS}h admin review)\n\n"
+                        f"_The content is now searchable in the knowledge base._"
+                    )
+                else:
+                    success_text = (
+                        f"*Document ingested successfully!*\n\n"
                         f"*Title:* {result['title']}\n"
                         f"*Source:* {result['source_type']}\n"
                         f"*Chunks created:* {result['chunks_created']}\n\n"
                         f"_The content is now searchable in the knowledge base._"
-                    ),
+                    )
+
+                await client.chat_postEphemeral(
+                    channel=channel_id,
+                    user=user_id,
+                    text=success_text,
                 )
             else:
                 await client.chat_postEphemeral(
                     channel=channel_id,
                     user=user_id,
-                    text=f"❌ *Failed to ingest document*\n\nError: {result.get('error', 'Unknown error')}",
+                    text=f"*Failed to ingest document*\n\nError: {result.get('error', 'Unknown error')}",
                 )
 
         except Exception as e:
@@ -543,7 +647,7 @@ async def handle_ingest_doc(ack: Any, command: dict, client: WebClient) -> None:
             await client.chat_postEphemeral(
                 channel=channel_id,
                 user=user_id,
-                text=f"❌ *Error ingesting document:* {str(e)}",
+                text=f"*Error ingesting document:* {str(e)}",
             )
 
     # Start the background task and return immediately
