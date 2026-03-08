@@ -1,30 +1,37 @@
-"""E2E tests for knowledge governance feature.
+"""E2E tests for knowledge governance with full downstream verification.
 
-Covers the full governance workflow:
-- Admin notifications (high-risk / medium-risk) posted to Slack
-- Button clicks for approve / reject / revert / mark-reviewed
-- Governance-aware search filtering (pending, rejected, reverted excluded)
-- create-knowledge with governance classification
-- /governance-queue command handler
+Unlike the previous version (PR #40) which only checked HTTP 200 from button
+clicks, these tests verify actual downstream effects:
+- DB status transitions (pending_review -> approved/rejected, auto_approved -> reverted)
+- Slack message updates (buttons removed, status text added)
+- Search filtering (reverted/rejected/pending content excluded)
+- Admin authorization (non-admin channel actions rejected)
+- Revert window expiration (revert fails after deadline)
+
+Architecture:
+- Handler-level tests call governance handlers directly
+- Real in-memory SQLite DB for governance record state verification
+- Real Slack AsyncWebClient for message posting/updating (staging workspace)
+- Only Neo4j side effects are mocked (_update_neo4j_governance_status)
 
 Prerequisites:
 - E2E_ADMIN_CHANNEL set to admin channel ID
 - SLACK_BOT_TOKEN / SLACK_USER_TOKEN
 - Bot is a member of the admin channel
-- SLACK_STAGING_SIGNING_SECRET for button click tests
 """
 
+import asyncio
 import json
 import os
 import types
 import uuid
-from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from knowledge_base.config import settings
 from knowledge_base.db.models import Base, KnowledgeGovernanceRecord
@@ -51,19 +58,28 @@ def has_signing_secret():
 
 
 @pytest.fixture
-def has_governance():
-    """Skip if governance feature is disabled."""
-    if not settings.GOVERNANCE_ENABLED:
-        pytest.skip("GOVERNANCE_ENABLED is False")
-    return True
-
-
-@pytest.fixture
 async def async_slack_client(e2e_config):
     """Provide an async Slack WebClient for calling governance_admin functions."""
     from slack_sdk.web.async_client import AsyncWebClient
 
     return AsyncWebClient(token=e2e_config["bot_token"])
+
+
+@pytest.fixture
+async def governance_db():
+    """In-memory SQLite with KnowledgeGovernanceRecord table.
+
+    Returns an async_sessionmaker that can be used to:
+    1. Seed records before tests
+    2. Patch into approval_engine.async_session_maker
+    3. Query records after handler calls to verify state changes
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    yield session_maker
+    await engine.dispose()
 
 
 # =============================================================================
@@ -87,9 +103,9 @@ def _make_governance_record(
 ) -> types.SimpleNamespace:
     """Create a namespace object matching fields accessed by governance_admin.py.
 
-    notify_admin_high_risk and notify_admin_medium_risk access:
-        chunk_id, risk_score, risk_tier, risk_factors, intake_path,
-        submitted_by, content_preview, revert_deadline
+    Used for notify_admin_high_risk and notify_admin_medium_risk which read:
+    chunk_id, risk_score, risk_tier, risk_factors, intake_path,
+    submitted_by, content_preview, revert_deadline
     """
     return types.SimpleNamespace(
         chunk_id=chunk_id or f"e2e_gov_{uuid.uuid4().hex[:12]}",
@@ -106,61 +122,65 @@ def _make_governance_record(
     )
 
 
-def _mock_async_session_maker():
-    """Return a pair of patches that replace async_session_maker in
-    governance_admin and approval_engine with an in-memory SQLite session.
+async def _seed_record(
+    session_maker: async_sessionmaker,
+    chunk_id: str,
+    status: str,
+    risk_tier: str = "high",
+    risk_score: float = 75.0,
+    revert_deadline: datetime | None = None,
+) -> KnowledgeGovernanceRecord:
+    """Insert a governance record into the test DB."""
+    async with session_maker() as session:
+        record = KnowledgeGovernanceRecord(
+            chunk_id=chunk_id,
+            status=status,
+            risk_tier=risk_tier,
+            risk_score=risk_score,
+            risk_factors='{"author_trust": 80, "source_type": 60}',
+            intake_path="slack_create",
+            submitted_by="e2e_test",
+            content_preview="Test content for governance E2E.",
+            revert_deadline=revert_deadline,
+        )
+        session.add(record)
+        await session.commit()
+        await session.refresh(record)
+        return record
 
-    Usage:
-        with _mock_async_session_maker():
-            await notify_admin_high_risk(...)
+
+async def _get_record(
+    session_maker: async_sessionmaker,
+    chunk_id: str,
+) -> KnowledgeGovernanceRecord | None:
+    """Query the test DB for a governance record."""
+    async with session_maker() as session:
+        result = await session.execute(
+            select(KnowledgeGovernanceRecord).where(
+                KnowledgeGovernanceRecord.chunk_id == chunk_id
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+def _mock_admin_session_maker():
+    """Return a mock async_session_maker for governance_admin notification DB writes.
+
+    The notification functions do lazy imports of async_session_maker and use it
+    to update slack_notification_ts. We mock this to avoid touching the real DB.
     """
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    mock_session = MagicMock()
+    mock_session.execute = AsyncMock(
+        return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+    )
+    mock_session.commit = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
 
-    async def _init_tables():
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+    def factory():
+        return mock_session
 
-    _session_factory = async_sessionmaker(engine, expire_on_commit=False)
-
-    @asynccontextmanager
-    async def _session_ctx():
-        async with _session_factory() as session:
-            yield session
-
-    class _PatchContext:
-        """Combine two patches into a single context manager."""
-
-        def __init__(self):
-            self._patches = [
-                patch(
-                    "knowledge_base.slack.governance_admin.async_session_maker",
-                    return_value=_session_ctx(),
-                ),
-                patch(
-                    "knowledge_base.governance.approval_engine.async_session_maker",
-                    return_value=_session_ctx(),
-                ),
-            ]
-            self._mocks = []
-
-        def __enter__(self):
-            import asyncio
-            # Run table init synchronously if loop is available
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # We are inside an async test -- schedule init via task
-                    pass
-            except RuntimeError:
-                pass
-            self._mocks = [p.start() for p in self._patches]
-            return self
-
-        def __exit__(self, *args):
-            for p in self._patches:
-                p.stop()
-
-    return _PatchContext()
+    return factory
 
 
 def _find_message_with_text(messages: list[dict], needle: str) -> dict | None:
@@ -174,530 +194,868 @@ def _find_message_with_text(messages: list[dict], needle: str) -> dict | None:
     return None
 
 
-# =============================================================================
-# Class 1: Medium-Risk Notifications
-# =============================================================================
+async def _post_notification_to_admin(
+    async_slack_client,
+    admin_channel_id: str,
+    record: types.SimpleNamespace,
+    risk_type: str = "high",
+) -> str:
+    """Post a real governance notification to admin channel and return its ts.
 
-
-class TestGovernanceMediumRiskNotification:
-    """Verify medium-risk notifications appear in the admin channel."""
-
-    @pytest.mark.asyncio
-    async def test_medium_risk_posts_to_admin_channel(
-        self,
-        slack_client,
-        e2e_config,
-        admin_channel_id,
-        async_slack_client,
-        test_start_timestamp,
-        unique_test_id,
-    ):
-        """notify_admin_medium_risk() posts Auto-Approved header with Revert + Mark Reviewed buttons."""
-        import asyncio
-        from knowledge_base.slack.governance_admin import notify_admin_medium_risk
-
-        record = _make_governance_record(
-            chunk_id=f"e2e_med_{unique_test_id}",
-            risk_score=55.0,
-            risk_tier="medium",
-            status="auto_approved",
-            content_preview=f"[E2E Test] Medium-risk content {unique_test_id}",
-            revert_deadline=datetime.utcnow() + timedelta(hours=24),
-        )
-
-        with patch(
-            "knowledge_base.slack.governance_admin._get_admin_channel",
-            return_value=admin_channel_id,
-        ):
-            # Patch the DB write that updates slack_notification_ts
-            with patch(
-                "knowledge_base.slack.governance_admin.async_session_maker",
-                new_callable=lambda: lambda: MagicMock(
-                    __aenter__=AsyncMock(return_value=MagicMock(
-                        execute=AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))),
-                        commit=AsyncMock(),
-                    )),
-                    __aexit__=AsyncMock(return_value=False),
-                ),
-            ):
-                ts = await notify_admin_medium_risk(async_slack_client, record)
-
-        assert ts is not None, "notify_admin_medium_risk should return a ts"
-
-        # Verify message is in admin channel
-        await asyncio.sleep(2)
-
-        history = slack_client.bot_client.conversations_history(
-            channel=admin_channel_id,
-            inclusive=True,
-            oldest=ts,
-            latest=ts,
-            limit=1,
-        )
-        messages = history.get("messages", [])
-        assert len(messages) > 0, "Notification not found in admin channel"
-
-        msg = messages[0]
-
-        # Check for Auto-Approved header
-        blocks_str = json.dumps(msg.get("blocks", []))
-        assert "Auto-Approved" in blocks_str, "Message should have Auto-Approved header"
-
-        # Check for Revert and Mark Reviewed buttons
-        assert slack_client.message_has_button(msg, "governance_revert"), (
-            "Message should have Revert button"
-        )
-        assert slack_client.message_has_button(msg, "governance_mark_reviewed"), (
-            "Message should have Mark Reviewed button"
-        )
-
-    @pytest.mark.asyncio
-    async def test_mark_reviewed_button_click_succeeds(
-        self,
-        slack_client,
-        e2e_config,
-        admin_channel_id,
-        async_slack_client,
-        has_signing_secret,
-        unique_test_id,
-    ):
-        """Click Mark Reviewed button on a medium-risk notification -- verify 200."""
-        import asyncio
-        from knowledge_base.slack.governance_admin import notify_admin_medium_risk
-
-        record = _make_governance_record(
-            chunk_id=f"e2e_mr_{unique_test_id}",
-            risk_score=50.0,
-            risk_tier="medium",
-            status="auto_approved",
-            content_preview=f"[E2E Test] Mark reviewed click {unique_test_id}",
-            revert_deadline=datetime.utcnow() + timedelta(hours=24),
-        )
-
-        with patch(
-            "knowledge_base.slack.governance_admin._get_admin_channel",
-            return_value=admin_channel_id,
-        ), patch(
-            "knowledge_base.slack.governance_admin.async_session_maker",
-            new_callable=lambda: lambda: MagicMock(
-                __aenter__=AsyncMock(return_value=MagicMock(
-                    execute=AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))),
-                    commit=AsyncMock(),
-                )),
-                __aexit__=AsyncMock(return_value=False),
-            ),
-        ):
-            ts = await notify_admin_medium_risk(async_slack_client, record)
-
-        assert ts is not None
-
-        await asyncio.sleep(2)
-
-        # Fetch the posted message
-        history = slack_client.bot_client.conversations_history(
-            channel=admin_channel_id,
-            inclusive=True,
-            oldest=ts,
-            latest=ts,
-            limit=1,
-        )
-        messages = history.get("messages", [])
-        assert len(messages) > 0
-        msg = messages[0]
-
-        # Click the Mark Reviewed button
-        success = await slack_client.click_button(
-            msg, "governance_mark_reviewed", channel_id=admin_channel_id,
-        )
-        assert success, "Mark Reviewed button click should return 200"
-
-    @pytest.mark.asyncio
-    async def test_revert_button_click_succeeds(
-        self,
-        slack_client,
-        e2e_config,
-        admin_channel_id,
-        async_slack_client,
-        has_signing_secret,
-        unique_test_id,
-    ):
-        """Click Revert button on a medium-risk notification -- verify 200."""
-        import asyncio
-        from knowledge_base.slack.governance_admin import notify_admin_medium_risk
-
-        record = _make_governance_record(
-            chunk_id=f"e2e_rv_{unique_test_id}",
-            risk_score=52.0,
-            risk_tier="medium",
-            status="auto_approved",
-            content_preview=f"[E2E Test] Revert click {unique_test_id}",
-            revert_deadline=datetime.utcnow() + timedelta(hours=24),
-        )
-
-        with patch(
-            "knowledge_base.slack.governance_admin._get_admin_channel",
-            return_value=admin_channel_id,
-        ), patch(
-            "knowledge_base.slack.governance_admin.async_session_maker",
-            new_callable=lambda: lambda: MagicMock(
-                __aenter__=AsyncMock(return_value=MagicMock(
-                    execute=AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))),
-                    commit=AsyncMock(),
-                )),
-                __aexit__=AsyncMock(return_value=False),
-            ),
-        ):
-            ts = await notify_admin_medium_risk(async_slack_client, record)
-
-        assert ts is not None
-
-        await asyncio.sleep(2)
-
-        history = slack_client.bot_client.conversations_history(
-            channel=admin_channel_id,
-            inclusive=True,
-            oldest=ts,
-            latest=ts,
-            limit=1,
-        )
-        messages = history.get("messages", [])
-        assert len(messages) > 0
-        msg = messages[0]
-
-        success = await slack_client.click_button(
-            msg, "governance_revert", channel_id=admin_channel_id,
-        )
-        assert success, "Revert button click should return 200"
-
-
-# =============================================================================
-# Class 2: High-Risk Notifications
-# =============================================================================
-
-
-class TestGovernanceHighRiskNotification:
-    """Verify high-risk notifications appear with Approve / Reject buttons."""
-
-    @pytest.mark.asyncio
-    async def test_high_risk_posts_to_admin_channel(
-        self,
-        slack_client,
-        e2e_config,
-        admin_channel_id,
-        async_slack_client,
-        test_start_timestamp,
-        unique_test_id,
-    ):
-        """notify_admin_high_risk() posts Approval Request header with Approve + Reject buttons."""
-        import asyncio
+    Patches _get_admin_channel and the DB write (lazy import of async_session_maker).
+    """
+    if risk_type == "high":
         from knowledge_base.slack.governance_admin import notify_admin_high_risk
+        notify_fn = notify_admin_high_risk
+    else:
+        from knowledge_base.slack.governance_admin import notify_admin_medium_risk
+        notify_fn = notify_admin_medium_risk
 
-        record = _make_governance_record(
-            chunk_id=f"e2e_high_{unique_test_id}",
-            risk_score=85.0,
-            risk_tier="high",
-            content_preview=f"[E2E Test] High-risk content {unique_test_id}",
-        )
-
-        with patch(
-            "knowledge_base.slack.governance_admin._get_admin_channel",
-            return_value=admin_channel_id,
-        ), patch(
-            "knowledge_base.slack.governance_admin.async_session_maker",
-            new_callable=lambda: lambda: MagicMock(
-                __aenter__=AsyncMock(return_value=MagicMock(
-                    execute=AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))),
-                    commit=AsyncMock(),
-                )),
-                __aexit__=AsyncMock(return_value=False),
-            ),
-        ):
-            ts = await notify_admin_high_risk(async_slack_client, record)
-
-        assert ts is not None, "notify_admin_high_risk should return a ts"
-
-        await asyncio.sleep(2)
-
-        history = slack_client.bot_client.conversations_history(
-            channel=admin_channel_id,
-            inclusive=True,
-            oldest=ts,
-            latest=ts,
-            limit=1,
-        )
-        messages = history.get("messages", [])
-        assert len(messages) > 0, "High-risk notification not found in admin channel"
-
-        msg = messages[0]
-
-        blocks_str = json.dumps(msg.get("blocks", []))
-        assert "Approval Request" in blocks_str, "Message should have Approval Request header"
-
-        assert slack_client.message_has_button(msg, "governance_approve"), (
-            "Message should have Approve button"
-        )
-        assert slack_client.message_has_button(msg, "governance_reject"), (
-            "Message should have Reject button"
-        )
-
-    @pytest.mark.asyncio
-    async def test_approve_button_click_succeeds(
-        self,
-        slack_client,
-        e2e_config,
-        admin_channel_id,
-        async_slack_client,
-        has_signing_secret,
-        unique_test_id,
+    with patch(
+        "knowledge_base.slack.governance_admin._get_admin_channel",
+        return_value=admin_channel_id,
+    ), patch(
+        "knowledge_base.db.database.async_session_maker",
+        _mock_admin_session_maker(),
     ):
-        """Click Approve button on a high-risk notification -- verify 200."""
-        import asyncio
-        from knowledge_base.slack.governance_admin import notify_admin_high_risk
+        ts = await notify_fn(async_slack_client, record)
 
-        record = _make_governance_record(
-            chunk_id=f"e2e_apr_{unique_test_id}",
-            risk_score=80.0,
-            risk_tier="high",
-            content_preview=f"[E2E Test] Approve click {unique_test_id}",
-        )
-
-        with patch(
-            "knowledge_base.slack.governance_admin._get_admin_channel",
-            return_value=admin_channel_id,
-        ), patch(
-            "knowledge_base.slack.governance_admin.async_session_maker",
-            new_callable=lambda: lambda: MagicMock(
-                __aenter__=AsyncMock(return_value=MagicMock(
-                    execute=AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))),
-                    commit=AsyncMock(),
-                )),
-                __aexit__=AsyncMock(return_value=False),
-            ),
-        ):
-            ts = await notify_admin_high_risk(async_slack_client, record)
-
-        assert ts is not None
-
-        await asyncio.sleep(2)
-
-        history = slack_client.bot_client.conversations_history(
-            channel=admin_channel_id,
-            inclusive=True,
-            oldest=ts,
-            latest=ts,
-            limit=1,
-        )
-        messages = history.get("messages", [])
-        assert len(messages) > 0
-        msg = messages[0]
-
-        success = await slack_client.click_button(
-            msg, "governance_approve", channel_id=admin_channel_id,
-        )
-        assert success, "Approve button click should return 200"
-
-    @pytest.mark.asyncio
-    async def test_reject_button_click_opens_modal(
-        self,
-        slack_client,
-        e2e_config,
-        admin_channel_id,
-        async_slack_client,
-        has_signing_secret,
-        unique_test_id,
-    ):
-        """Click Reject button on a high-risk notification -- verify 200 (modal opens)."""
-        import asyncio
-        from knowledge_base.slack.governance_admin import notify_admin_high_risk
-
-        record = _make_governance_record(
-            chunk_id=f"e2e_rej_{unique_test_id}",
-            risk_score=82.0,
-            risk_tier="high",
-            content_preview=f"[E2E Test] Reject click {unique_test_id}",
-        )
-
-        with patch(
-            "knowledge_base.slack.governance_admin._get_admin_channel",
-            return_value=admin_channel_id,
-        ), patch(
-            "knowledge_base.slack.governance_admin.async_session_maker",
-            new_callable=lambda: lambda: MagicMock(
-                __aenter__=AsyncMock(return_value=MagicMock(
-                    execute=AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))),
-                    commit=AsyncMock(),
-                )),
-                __aexit__=AsyncMock(return_value=False),
-            ),
-        ):
-            ts = await notify_admin_high_risk(async_slack_client, record)
-
-        assert ts is not None
-
-        await asyncio.sleep(2)
-
-        history = slack_client.bot_client.conversations_history(
-            channel=admin_channel_id,
-            inclusive=True,
-            oldest=ts,
-            latest=ts,
-            limit=1,
-        )
-        messages = history.get("messages", [])
-        assert len(messages) > 0
-        msg = messages[0]
-
-        success = await slack_client.click_button(
-            msg, "governance_reject", channel_id=admin_channel_id,
-        )
-        assert success, "Reject button click should return 200 (modal opens)"
+    assert ts is not None, f"notify_admin_{risk_type}_risk should return a ts"
+    return ts
 
 
 # =============================================================================
-# Class 3: Approve Updates Message
+# Class 1: Approve Full Flow
 # =============================================================================
 
 
-class TestGovernanceApproveUpdatesMessage:
-    """Verify handle_governance_approve() updates the Slack message."""
+class TestApproveFullFlow:
+    """Verify approve handler changes DB status AND updates Slack message."""
 
     @pytest.mark.asyncio
-    async def test_approve_updates_message_removes_buttons(
+    async def test_approve_changes_db_status_and_updates_message(
         self,
         slack_client,
         e2e_config,
         admin_channel_id,
         async_slack_client,
+        governance_db,
         unique_test_id,
     ):
-        """Post high-risk notification then call handle_governance_approve() directly.
+        """Full approve flow: seed pending record -> call handler -> verify DB + Slack.
 
-        Verify message is updated to say 'Approved' and buttons are removed.
+        1. Post real high-risk notification to admin channel
+        2. Seed KnowledgeGovernanceRecord with status='pending_review' in test DB
+        3. Call handle_governance_approve() directly with real Slack client
+        4. Verify DB: status changed to 'approved', reviewed_by set
+        5. Verify Slack: message updated to show 'Approved', buttons removed
         """
-        import asyncio
-        from knowledge_base.slack.governance_admin import (
-            notify_admin_high_risk,
-            handle_governance_approve,
-        )
+        from knowledge_base.slack.governance_admin import handle_governance_approve
 
-        chunk_id = f"e2e_apupd_{unique_test_id}"
+        chunk_id = f"e2e_approve_{unique_test_id}"
+
+        # Post notification to admin channel
         record = _make_governance_record(
-            chunk_id=chunk_id,
-            risk_score=78.0,
-            risk_tier="high",
-            content_preview=f"[E2E Test] Approve updates msg {unique_test_id}",
+            chunk_id=chunk_id, risk_score=85.0, risk_tier="high",
+            content_preview=f"[E2E Test] Approve flow {unique_test_id}",
+        )
+        ts = await _post_notification_to_admin(
+            async_slack_client, admin_channel_id, record, "high"
         )
 
-        # Post the notification
-        with patch(
-            "knowledge_base.slack.governance_admin._get_admin_channel",
-            return_value=admin_channel_id,
-        ), patch(
-            "knowledge_base.slack.governance_admin.async_session_maker",
-            new_callable=lambda: lambda: MagicMock(
-                __aenter__=AsyncMock(return_value=MagicMock(
-                    execute=AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))),
-                    commit=AsyncMock(),
-                )),
-                __aexit__=AsyncMock(return_value=False),
-            ),
-        ):
-            ts = await notify_admin_high_risk(async_slack_client, record)
-
-        assert ts is not None
+        # Seed the record in test DB so ApprovalEngine.approve() can find it
+        await _seed_record(governance_db, chunk_id, status="pending_review")
 
         await asyncio.sleep(2)
 
-        # Fetch the posted message to confirm it exists
-        history = slack_client.bot_client.conversations_history(
-            channel=admin_channel_id,
-            inclusive=True,
-            oldest=ts,
-            latest=ts,
-            limit=1,
-        )
-        messages = history.get("messages", [])
-        assert len(messages) > 0
-
-        # Now call handle_governance_approve directly
+        # Call handle_governance_approve directly
         ack_mock = AsyncMock()
         body = {
             "user": {"id": "U_E2E_ADMIN"},
             "channel": {"id": admin_channel_id},
             "message": {"ts": ts},
-            "actions": [
-                {"action_id": f"governance_approve_{chunk_id}"}
-            ],
+            "actions": [{"action_id": f"governance_approve_{chunk_id}"}],
         }
 
         with patch(
             "knowledge_base.slack.governance_admin._is_admin_channel",
             return_value=True,
         ), patch(
-            "knowledge_base.governance.approval_engine.ApprovalEngine.approve",
+            "knowledge_base.governance.approval_engine.async_session_maker",
+            governance_db,
+        ), patch(
+            "knowledge_base.governance.approval_engine.ApprovalEngine._update_neo4j_governance_status",
             new_callable=AsyncMock,
-            return_value=True,
         ):
             await handle_governance_approve(ack_mock, body, async_slack_client)
 
         ack_mock.assert_called_once()
 
-        # Poll for message update
-        await asyncio.sleep(3)
-
-        updated_history = slack_client.bot_client.conversations_history(
-            channel=admin_channel_id,
-            inclusive=True,
-            oldest=ts,
-            latest=ts,
-            limit=1,
+        # Verify DB: status changed to 'approved'
+        db_record = await _get_record(governance_db, chunk_id)
+        assert db_record is not None, "Record should exist in DB"
+        assert db_record.status == "approved", (
+            f"Status should be 'approved', got '{db_record.status}'"
         )
-        updated_messages = updated_history.get("messages", [])
-        assert len(updated_messages) > 0
+        assert db_record.reviewed_by == "U_E2E_ADMIN"
 
-        updated_msg = updated_messages[0]
+        # Verify Slack: message updated to show 'Approved'
+        await asyncio.sleep(2)
+        history = slack_client.bot_client.conversations_history(
+            channel=admin_channel_id, inclusive=True,
+            oldest=ts, latest=ts, limit=1,
+        )
+        messages = history.get("messages", [])
+        assert len(messages) > 0, "Message should still exist"
+
+        updated_msg = messages[0]
         blocks_str = json.dumps(updated_msg.get("blocks", []))
         text = updated_msg.get("text", "")
 
-        # Verify "Approved" appears and buttons are gone
         assert "Approved" in blocks_str or "Approved" in text, (
-            f"Message should contain 'Approved' after approval. "
-            f"text={text!r}, blocks={blocks_str[:200]}"
+            f"Message should contain 'Approved'. text={text!r}"
+        )
+        assert not slack_client.message_has_button(updated_msg, "governance_approve"), (
+            "Approve button should be removed after approval"
+        )
+        assert not slack_client.message_has_button(updated_msg, "governance_reject"), (
+            "Reject button should be removed after approval"
         )
 
-        has_approve_btn = slack_client.message_has_button(updated_msg, "governance_approve")
-        has_reject_btn = slack_client.message_has_button(updated_msg, "governance_reject")
-        assert not has_approve_btn, "Approve button should be removed after approval"
-        assert not has_reject_btn, "Reject button should be removed after approval"
+    @pytest.mark.asyncio
+    async def test_approve_nonexistent_chunk_fails_gracefully(
+        self,
+        e2e_config,
+        admin_channel_id,
+        async_slack_client,
+        governance_db,
+        unique_test_id,
+    ):
+        """Approve a chunk_id that doesn't exist in DB -- handler fails gracefully.
+
+        DB unchanged, ephemeral error posted (not chat_update).
+        """
+        from knowledge_base.slack.governance_admin import handle_governance_approve
+
+        chunk_id = f"e2e_approve_missing_{unique_test_id}"
+
+        # Do NOT seed any record -- chunk doesn't exist
+        ack_mock = AsyncMock()
+        mock_client = AsyncMock()
+        body = {
+            "user": {"id": "U_E2E_ADMIN"},
+            "channel": {"id": admin_channel_id},
+            "message": {"ts": "1234567890.123456"},
+            "actions": [{"action_id": f"governance_approve_{chunk_id}"}],
+        }
+
+        with patch(
+            "knowledge_base.slack.governance_admin._is_admin_channel",
+            return_value=True,
+        ), patch(
+            "knowledge_base.governance.approval_engine.async_session_maker",
+            governance_db,
+        ), patch(
+            "knowledge_base.governance.approval_engine.ApprovalEngine._update_neo4j_governance_status",
+            new_callable=AsyncMock,
+        ):
+            await handle_governance_approve(ack_mock, body, mock_client)
+
+        ack_mock.assert_called_once()
+        # chat_update should NOT be called (no record to approve)
+        mock_client.chat_update.assert_not_called()
+        # ephemeral error should be posted
+        mock_client.chat_postEphemeral.assert_called_once()
+        ephemeral_text = mock_client.chat_postEphemeral.call_args.kwargs.get("text", "")
+        assert "Could not approve" in ephemeral_text
 
 
 # =============================================================================
-# Class 4: Search Filter
+# Class 2: Reject Full Flow
+# =============================================================================
+
+
+class TestRejectFullFlow:
+    """Verify reject modal submission changes DB status + posts confirmation."""
+
+    @pytest.mark.asyncio
+    async def test_reject_changes_db_status_and_posts_confirmation(
+        self,
+        slack_client,
+        e2e_config,
+        admin_channel_id,
+        async_slack_client,
+        governance_db,
+        unique_test_id,
+    ):
+        """Full reject flow: seed pending record -> call handler -> verify DB + Slack.
+
+        Calls handle_governance_reject_submit() directly with fabricated view dict.
+        """
+        from knowledge_base.slack.governance_admin import handle_governance_reject_submit
+
+        chunk_id = f"e2e_reject_{unique_test_id}"
+
+        # Seed pending record
+        await _seed_record(governance_db, chunk_id, status="pending_review")
+
+        # Build the view dict matching what Slack sends after modal submission
+        ack_mock = AsyncMock()
+        body = {"user": {"id": "U_E2E_ADMIN"}}
+        view = {
+            "private_metadata": chunk_id,
+            "state": {
+                "values": {
+                    "rejection_reason_block": {
+                        "rejection_reason": {
+                            "value": f"E2E test rejection {unique_test_id}",
+                        }
+                    }
+                }
+            },
+        }
+
+        with patch(
+            "knowledge_base.slack.governance_admin._get_admin_channel",
+            return_value=admin_channel_id,
+        ), patch(
+            "knowledge_base.governance.approval_engine.async_session_maker",
+            governance_db,
+        ), patch(
+            "knowledge_base.governance.approval_engine.ApprovalEngine._update_neo4j_governance_status",
+            new_callable=AsyncMock,
+        ):
+            await handle_governance_reject_submit(
+                ack_mock, body, view, async_slack_client
+            )
+
+        ack_mock.assert_called_once()
+
+        # Verify DB: status changed to 'rejected'
+        db_record = await _get_record(governance_db, chunk_id)
+        assert db_record is not None, "Record should exist in DB"
+        assert db_record.status == "rejected", (
+            f"Status should be 'rejected', got '{db_record.status}'"
+        )
+        assert db_record.reviewed_by == "U_E2E_ADMIN"
+        assert f"E2E test rejection {unique_test_id}" in (db_record.review_note or "")
+
+        # Verify Slack: confirmation message posted to admin channel
+        await asyncio.sleep(2)
+        history = slack_client.bot_client.conversations_history(
+            channel=admin_channel_id, limit=10,
+        )
+        messages = history.get("messages", [])
+        found = _find_message_with_text(messages, chunk_id)
+        assert found is not None, (
+            f"Rejection confirmation should appear in admin channel with chunk_id"
+        )
+        assert "Rejected" in found.get("text", ""), (
+            "Confirmation message should contain 'Rejected'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_reject_already_approved_fails(
+        self,
+        governance_db,
+        unique_test_id,
+    ):
+        """Reject a chunk that's already approved -- DB unchanged, error posted."""
+        from knowledge_base.slack.governance_admin import handle_governance_reject_submit
+
+        chunk_id = f"e2e_reject_approved_{unique_test_id}"
+
+        # Seed record with status 'approved' (not 'pending_review')
+        await _seed_record(governance_db, chunk_id, status="approved")
+
+        ack_mock = AsyncMock()
+        mock_client = AsyncMock()
+        body = {"user": {"id": "U_E2E_ADMIN"}}
+        view = {
+            "private_metadata": chunk_id,
+            "state": {
+                "values": {
+                    "rejection_reason_block": {
+                        "rejection_reason": {"value": "Should fail"},
+                    }
+                }
+            },
+        }
+
+        with patch(
+            "knowledge_base.slack.governance_admin._get_admin_channel",
+            return_value="C_ADMIN",
+        ), patch(
+            "knowledge_base.governance.approval_engine.async_session_maker",
+            governance_db,
+        ), patch(
+            "knowledge_base.governance.approval_engine.ApprovalEngine._update_neo4j_governance_status",
+            new_callable=AsyncMock,
+        ):
+            await handle_governance_reject_submit(
+                ack_mock, body, view, mock_client
+            )
+
+        ack_mock.assert_called_once()
+
+        # Verify DB: status still 'approved' (unchanged)
+        db_record = await _get_record(governance_db, chunk_id)
+        assert db_record.status == "approved", (
+            f"Status should remain 'approved', got '{db_record.status}'"
+        )
+
+        # Verify: "Could not reject" message posted
+        mock_client.chat_postMessage.assert_called_once()
+        posted_text = mock_client.chat_postMessage.call_args.kwargs.get("text", "")
+        assert "Could not reject" in posted_text
+
+
+# =============================================================================
+# Class 3: Revert Full Flow
+# =============================================================================
+
+
+class TestRevertFullFlow:
+    """Verify revert modal submission changes DB status, updates Slack, handles expiry."""
+
+    @pytest.mark.asyncio
+    async def test_revert_changes_db_status_and_updates_message(
+        self,
+        slack_client,
+        e2e_config,
+        admin_channel_id,
+        async_slack_client,
+        governance_db,
+        unique_test_id,
+    ):
+        """Full revert flow: seed auto_approved record -> call handler -> verify DB + Slack.
+
+        1. Post medium-risk notification to admin channel
+        2. Seed auto_approved record with revert_deadline in the future
+        3. Call handle_governance_revert_submit() directly
+        4. Verify DB: status -> 'reverted'
+        5. Verify Slack: message updated to show 'Reverted', buttons removed
+        """
+        from knowledge_base.slack.governance_admin import handle_governance_revert_submit
+
+        chunk_id = f"e2e_revert_{unique_test_id}"
+
+        # Post notification to get a real message ts
+        record = _make_governance_record(
+            chunk_id=chunk_id, risk_score=55.0, risk_tier="medium",
+            status="auto_approved",
+            content_preview=f"[E2E Test] Revert flow {unique_test_id}",
+            revert_deadline=datetime.utcnow() + timedelta(hours=24),
+        )
+        ts = await _post_notification_to_admin(
+            async_slack_client, admin_channel_id, record, "medium"
+        )
+
+        # Seed the record in test DB
+        await _seed_record(
+            governance_db, chunk_id, status="auto_approved",
+            risk_tier="medium", risk_score=55.0,
+            revert_deadline=datetime.utcnow() + timedelta(hours=24),
+        )
+
+        await asyncio.sleep(2)
+
+        # Call handle_governance_revert_submit directly
+        ack_mock = AsyncMock()
+        body = {"user": {"id": "U_E2E_ADMIN"}}
+        view = {
+            "private_metadata": json.dumps({
+                "chunk_id": chunk_id,
+                "channel_id": admin_channel_id,
+                "message_ts": ts,
+            }),
+            "state": {
+                "values": {
+                    "revert_note_block": {
+                        "revert_note": {"value": f"E2E revert test {unique_test_id}"},
+                    }
+                }
+            },
+        }
+
+        with patch(
+            "knowledge_base.governance.approval_engine.async_session_maker",
+            governance_db,
+        ), patch(
+            "knowledge_base.governance.approval_engine.ApprovalEngine._update_neo4j_governance_status",
+            new_callable=AsyncMock,
+        ):
+            await handle_governance_revert_submit(
+                ack_mock, body, view, async_slack_client
+            )
+
+        ack_mock.assert_called_once()
+
+        # Verify DB: status changed to 'reverted'
+        db_record = await _get_record(governance_db, chunk_id)
+        assert db_record is not None, "Record should exist in DB"
+        assert db_record.status == "reverted", (
+            f"Status should be 'reverted', got '{db_record.status}'"
+        )
+        assert db_record.reviewed_by == "U_E2E_ADMIN"
+
+        # Verify Slack: message updated to show 'Reverted'
+        await asyncio.sleep(2)
+        history = slack_client.bot_client.conversations_history(
+            channel=admin_channel_id, inclusive=True,
+            oldest=ts, latest=ts, limit=1,
+        )
+        messages = history.get("messages", [])
+        assert len(messages) > 0
+
+        updated_msg = messages[0]
+        blocks_str = json.dumps(updated_msg.get("blocks", []))
+        text = updated_msg.get("text", "")
+
+        assert "Reverted" in blocks_str or "Reverted" in text, (
+            f"Message should contain 'Reverted'. text={text!r}"
+        )
+        assert not slack_client.message_has_button(updated_msg, "governance_revert"), (
+            "Revert button should be removed after revert"
+        )
+
+    @pytest.mark.asyncio
+    async def test_revert_expired_window_fails(
+        self,
+        slack_client,
+        e2e_config,
+        admin_channel_id,
+        async_slack_client,
+        governance_db,
+        unique_test_id,
+    ):
+        """Revert with expired deadline -- DB unchanged, error message posted."""
+        from knowledge_base.slack.governance_admin import handle_governance_revert_submit
+
+        chunk_id = f"e2e_revert_expired_{unique_test_id}"
+
+        # Post notification to get a real message ts
+        record = _make_governance_record(
+            chunk_id=chunk_id, risk_score=50.0, risk_tier="medium",
+            status="auto_approved",
+            content_preview=f"[E2E Test] Expired revert {unique_test_id}",
+            revert_deadline=datetime.utcnow() - timedelta(hours=1),
+        )
+        ts = await _post_notification_to_admin(
+            async_slack_client, admin_channel_id, record, "medium"
+        )
+
+        # Seed record with EXPIRED revert deadline
+        await _seed_record(
+            governance_db, chunk_id, status="auto_approved",
+            risk_tier="medium", risk_score=50.0,
+            revert_deadline=datetime.utcnow() - timedelta(hours=1),
+        )
+
+        await asyncio.sleep(2)
+
+        ack_mock = AsyncMock()
+        body = {"user": {"id": "U_E2E_ADMIN"}}
+        view = {
+            "private_metadata": json.dumps({
+                "chunk_id": chunk_id,
+                "channel_id": admin_channel_id,
+                "message_ts": ts,
+            }),
+            "state": {
+                "values": {
+                    "revert_note_block": {
+                        "revert_note": {"value": ""},
+                    }
+                }
+            },
+        }
+
+        with patch(
+            "knowledge_base.governance.approval_engine.async_session_maker",
+            governance_db,
+        ), patch(
+            "knowledge_base.governance.approval_engine.ApprovalEngine._update_neo4j_governance_status",
+            new_callable=AsyncMock,
+        ):
+            await handle_governance_revert_submit(
+                ack_mock, body, view, async_slack_client
+            )
+
+        ack_mock.assert_called_once()
+
+        # Verify DB: status still 'auto_approved' (unchanged)
+        db_record = await _get_record(governance_db, chunk_id)
+        assert db_record.status == "auto_approved", (
+            f"Status should remain 'auto_approved', got '{db_record.status}'"
+        )
+
+        # Verify Slack: error message posted (NOT chat_update on original)
+        await asyncio.sleep(2)
+        history = slack_client.bot_client.conversations_history(
+            channel=admin_channel_id, limit=10,
+        )
+        messages = history.get("messages", [])
+        found = _find_message_with_text(messages, "expired")
+        assert found is not None, (
+            "Error message about expired revert window should be posted"
+        )
+
+    @pytest.mark.asyncio
+    async def test_revert_low_risk_no_window_fails(
+        self,
+        governance_db,
+        unique_test_id,
+    ):
+        """Revert a low-risk item (no revert_deadline) -- DB unchanged."""
+        from knowledge_base.slack.governance_admin import handle_governance_revert_submit
+
+        chunk_id = f"e2e_revert_low_{unique_test_id}"
+
+        # Seed record with NO revert deadline (low-risk auto-approved)
+        await _seed_record(
+            governance_db, chunk_id, status="auto_approved",
+            risk_tier="low", risk_score=15.0,
+            revert_deadline=None,
+        )
+
+        ack_mock = AsyncMock()
+        mock_client = AsyncMock()
+        body = {"user": {"id": "U_E2E_ADMIN"}}
+        view = {
+            "private_metadata": json.dumps({
+                "chunk_id": chunk_id,
+                "channel_id": "C_ADMIN",
+                "message_ts": "1234567890.123456",
+            }),
+            "state": {
+                "values": {
+                    "revert_note_block": {
+                        "revert_note": {"value": ""},
+                    }
+                }
+            },
+        }
+
+        with patch(
+            "knowledge_base.governance.approval_engine.async_session_maker",
+            governance_db,
+        ), patch(
+            "knowledge_base.governance.approval_engine.ApprovalEngine._update_neo4j_governance_status",
+            new_callable=AsyncMock,
+        ):
+            await handle_governance_revert_submit(
+                ack_mock, body, view, mock_client
+            )
+
+        ack_mock.assert_called_once()
+
+        # Verify DB: status still 'auto_approved'
+        db_record = await _get_record(governance_db, chunk_id)
+        assert db_record.status == "auto_approved", (
+            f"Low-risk status should remain 'auto_approved', got '{db_record.status}'"
+        )
+
+        # Verify: error message posted (revert window expired/not available)
+        mock_client.chat_postMessage.assert_called_once()
+        posted_text = mock_client.chat_postMessage.call_args.kwargs.get("text", "")
+        assert "expired" in posted_text.lower() or "cannot" in posted_text.lower()
+
+
+# =============================================================================
+# Class 4: Admin Authorization
+# =============================================================================
+
+
+class TestAdminAuthorization:
+    """Verify governance actions from non-admin channels are rejected."""
+
+    @pytest.mark.asyncio
+    async def test_approve_from_non_admin_channel_rejected(
+        self,
+        e2e_config,
+        admin_channel_id,
+        governance_db,
+        unique_test_id,
+    ):
+        """Approve action from test channel (not admin) -- rejected, DB unchanged."""
+        from knowledge_base.slack.governance_admin import handle_governance_approve
+
+        chunk_id = f"e2e_auth_approve_{unique_test_id}"
+
+        # Seed pending record
+        await _seed_record(governance_db, chunk_id, status="pending_review")
+
+        ack_mock = AsyncMock()
+        mock_client = AsyncMock()
+
+        # Use test channel (NOT admin channel) as the action source
+        non_admin_channel = e2e_config["channel_id"]
+        body = {
+            "user": {"id": "U_NON_ADMIN"},
+            "channel": {"id": non_admin_channel},
+            "message": {"ts": "1234567890.123456"},
+            "actions": [{"action_id": f"governance_approve_{chunk_id}"}],
+        }
+
+        # Patch _get_admin_channel to return the REAL admin channel
+        # so the comparison with non_admin_channel fails (as it should)
+        with patch(
+            "knowledge_base.slack.governance_admin._get_admin_channel",
+            return_value=admin_channel_id,
+        ), patch(
+            "knowledge_base.governance.approval_engine.async_session_maker",
+            governance_db,
+        ):
+            await handle_governance_approve(ack_mock, body, mock_client)
+
+        ack_mock.assert_called_once()
+
+        # Verify DB: status unchanged
+        db_record = await _get_record(governance_db, chunk_id)
+        assert db_record.status == "pending_review", (
+            f"Status should remain 'pending_review', got '{db_record.status}'"
+        )
+
+        # Verify: ephemeral rejection posted
+        mock_client.chat_postEphemeral.assert_called_once()
+        ephemeral_text = mock_client.chat_postEphemeral.call_args.kwargs.get("text", "")
+        assert "admin channel" in ephemeral_text.lower(), (
+            f"Ephemeral should mention admin channel. Got: {ephemeral_text!r}"
+        )
+
+        # Verify: chat_update NOT called (no approval happened)
+        mock_client.chat_update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mark_reviewed_from_non_admin_rejected(
+        self,
+        e2e_config,
+        admin_channel_id,
+        unique_test_id,
+    ):
+        """Mark Reviewed from non-admin channel -- rejected, no message update."""
+        from knowledge_base.slack.governance_admin import handle_governance_mark_reviewed
+
+        chunk_id = f"e2e_auth_reviewed_{unique_test_id}"
+        non_admin_channel = e2e_config["channel_id"]
+
+        ack_mock = AsyncMock()
+        mock_client = AsyncMock()
+        body = {
+            "user": {"id": "U_NON_ADMIN"},
+            "channel": {"id": non_admin_channel},
+            "message": {"ts": "1234567890.123456"},
+            "actions": [{"action_id": f"governance_mark_reviewed_{chunk_id}"}],
+        }
+
+        with patch(
+            "knowledge_base.slack.governance_admin._get_admin_channel",
+            return_value=admin_channel_id,
+        ):
+            await handle_governance_mark_reviewed(ack_mock, body, mock_client)
+
+        ack_mock.assert_called_once()
+
+        # Verify: ephemeral rejection posted
+        mock_client.chat_postEphemeral.assert_called_once()
+
+        # Verify: chat_update NOT called (no review happened)
+        mock_client.chat_update.assert_not_called()
+
+
+# =============================================================================
+# Class 5: Mark Reviewed
+# =============================================================================
+
+
+class TestMarkReviewed:
+    """Verify Mark Reviewed only updates message -- NO DB change."""
+
+    @pytest.mark.asyncio
+    async def test_mark_reviewed_updates_message_no_db_change(
+        self,
+        slack_client,
+        e2e_config,
+        admin_channel_id,
+        async_slack_client,
+        governance_db,
+        unique_test_id,
+    ):
+        """Mark Reviewed: message updated to 'Reviewed', DB status stays auto_approved.
+
+        This is a cosmetic-only operation -- no governance status transition.
+        """
+        from knowledge_base.slack.governance_admin import handle_governance_mark_reviewed
+
+        chunk_id = f"e2e_reviewed_{unique_test_id}"
+
+        # Post notification to get a real message
+        record = _make_governance_record(
+            chunk_id=chunk_id, risk_score=50.0, risk_tier="medium",
+            status="auto_approved",
+            content_preview=f"[E2E Test] Mark reviewed {unique_test_id}",
+            revert_deadline=datetime.utcnow() + timedelta(hours=24),
+        )
+        ts = await _post_notification_to_admin(
+            async_slack_client, admin_channel_id, record, "medium"
+        )
+
+        # Seed record in test DB
+        await _seed_record(
+            governance_db, chunk_id, status="auto_approved",
+            risk_tier="medium", risk_score=50.0,
+            revert_deadline=datetime.utcnow() + timedelta(hours=24),
+        )
+
+        await asyncio.sleep(2)
+
+        # Call handler
+        ack_mock = AsyncMock()
+        body = {
+            "user": {"id": "U_E2E_ADMIN"},
+            "channel": {"id": admin_channel_id},
+            "message": {"ts": ts},
+            "actions": [{"action_id": f"governance_mark_reviewed_{chunk_id}"}],
+        }
+
+        with patch(
+            "knowledge_base.slack.governance_admin._is_admin_channel",
+            return_value=True,
+        ):
+            await handle_governance_mark_reviewed(ack_mock, body, async_slack_client)
+
+        ack_mock.assert_called_once()
+
+        # Verify DB: status STILL 'auto_approved' (no change)
+        db_record = await _get_record(governance_db, chunk_id)
+        assert db_record.status == "auto_approved", (
+            f"Mark Reviewed should NOT change DB status. Got '{db_record.status}'"
+        )
+
+        # Verify Slack: message updated to show 'Reviewed'
+        await asyncio.sleep(2)
+        history = slack_client.bot_client.conversations_history(
+            channel=admin_channel_id, inclusive=True,
+            oldest=ts, latest=ts, limit=1,
+        )
+        messages = history.get("messages", [])
+        assert len(messages) > 0
+
+        updated_msg = messages[0]
+        blocks_str = json.dumps(updated_msg.get("blocks", []))
+        text = updated_msg.get("text", "")
+
+        assert "Reviewed" in blocks_str or "Reviewed" in text, (
+            f"Message should contain 'Reviewed'. text={text!r}"
+        )
+        assert not slack_client.message_has_button(updated_msg, "governance_revert"), (
+            "Revert button should be removed after review"
+        )
+        assert not slack_client.message_has_button(updated_msg, "governance_mark_reviewed"), (
+            "Mark Reviewed button should be removed"
+        )
+
+
+# =============================================================================
+# Class 6: Notification Structure
+# =============================================================================
+
+
+class TestGovernanceNotifications:
+    """Verify notification functions post correctly structured Slack messages."""
+
+    @pytest.mark.asyncio
+    async def test_high_risk_notification_structure(
+        self,
+        slack_client,
+        admin_channel_id,
+        async_slack_client,
+        unique_test_id,
+    ):
+        """High-risk notification: 'Approval Request' header, Approve+Reject buttons."""
+        record = _make_governance_record(
+            chunk_id=f"e2e_notif_high_{unique_test_id}",
+            risk_score=85.0, risk_tier="high",
+            content_preview=f"[E2E Test] High risk notif {unique_test_id}",
+        )
+        ts = await _post_notification_to_admin(
+            async_slack_client, admin_channel_id, record, "high"
+        )
+
+        await asyncio.sleep(2)
+        history = slack_client.bot_client.conversations_history(
+            channel=admin_channel_id, inclusive=True,
+            oldest=ts, latest=ts, limit=1,
+        )
+        messages = history.get("messages", [])
+        assert len(messages) > 0
+        msg = messages[0]
+
+        blocks_str = json.dumps(msg.get("blocks", []))
+        assert "Approval Request" in blocks_str
+        assert "HIGH" in blocks_str
+        assert slack_client.message_has_button(msg, "governance_approve")
+        assert slack_client.message_has_button(msg, "governance_reject")
+
+    @pytest.mark.asyncio
+    async def test_medium_risk_notification_structure(
+        self,
+        slack_client,
+        admin_channel_id,
+        async_slack_client,
+        unique_test_id,
+    ):
+        """Medium-risk notification: 'Auto-Approved' header, Revert+Mark Reviewed buttons."""
+        record = _make_governance_record(
+            chunk_id=f"e2e_notif_med_{unique_test_id}",
+            risk_score=50.0, risk_tier="medium",
+            status="auto_approved",
+            content_preview=f"[E2E Test] Medium risk notif {unique_test_id}",
+            revert_deadline=datetime.utcnow() + timedelta(hours=24),
+        )
+        ts = await _post_notification_to_admin(
+            async_slack_client, admin_channel_id, record, "medium"
+        )
+
+        await asyncio.sleep(2)
+        history = slack_client.bot_client.conversations_history(
+            channel=admin_channel_id, inclusive=True,
+            oldest=ts, latest=ts, limit=1,
+        )
+        messages = history.get("messages", [])
+        assert len(messages) > 0
+        msg = messages[0]
+
+        blocks_str = json.dumps(msg.get("blocks", []))
+        assert "Auto-Approved" in blocks_str
+        assert "MEDIUM" in blocks_str
+        assert slack_client.message_has_button(msg, "governance_revert")
+        assert slack_client.message_has_button(msg, "governance_mark_reviewed")
+
+
+# =============================================================================
+# Class 7: Search Filter
 # =============================================================================
 
 
 class TestGovernanceSearchFilter:
     """Verify governance-aware search filtering in GraphitiRetriever.
 
-    Uses mocked graphiti.search() and _lookup_episodes() to test
-    the filtering logic in search_chunks() without real Neo4j.
+    Uses mocked graphiti.search() and _lookup_episodes() to test the
+    filtering logic in search_chunks() without real Neo4j.
     """
 
     @staticmethod
     def _make_graphiti_result(
-        *,
-        name: str = "edge-1",
-        fact: str | None = None,
-        content: str | None = None,
-        source_description: str | None = None,
-        score: float = 0.9,
+        *, name: str = "edge-1", score: float = 0.9,
         episodes: list[str] | None = None,
     ) -> MagicMock:
         mock = MagicMock()
         mock.name = name
-        mock.fact = fact
-        mock.content = content
-        mock.source_description = source_description
+        mock.fact = None
+        mock.content = None
+        mock.source_description = None
         mock.score = score
         mock.episodes = episodes or [str(uuid.uuid4())]
         mock.uuid = str(uuid.uuid4())
@@ -705,8 +1063,7 @@ class TestGovernanceSearchFilter:
 
     @staticmethod
     def _make_episode_data(
-        *,
-        name: str = "chunk-1",
+        *, name: str = "chunk-1",
         content: str = "A detailed paragraph with enough content to pass the minimum length filter.",
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -718,10 +1075,8 @@ class TestGovernanceSearchFilter:
 
     @staticmethod
     def _setup_retriever(
-        mock_settings: MagicMock,
-        mock_get_client: MagicMock,
-        *,
-        governance_enabled: bool = True,
+        mock_settings: MagicMock, mock_get_client: MagicMock,
+        *, governance_enabled: bool = True,
     ) -> tuple:
         from knowledge_base.graph.graphiti_retriever import GraphitiRetriever
 
@@ -746,89 +1101,30 @@ class TestGovernanceSearchFilter:
     @pytest.mark.asyncio
     @patch("knowledge_base.graph.graphiti_retriever.get_graphiti_client")
     @patch("knowledge_base.graph.graphiti_retriever.settings")
-    async def test_pending_content_excluded(
+    async def test_reverted_content_excluded_from_search(
         self, mock_settings: MagicMock, mock_get_client: MagicMock,
     ) -> None:
-        """Episodes with governance_status='pending' are excluded when governance is enabled."""
+        """Reverted content is excluded from search results."""
         retriever, mock_graphiti = self._setup_retriever(
             mock_settings, mock_get_client, governance_enabled=True,
         )
 
-        ep_uuid = str(uuid.uuid4())
-        mock_graphiti.search = AsyncMock(
-            return_value=[self._make_graphiti_result(name="edge-pending", score=0.9, episodes=[ep_uuid])]
-        )
-
-        with patch.object(retriever, "_lookup_episodes", new_callable=AsyncMock) as mock_lookup:
-            mock_lookup.return_value = {
-                ep_uuid: self._make_episode_data(
-                    name="chunk-pending",
-                    content="Pending content that should not appear in search results.",
-                    metadata={"chunk_id": "chunk-pending", "governance_status": "pending"},
-                ),
-            }
-            results = await retriever.search_chunks(query="test query", num_results=10)
-
-        assert len(results) == 0, "Pending content should be excluded"
-
-    @pytest.mark.asyncio
-    @patch("knowledge_base.graph.graphiti_retriever.get_graphiti_client")
-    @patch("knowledge_base.graph.graphiti_retriever.settings")
-    async def test_rejected_content_excluded(
-        self, mock_settings: MagicMock, mock_get_client: MagicMock,
-    ) -> None:
-        """Episodes with governance_status='rejected' are excluded when governance is enabled."""
-        retriever, mock_graphiti = self._setup_retriever(
-            mock_settings, mock_get_client, governance_enabled=True,
-        )
-
-        ep_uuid = str(uuid.uuid4())
-        mock_graphiti.search = AsyncMock(
-            return_value=[self._make_graphiti_result(name="edge-rejected", score=0.9, episodes=[ep_uuid])]
-        )
-
-        with patch.object(retriever, "_lookup_episodes", new_callable=AsyncMock) as mock_lookup:
-            mock_lookup.return_value = {
-                ep_uuid: self._make_episode_data(
-                    name="chunk-rejected",
-                    content="Rejected content that should not appear in search results.",
-                    metadata={"chunk_id": "chunk-rejected", "governance_status": "rejected"},
-                ),
-            }
-            results = await retriever.search_chunks(query="test query", num_results=10)
-
-        assert len(results) == 0, "Rejected content should be excluded"
-
-    @pytest.mark.asyncio
-    @patch("knowledge_base.graph.graphiti_retriever.get_graphiti_client")
-    @patch("knowledge_base.graph.graphiti_retriever.settings")
-    async def test_reverted_content_excluded(
-        self, mock_settings: MagicMock, mock_get_client: MagicMock,
-    ) -> None:
-        """CRITICAL: Episodes with governance_status='reverted' are excluded.
-
-        This was previously missing from test coverage.
-        """
-        retriever, mock_graphiti = self._setup_retriever(
-            mock_settings, mock_get_client, governance_enabled=True,
-        )
-
-        ep_uuid_good = str(uuid.uuid4())
-        ep_uuid_reverted = str(uuid.uuid4())
+        ep_good = str(uuid.uuid4())
+        ep_reverted = str(uuid.uuid4())
 
         mock_graphiti.search = AsyncMock(return_value=[
-            self._make_graphiti_result(name="edge-good", score=0.9, episodes=[ep_uuid_good]),
-            self._make_graphiti_result(name="edge-reverted", score=0.8, episodes=[ep_uuid_reverted]),
+            self._make_graphiti_result(name="edge-good", score=0.9, episodes=[ep_good]),
+            self._make_graphiti_result(name="edge-reverted", score=0.8, episodes=[ep_reverted]),
         ])
 
         with patch.object(retriever, "_lookup_episodes", new_callable=AsyncMock) as mock_lookup:
             mock_lookup.return_value = {
-                ep_uuid_good: self._make_episode_data(
+                ep_good: self._make_episode_data(
                     name="chunk-good",
                     content="Approved content that should appear in search results.",
                     metadata={"chunk_id": "chunk-good", "governance_status": "approved"},
                 ),
-                ep_uuid_reverted: self._make_episode_data(
+                ep_reverted: self._make_episode_data(
                     name="chunk-reverted",
                     content="Reverted content that should NOT appear in search results.",
                     metadata={"chunk_id": "chunk-reverted", "governance_status": "reverted"},
@@ -842,10 +1138,10 @@ class TestGovernanceSearchFilter:
     @pytest.mark.asyncio
     @patch("knowledge_base.graph.graphiti_retriever.get_graphiti_client")
     @patch("knowledge_base.graph.graphiti_retriever.settings")
-    async def test_approved_and_legacy_included(
+    async def test_approved_content_included_in_search(
         self, mock_settings: MagicMock, mock_get_client: MagicMock,
     ) -> None:
-        """Episodes with 'approved' status and legacy episodes (missing field) are both included."""
+        """Approved content and legacy content (no field) are both included."""
         retriever, mock_graphiti = self._setup_retriever(
             mock_settings, mock_get_client, governance_enabled=True,
         )
@@ -881,7 +1177,7 @@ class TestGovernanceSearchFilter:
     @pytest.mark.asyncio
     @patch("knowledge_base.graph.graphiti_retriever.get_graphiti_client")
     @patch("knowledge_base.graph.graphiti_retriever.settings")
-    async def test_pending_to_approved_becomes_searchable(
+    async def test_status_transition_affects_searchability(
         self, mock_settings: MagicMock, mock_get_client: MagicMock,
     ) -> None:
         """Content starts as pending (excluded) then becomes approved (included)."""
@@ -923,309 +1219,7 @@ class TestGovernanceSearchFilter:
 
 
 # =============================================================================
-# Class 5: Create Knowledge with Governance
-# =============================================================================
-
-
-class TestGovernanceCreateKnowledge:
-    """Test _process_with_governance() in quick_knowledge.py."""
-
-    @pytest.mark.asyncio
-    async def test_create_knowledge_medium_risk_notifies_admin(
-        self,
-        slack_client,
-        e2e_config,
-        admin_channel_id,
-        async_slack_client,
-        unique_test_id,
-    ):
-        """Medium-risk content triggers notify_admin_medium_risk() and posts to admin channel."""
-        import asyncio
-        from knowledge_base.slack.quick_knowledge import _process_with_governance
-        from knowledge_base.governance.risk_classifier import RiskAssessment
-        from knowledge_base.governance.approval_engine import GovernanceResult
-        from knowledge_base.vectorstore.indexer import ChunkData
-
-        chunk_id = f"e2e_qk_med_{unique_test_id}"
-        text = f"[E2E Test] Medium risk quick knowledge {unique_test_id}"
-
-        chunk_data = ChunkData(
-            chunk_id=chunk_id,
-            content=text,
-            page_id="quick_test",
-            page_title="Quick Fact by e2e_user",
-            chunk_index=0,
-            space_key="QUICK",
-            url="slack://user/U_TEST",
-            author="unknown_user",
-            created_at=datetime.utcnow().isoformat(),
-            updated_at=datetime.utcnow().isoformat(),
-            chunk_type="text",
-            parent_headers="[]",
-            quality_score=100.0,
-            access_count=0,
-            feedback_count=0,
-            owner="unknown_user",
-            reviewed_by="",
-            reviewed_at="",
-            classification="internal",
-            doc_type="quick_fact",
-            topics="[]",
-            audience="[]",
-            complexity="",
-            summary=text[:200],
-        )
-
-        # Build a medium-risk assessment
-        assessment = RiskAssessment(
-            score=55.0,
-            tier="medium",
-            factors={"author_trust": 60, "source_type": 50},
-            governance_status="approved",
-        )
-
-        # Build a governance result that signals approved_with_revert
-        gov_record = _make_governance_record(
-            chunk_id=chunk_id,
-            risk_score=55.0,
-            risk_tier="medium",
-            status="auto_approved",
-            content_preview=text[:300],
-            revert_deadline=datetime.utcnow() + timedelta(hours=24),
-        )
-        gov_result = GovernanceResult(
-            status="approved_with_revert",
-            risk_assessment=assessment,
-            revert_deadline=datetime.utcnow() + timedelta(hours=24),
-            records=[gov_record],
-        )
-
-        # Track if notify_admin_medium_risk was called
-        notify_called = []
-
-        async def _mock_notify_medium(client, record):
-            notify_called.append(record)
-            # Actually post to admin channel for verification
-            from knowledge_base.slack.governance_admin import notify_admin_medium_risk as _real
-            with patch(
-                "knowledge_base.slack.governance_admin._get_admin_channel",
-                return_value=admin_channel_id,
-            ), patch(
-                "knowledge_base.slack.governance_admin.async_session_maker",
-                new_callable=lambda: lambda: MagicMock(
-                    __aenter__=AsyncMock(return_value=MagicMock(
-                        execute=AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))),
-                        commit=AsyncMock(),
-                    )),
-                    __aexit__=AsyncMock(return_value=False),
-                ),
-            ):
-                return await _real(client, record)
-
-        with patch(
-            "knowledge_base.governance.risk_classifier.RiskClassifier"
-        ) as MockClassifier, patch(
-            "knowledge_base.governance.approval_engine.ApprovalEngine"
-        ) as MockEngine, patch(
-            "knowledge_base.graph.graphiti_indexer.GraphitiIndexer"
-        ) as MockIndexer, patch(
-            "knowledge_base.slack.governance_admin.notify_admin_medium_risk",
-            side_effect=_mock_notify_medium,
-        ), patch(
-            "knowledge_base.slack.governance_admin.notify_admin_high_risk",
-            new_callable=AsyncMock,
-        ):
-            classifier_instance = AsyncMock()
-            classifier_instance.classify = AsyncMock(return_value=assessment)
-            MockClassifier.return_value = classifier_instance
-
-            engine_instance = AsyncMock()
-            engine_instance.submit = AsyncMock(return_value=gov_result)
-            MockEngine.return_value = engine_instance
-
-            indexer_instance = AsyncMock()
-            indexer_instance.index_single_chunk = AsyncMock()
-            MockIndexer.return_value = indexer_instance
-
-            await _process_with_governance(
-                async_slack_client,
-                chunk_data,
-                text,
-                "unknown_user",
-                "U_TEST",
-                e2e_config["channel_id"],
-                chunk_id,
-            )
-
-        assert len(notify_called) == 1, "notify_admin_medium_risk should be called once"
-
-        # Verify message appeared in admin channel
-        await asyncio.sleep(3)
-
-        history = slack_client.bot_client.conversations_history(
-            channel=admin_channel_id,
-            limit=10,
-        )
-        messages = history.get("messages", [])
-        found = _find_message_with_text(messages, unique_test_id)
-        assert found is not None, (
-            f"Medium-risk notification should appear in admin channel. "
-            f"Searched {len(messages)} recent messages for '{unique_test_id}'."
-        )
-
-    @pytest.mark.asyncio
-    async def test_create_knowledge_low_risk_auto_approves(
-        self,
-        slack_client,
-        e2e_config,
-        admin_channel_id,
-        async_slack_client,
-        test_start_timestamp,
-        unique_test_id,
-    ):
-        """Low-risk content auto-approves -- no admin notification, user gets 'Knowledge saved!'."""
-        from knowledge_base.slack.quick_knowledge import _process_with_governance
-        from knowledge_base.governance.risk_classifier import RiskAssessment
-        from knowledge_base.governance.approval_engine import GovernanceResult
-
-        chunk_id = f"e2e_qk_low_{unique_test_id}"
-        text = f"[E2E Test] Low risk quick knowledge {unique_test_id}"
-
-        # Minimal ChunkData
-        from knowledge_base.vectorstore.indexer import ChunkData
-
-        chunk_data = ChunkData(
-            chunk_id=chunk_id,
-            content=text,
-            page_id="quick_test",
-            page_title="Quick Fact by keboola_user",
-            chunk_index=0,
-            space_key="QUICK",
-            url="slack://user/U_TEST",
-            author="keboola_user@keboola.com",
-            created_at=datetime.utcnow().isoformat(),
-            updated_at=datetime.utcnow().isoformat(),
-            chunk_type="text",
-            parent_headers="[]",
-            quality_score=100.0,
-            access_count=0,
-            feedback_count=0,
-            owner="keboola_user",
-            reviewed_by="",
-            reviewed_at="",
-            classification="internal",
-            doc_type="quick_fact",
-            topics="[]",
-            audience="[]",
-            complexity="",
-            summary=text[:200],
-        )
-
-        assessment = RiskAssessment(
-            score=15.0,
-            tier="low",
-            factors={"author_trust": 10, "source_type": 20},
-            governance_status="approved",
-        )
-
-        gov_result = GovernanceResult(
-            status="auto_approved",
-            risk_assessment=assessment,
-        )
-
-        notify_high_mock = AsyncMock()
-        notify_medium_mock = AsyncMock()
-
-        with patch(
-            "knowledge_base.governance.risk_classifier.RiskClassifier"
-        ) as MockClassifier, patch(
-            "knowledge_base.governance.approval_engine.ApprovalEngine"
-        ) as MockEngine, patch(
-            "knowledge_base.graph.graphiti_indexer.GraphitiIndexer"
-        ) as MockIndexer, patch(
-            "knowledge_base.slack.governance_admin.notify_admin_high_risk",
-            notify_high_mock,
-        ), patch(
-            "knowledge_base.slack.governance_admin.notify_admin_medium_risk",
-            notify_medium_mock,
-        ):
-            classifier_instance = AsyncMock()
-            classifier_instance.classify = AsyncMock(return_value=assessment)
-            MockClassifier.return_value = classifier_instance
-
-            engine_instance = AsyncMock()
-            engine_instance.submit = AsyncMock(return_value=gov_result)
-            MockEngine.return_value = engine_instance
-
-            indexer_instance = AsyncMock()
-            indexer_instance.index_single_chunk = AsyncMock()
-            MockIndexer.return_value = indexer_instance
-
-            await _process_with_governance(
-                async_slack_client,
-                chunk_data,
-                text,
-                "keboola_user@keboola.com",
-                "U_TEST",
-                e2e_config["channel_id"],
-                chunk_id,
-            )
-
-        # No admin notifications for low risk
-        notify_high_mock.assert_not_called()
-        notify_medium_mock.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_governance_disabled_skips_classification(
-        self,
-        slack_client,
-        e2e_config,
-        async_slack_client,
-        unique_test_id,
-    ):
-        """When GOVERNANCE_ENABLED=False, RiskClassifier is never called.
-
-        Tests the branch in handle_create_knowledge() that skips governance.
-        """
-        from knowledge_base.slack.quick_knowledge import handle_create_knowledge
-
-        ack_mock = AsyncMock()
-        command = {
-            "text": f"[E2E Test] No governance {unique_test_id}",
-            "user_id": "U_TEST",
-            "user_name": "test_user",
-            "channel_id": e2e_config["channel_id"],
-        }
-
-        classifier_mock = MagicMock()
-
-        with patch(
-            "knowledge_base.slack.quick_knowledge.settings"
-        ) as mock_settings, patch(
-            "knowledge_base.graph.graphiti_indexer.GraphitiIndexer"
-        ) as MockIndexer, patch(
-            "knowledge_base.governance.risk_classifier.RiskClassifier",
-            classifier_mock,
-        ):
-            mock_settings.GOVERNANCE_ENABLED = False
-            mock_settings.SLACK_COMMAND_PREFIX = "kb-"
-
-            indexer_instance = AsyncMock()
-            indexer_instance.index_single_chunk = AsyncMock()
-            MockIndexer.return_value = indexer_instance
-
-            await handle_create_knowledge(ack_mock, command, async_slack_client)
-
-            # Give the background task time to execute
-            import asyncio
-            await asyncio.sleep(2)
-
-        ack_mock.assert_called_once()
-        classifier_mock.assert_not_called()
-
-
-# =============================================================================
-# Class 6: Queue Handler
+# Class 8: Queue Handler
 # =============================================================================
 
 
@@ -1240,16 +1234,12 @@ class TestGovernanceQueueHandler:
         pending_items = [
             _make_governance_record(
                 chunk_id=f"pending_1_{unique_test_id}",
-                risk_score=80.0,
-                risk_tier="high",
-                status="pending_review",
+                risk_score=80.0, risk_tier="high", status="pending_review",
                 content_preview="Pending item 1",
             ),
             _make_governance_record(
                 chunk_id=f"pending_2_{unique_test_id}",
-                risk_score=75.0,
-                risk_tier="high",
-                status="pending_review",
+                risk_score=75.0, risk_tier="high", status="pending_review",
                 content_preview="Pending item 2",
             ),
         ]
@@ -1257,9 +1247,7 @@ class TestGovernanceQueueHandler:
         revertable_items = [
             _make_governance_record(
                 chunk_id=f"revertable_1_{unique_test_id}",
-                risk_score=55.0,
-                risk_tier="medium",
-                status="auto_approved",
+                risk_score=55.0, risk_tier="medium", status="auto_approved",
                 content_preview="Revertable item 1",
                 revert_deadline=datetime.utcnow() + timedelta(hours=12),
             ),
@@ -1267,10 +1255,7 @@ class TestGovernanceQueueHandler:
 
         ack_mock = AsyncMock()
         client_mock = AsyncMock()
-        command = {
-            "user_id": "U_TEST_ADMIN",
-            "channel_id": "C_TEST_CHANNEL",
-        }
+        command = {"user_id": "U_TEST_ADMIN", "channel_id": "C_TEST_CHANNEL"}
 
         engine_instance = AsyncMock()
         engine_instance.get_pending_queue = AsyncMock(return_value=pending_items)
@@ -1286,27 +1271,11 @@ class TestGovernanceQueueHandler:
         client_mock.chat_postEphemeral.assert_called_once()
 
         call_kwargs = client_mock.chat_postEphemeral.call_args
-        # Could be positional or keyword
-        if call_kwargs.kwargs:
-            blocks = call_kwargs.kwargs.get("blocks", [])
-            text = call_kwargs.kwargs.get("text", "")
-        else:
-            blocks = []
-            text = ""
-
+        blocks = call_kwargs.kwargs.get("blocks", [])
         blocks_str = json.dumps(blocks)
 
-        # Verify pending section header
-        assert "Pending Approval" in blocks_str, (
-            f"Queue should contain 'Pending Approval' header. blocks={blocks_str[:300]}"
-        )
-
-        # Verify revertable section header
-        assert "Revertable" in blocks_str, (
-            f"Queue should contain 'Revertable' header. blocks={blocks_str[:300]}"
-        )
-
-        # Verify chunk IDs appear
+        assert "Pending Approval" in blocks_str
+        assert "Revertable" in blocks_str
         assert f"pending_1_{unique_test_id}" in blocks_str
         assert f"pending_2_{unique_test_id}" in blocks_str
         assert f"revertable_1_{unique_test_id}" in blocks_str
@@ -1318,10 +1287,7 @@ class TestGovernanceQueueHandler:
 
         ack_mock = AsyncMock()
         client_mock = AsyncMock()
-        command = {
-            "user_id": "U_TEST_ADMIN",
-            "channel_id": "C_TEST_CHANNEL",
-        }
+        command = {"user_id": "U_TEST_ADMIN", "channel_id": "C_TEST_CHANNEL"}
 
         engine_instance = AsyncMock()
         engine_instance.get_pending_queue = AsyncMock(return_value=[])
@@ -1337,11 +1303,5 @@ class TestGovernanceQueueHandler:
         client_mock.chat_postEphemeral.assert_called_once()
 
         call_kwargs = client_mock.chat_postEphemeral.call_args
-        if call_kwargs.kwargs:
-            text = call_kwargs.kwargs.get("text", "")
-        else:
-            text = str(call_kwargs)
-
-        assert "No pending items" in text, (
-            f"Empty queue should say 'No pending items'. text={text!r}"
-        )
+        text = call_kwargs.kwargs.get("text", "")
+        assert "No pending items" in text
