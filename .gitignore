@@ -85,3 +85,4 @@ terraform.tfvars
 
 # Claude settings (local)
 .claude/
+.worktrees/
