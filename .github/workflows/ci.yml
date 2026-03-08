@@ -354,17 +354,70 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - name: Enable auto-merge
+      - name: Merge PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          echo "Enabling auto-merge for PR #$PR_NUMBER"
-          gh pr merge "$PR_NUMBER" --repo "${{ github.repository }}" --auto --squash
-          echo "Auto-merge enabled. PR will merge when all required checks pass."
+          echo "Merging PR #$PR_NUMBER (all required checks passed)"
+          gh pr merge "$PR_NUMBER" --repo "${{ github.repository }}" --squash
+          echo "PR #$PR_NUMBER merged successfully."
 
   # ============================================
-  # Stage 5: Deploy to Production (main only)
+  # Stage 5: Deploy to Production (from PR, after merge)
+  # ============================================
+  deploy-production-from-pr:
+    needs: auto-merge
+    if: always() && needs.auto-merge.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Deploy slack-bot to production
+        env:
+          TAG: ${{ github.sha }}
+        run: |
+          gcloud run deploy slack-bot \
+            --image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/slack-bot:$TAG \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }}
+      - name: Tag jobs image as latest for production
+        env:
+          TAG: ${{ github.sha }}
+        run: |
+          gcloud artifacts docker tags add \
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/jobs:$TAG \
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/jobs:latest
+
+  # ============================================
+  # Stage 5b: Deploy MCP Server to Production (from PR, after merge)
+  # ============================================
+  deploy-mcp-production-from-pr:
+    needs: auto-merge
+    if: always() && needs.auto-merge.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Deploy mcp-server to production
+        env:
+          TAG: ${{ github.sha }}
+        run: |
+          gcloud run services update kb-mcp \
+            --image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/mcp-server:$TAG \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }}
+
+  # ============================================
+  # Stage 5 (fallback): Deploy to Production (direct push to main only)
+  # This only runs for direct pushes to main (rare/emergency).
+  # Normal PR flow uses deploy-production-from-pr above.
   # ============================================
   deploy-production:
     needs: e2e-tests-staging
@@ -394,7 +447,7 @@ jobs:
             ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/jobs:latest
 
   # ============================================
-  # Stage 5b: Deploy MCP Server to Production (main only)
+  # Stage 5b (fallback): Deploy MCP Server to Production (direct push to main only)
   # ============================================
   deploy-mcp-production:
     needs: e2e-tests-staging
