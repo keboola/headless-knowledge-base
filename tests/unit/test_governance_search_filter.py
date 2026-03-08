@@ -280,3 +280,45 @@ class TestGovernanceSearchFilter:
 
         assert len(results) == 1
         assert results[0].chunk_id == "chunk-good"
+
+    @pytest.mark.asyncio
+    @patch("knowledge_base.graph.graphiti_retriever.get_graphiti_client")
+    @patch("knowledge_base.graph.graphiti_retriever.settings")
+    async def test_reverted_episodes_excluded(
+        self,
+        mock_settings: MagicMock,
+        mock_get_client: MagicMock,
+    ) -> None:
+        """Episodes with governance_status='reverted' are excluded when governance is enabled."""
+        retriever, mock_graphiti = _setup_retriever(
+            mock_settings, mock_get_client, governance_enabled=True
+        )
+
+        ep_uuid_good = str(uuid.uuid4())
+        ep_uuid_reverted = str(uuid.uuid4())
+
+        graphiti_results = [
+            _make_graphiti_result(name="edge-good", score=0.9, episodes=[ep_uuid_good]),
+            _make_graphiti_result(name="edge-reverted", score=0.8, episodes=[ep_uuid_reverted]),
+        ]
+        mock_graphiti.search = AsyncMock(return_value=graphiti_results)
+
+        episode_data = {
+            ep_uuid_good: _make_episode_data(
+                name="chunk-good",
+                content="This content is approved and should appear in results.",
+                metadata={"chunk_id": "chunk-good", "governance_status": "approved"},
+            ),
+            ep_uuid_reverted: _make_episode_data(
+                name="chunk-reverted",
+                content="This content was reverted and should NOT appear in results.",
+                metadata={"chunk_id": "chunk-reverted", "governance_status": "reverted"},
+            ),
+        }
+
+        with patch.object(retriever, "_lookup_episodes", new_callable=AsyncMock) as mock_lookup:
+            mock_lookup.return_value = episode_data
+            results = await retriever.search_chunks(query="test query", num_results=10)
+
+        assert len(results) == 1
+        assert results[0].chunk_id == "chunk-good"

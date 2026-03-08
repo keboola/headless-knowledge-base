@@ -576,7 +576,8 @@ class SlackTestClient:
         self,
         message: dict,
         action_id_prefix: str,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        channel_id: Optional[str] = None,
     ) -> bool:
         """Click a button in a message by posting to the staging bot endpoint.
 
@@ -587,6 +588,7 @@ class SlackTestClient:
             message: The message dict containing the button
             action_id_prefix: e.g., "feedback_helpful" to find "feedback_helpful_123.456"
             user_id: User ID to simulate (defaults to test user)
+            channel_id: Channel ID override for admin channel buttons (defaults to test channel)
 
         Returns:
             True if click succeeded, False otherwise
@@ -619,7 +621,7 @@ class SlackTestClient:
                 "domain": "e2e-staging",
             },
             "channel": {
-                "id": self.channel_id,
+                "id": channel_id or self.channel_id,
                 "name": "e2e-test-channel",
             },
             "message": message,
