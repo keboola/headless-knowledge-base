@@ -108,7 +108,17 @@ resource "google_cloud_run_v2_service" "slack_bot" {
 
       env {
         name  = "GOVERNANCE_ENABLED"
-        value = "false"
+        value = "true"
+      }
+
+      env {
+        name  = "GOVERNANCE_LOW_RISK_THRESHOLD"
+        value = "25"
+      }
+
+      env {
+        name  = "GOVERNANCE_HIGH_RISK_THRESHOLD"
+        value = "55"
       }
 
       # Health check

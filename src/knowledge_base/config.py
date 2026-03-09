@@ -103,6 +103,7 @@ class Settings(BaseSettings):
     GOVERNANCE_AUTO_REJECT_DAYS: int = 14  # Days before pending items auto-rejected
     GOVERNANCE_CONTRADICTION_CHECK_ENABLED: bool = True  # LLM contradiction detection
     GOVERNANCE_NOVELTY_SIMILARITY_THRESHOLD: float = 0.7  # Cosine sim for "existing topic"
+    GOVERNANCE_CONTENT_IMPACT_ENABLED: bool = True  # LLM-based content impact classification
 
     # Graph Database (Graphiti + Neo4j)
     GRAPH_BACKEND: str = "neo4j"  # "neo4j" for all environments
