@@ -66,10 +66,27 @@ def _format_risk_factors(risk_factors_json: str) -> str:
     if not factors:
         return "_No risk factors available_"
 
+    # Map category slugs to human-readable labels for display
+    _category_labels = {
+        "routine_info": "Routine Info",
+        "team_update": "Team Update",
+        "process_change": "Process Change",
+        "tool_technology": "Tool/Technology",
+        "org_structure": "Org Structure",
+        "policy_change": "Policy Change",
+        "financial_impact": "Financial Impact",
+        "security_change": "Security Change",
+    }
+
     lines = []
-    for factor_name, factor_score in factors.items():
+    for factor_name, factor_value in factors.items():
+        # content_impact_category is a string label, not a numeric score
+        if factor_name == "content_impact_category":
+            label = _category_labels.get(factor_value, str(factor_value).replace("_", " ").title())
+            lines.append(f"  - Impact Category: {label}")
+            continue
         label = factor_name.replace("_", " ").title()
-        lines.append(f"  - {label}: {factor_score:.0f}/100")
+        lines.append(f"  - {label}: {factor_value:.0f}/100")
     return "\n".join(lines)
 
 

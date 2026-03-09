@@ -247,6 +247,11 @@ resource "google_cloud_run_v2_service" "slack_bot_staging" {
         value = "true"
       }
 
+      env {
+        name  = "GOVERNANCE_HIGH_RISK_THRESHOLD"
+        value = "55"
+      }
+
       startup_probe {
         http_get {
           path = "/health"

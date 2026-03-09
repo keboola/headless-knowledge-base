@@ -1,6 +1,6 @@
 """Risk-based classifier for knowledge intake governance.
 
-Scores incoming content on 5 weighted factors to determine the risk tier
+Scores incoming content on 4 weighted factors to determine the risk tier
 (low / medium / high) and appropriate governance action.
 
 See ADR-0011 for design rationale.
@@ -45,62 +45,75 @@ _SOURCE_SCORES: dict[str, float] = {
     "mcp_ingest": 70,
 }
 
+# Content impact category to risk score mapping
+_IMPACT_CATEGORY_SCORES: dict[str, float] = {
+    "routine_info": 10.0,
+    "team_update": 25.0,
+    "process_change": 50.0,
+    "tool_technology": 55.0,
+    "org_structure": 75.0,
+    "policy_change": 80.0,
+    "financial_impact": 85.0,
+    "security_change": 90.0,
+}
+
+_IMPACT_FALLBACK_SCORE: float = 20.0
+
+_IMPACT_CLASSIFICATION_PROMPT = """Classify the organizational impact of this knowledge base content.
+
+Categories (pick exactly one):
+- routine_info: Casual facts, preferences, trivial updates with no organizational impact
+- team_update: Changes affecting a single team's workflow or schedule
+- process_change: Changes to how work gets done across multiple teams
+- tool_technology: Technology, tool, or platform changes/decisions
+- org_structure: Organizational structure, reporting, or team changes
+- policy_change: Company-wide policies, rules, standards, mandates
+- financial_impact: Budget, vendor, contract, procurement decisions
+- security_change: Security policies, access controls, compliance requirements
+
+Content: {content}
+
+Return JSON: {{"category": "<category_name>", "confidence": <0.0-1.0>}}"""
+
 
 class RiskClassifier:
-    """Score intake requests on 5 weighted factors to determine risk tier."""
+    """Score intake requests on 4 weighted factors to determine risk tier.
+
+    Factors:
+        1. Author trust (15%): trusted domain -> low, unknown -> medium, external -> high
+        2. Source type (15%): keboola_sync/batch -> low, create -> medium, ingest -> high
+        3. Content scope (10%): short -> low risk, long -> higher risk
+        4. Content impact (60%): LLM-classified organizational impact
+    """
 
     async def classify(self, intake: IntakeRequest) -> RiskAssessment:
-        """Score intake on 5 weighted factors.
-
-        Factors:
-            1. Author trust (25%): trusted domain -> low, unknown -> medium, external -> high
-            2. Source type (25%): keboola_sync/batch -> low, create -> medium, ingest -> high
-            3. Content scope (15%): short -> low risk, long -> higher risk
-            4. Novelty (20%): default 20 unless base risk >= 30 triggers deeper check
-            5. Contradiction (15%): default 20 unless base risk >= 30 triggers deeper check
+        """Score intake on 4 weighted factors.
 
         Returns:
             RiskAssessment with score, tier, factors dict, and governance_status
         """
         content_length = intake.content_length or len(intake.content)
 
-        # Factor 1: Author trust (25%)
+        # Factor 1: Author trust (15%)
         author_trust = self._score_author_trust(intake.author_email)
 
-        # Factor 2: Source type (25%)
+        # Factor 2: Source type (15%)
         source_type = self._score_source_type(intake.intake_path)
 
-        # Factor 3: Content scope (15%)
+        # Factor 3: Content scope (10%)
         content_scope = self._score_content_scope(content_length)
 
-        # Calculate base risk from factors 1-3 (weighted) to decide if expensive checks needed
-        base_risk = (
-            author_trust * 0.25
-            + source_type * 0.25
-            + content_scope * 0.15
-        ) / 0.65  # Normalize to 0-100 scale for threshold comparison
-
-        # Factor 4: Novelty (20%)
-        if base_risk >= 30:
-            # TODO: Wire embedding similarity check
-            novelty = 20.0
-        else:
-            novelty = 20.0
-
-        # Factor 5: Contradiction (15%)
-        if base_risk >= 30:
-            # TODO: Wire LLM contradiction check
-            contradiction = 20.0
-        else:
-            contradiction = 20.0
+        # Factor 4: Content impact (60%) — LLM-based semantic classification
+        content_impact, impact_category = await self._score_content_impact(
+            intake.content
+        )
 
         # Calculate weighted total score
         score = (
-            author_trust * 0.25
-            + source_type * 0.25
-            + content_scope * 0.15
-            + novelty * 0.20
-            + contradiction * 0.15
+            author_trust * 0.15
+            + source_type * 0.15
+            + content_scope * 0.10
+            + content_impact * 0.60
         )
 
         # Determine tier based on settings thresholds
@@ -111,16 +124,17 @@ class RiskClassifier:
             "author_trust": author_trust,
             "source_type": source_type,
             "content_scope": content_scope,
-            "novelty": novelty,
-            "contradiction": contradiction,
+            "content_impact": content_impact,
+            "content_impact_category": impact_category,
         }
 
         logger.info(
-            f"Risk classification: score={score:.1f}, tier={tier}, "
-            f"status={governance_status}, path={intake.intake_path}"
+            "Risk classification: score=%.1f, tier=%s, status=%s, "
+            "path=%s, impact_category=%s",
+            score, tier, governance_status, intake.intake_path, impact_category,
         )
         author_domain = intake.author_email.rsplit("@", 1)[-1] if "@" in intake.author_email else "unknown"
-        logger.debug(f"Risk classification author domain: {author_domain}")
+        logger.debug("Risk classification author domain: %s", author_domain)
 
         return RiskAssessment(
             score=score,
@@ -128,6 +142,47 @@ class RiskClassifier:
             factors=factors,
             governance_status=governance_status,
         )
+
+    async def _score_content_impact(self, content: str) -> tuple[float, str]:
+        """Score content impact using LLM classification.
+
+        Uses Gemini to classify content into organizational impact categories.
+        Falls back to default score on any LLM error.
+
+        Returns:
+            Tuple of (score 0-100, category name)
+        """
+        if not settings.GOVERNANCE_CONTENT_IMPACT_ENABLED:
+            return _IMPACT_FALLBACK_SCORE, "disabled"
+
+        try:
+            from knowledge_base.rag.factory import get_llm
+
+            llm = await get_llm()
+            prompt = _IMPACT_CLASSIFICATION_PROMPT.format(
+                content=content[:2000],  # Limit content length for prompt
+            )
+            result = await llm.generate_json(prompt)
+
+            category = result.get("category", "").lower().strip()
+            if category not in _IMPACT_CATEGORY_SCORES:
+                logger.warning(
+                    "LLM returned unknown impact category: %s, falling back",
+                    category,
+                )
+                return _IMPACT_FALLBACK_SCORE, "unknown"
+
+            score = _IMPACT_CATEGORY_SCORES[category]
+            confidence = result.get("confidence", 0.0)
+            logger.info(
+                "Content impact classification: category=%s, score=%.0f, confidence=%.2f",
+                category, score, confidence,
+            )
+            return score, category
+
+        except Exception as e:
+            logger.warning("Content impact classification failed, using fallback: %s", e)
+            return _IMPACT_FALLBACK_SCORE, "error"
 
     def _score_author_trust(self, email: str) -> float:
         """Score author trust based on email domain.

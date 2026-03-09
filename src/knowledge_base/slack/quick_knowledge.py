@@ -137,8 +137,20 @@ async def _process_with_governance(
     )
 
     classifier = RiskClassifier()
+
+    # Resolve Slack user email for accurate author trust scoring
+    author_email = f"{user_name}@unknown"
+    try:
+        user_info = await client.users_info(user=user_id)
+        email = user_info.get("user", {}).get("profile", {}).get("email", "")
+        if email:
+            author_email = email
+            logger.info("Resolved Slack user email: %s", email)
+    except Exception as e:
+        logger.warning("Failed to resolve Slack user email: %s", e)
+
     assessment = await classifier.classify(IntakeRequest(
-        author_email=f"{user_name}@unknown",  # Slack doesn't provide email
+        author_email=author_email,
         intake_path="slack_create",
         content=text,
         chunk_count=1,
