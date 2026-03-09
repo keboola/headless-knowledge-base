@@ -145,7 +145,8 @@ async def _process_with_governance(
         email = user_info.get("user", {}).get("profile", {}).get("email", "")
         if email:
             author_email = email
-            logger.info("Resolved Slack user email: %s", email)
+            domain = email.rsplit("@", 1)[-1] if "@" in email else "unknown"
+            logger.info("Resolved Slack user email domain: %s", domain)
     except Exception as e:
         logger.warning("Failed to resolve Slack user email: %s", e)
 

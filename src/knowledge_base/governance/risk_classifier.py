@@ -133,8 +133,10 @@ class RiskClassifier:
             "path=%s, impact_category=%s",
             score, tier, governance_status, intake.intake_path, impact_category,
         )
-        author_domain = intake.author_email.rsplit("@", 1)[-1] if "@" in intake.author_email else "unknown"
-        logger.debug("Risk classification author domain: %s", author_domain)
+        logger.debug(
+            "Risk classification factors: author_trust=%.0f, source=%.0f, scope=%.0f, impact=%.0f",
+            author_trust, source_type, content_scope, content_impact,
+        )
 
         return RiskAssessment(
             score=score,
