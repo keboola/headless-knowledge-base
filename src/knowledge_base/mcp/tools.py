@@ -204,6 +204,9 @@ async def execute_tool(
     user: dict[str, Any],
 ) -> list[TextContent]:
     """Execute a tool and return results as TextContent list."""
+    from knowledge_base.db.database import init_db
+    await init_db()
+
     logger.info(f"Executing tool: {tool_name}, user: {user.get('sub', 'unknown')}")
 
     try:

@@ -940,12 +940,31 @@ def run_http_mode(port: int = 8080) -> None:
             "Install with: pip install starlette uvicorn"
         ) from e
 
+    from contextlib import asynccontextmanager
+    from sqlalchemy import text
+
     bolt_app = create_async_app()
     handler = AsyncSlackRequestHandler(bolt_app)
 
+    @asynccontextmanager
+    async def lifespan(app):
+        """Initialize database before accepting requests."""
+        await init_db()
+        logger.info("Database initialized at startup")
+        yield
+
     async def health(request):
-        """Health check endpoint."""
-        return JSONResponse({"status": "healthy", "service": "slack-bot"})
+        """Health check endpoint with database verification."""
+        try:
+            async with async_session_maker() as session:
+                await session.execute(text("SELECT 1"))
+            return JSONResponse({"status": "healthy", "service": "slack-bot", "db": "ok"})
+        except Exception as e:
+            logger.error("Health check DB failure: %s", e)
+            return JSONResponse(
+                {"status": "degraded", "service": "slack-bot", "db": str(e)},
+                status_code=503,
+            )
 
     async def slack_events(request):
         """Handle Slack events via HTTP."""
@@ -955,7 +974,8 @@ def run_http_mode(port: int = 8080) -> None:
         routes=[
             Route("/health", endpoint=health, methods=["GET"]),
             Route("/slack/events", endpoint=slack_events, methods=["POST"]),
-        ]
+        ],
+        lifespan=lifespan,
     )
 
     logger.info(f"Starting Slack bot in HTTP mode on port {port}...")
@@ -969,6 +989,10 @@ def run_bot(port: int = 3000, use_socket_mode: bool = False) -> None:
         port: Port for HTTP mode
         use_socket_mode: Use Socket Mode instead of HTTP (requires SLACK_APP_TOKEN)
     """
+    import asyncio
+    asyncio.get_event_loop().run_until_complete(init_db())
+    logger.info("Database initialized at startup")
+
     app = create_app()
 
     if use_socket_mode:

@@ -60,6 +60,10 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     global resource_server
 
+    from knowledge_base.db.database import init_db
+    await init_db()
+    logger.info("Database initialized at startup")
+
     resource_server = OAuthResourceServer(
         resource=mcp_settings.MCP_OAUTH_RESOURCE_IDENTIFIER,
         authorization_servers=[mcp_settings.MCP_OAUTH_AUTHORIZATION_SERVER],

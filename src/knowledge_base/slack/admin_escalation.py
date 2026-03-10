@@ -13,7 +13,7 @@ from slack_sdk import WebClient
 from sqlalchemy import func, select
 
 from knowledge_base.config import settings
-from knowledge_base.db.database import async_session_maker
+from knowledge_base.db.database import async_session_maker, init_db
 # BotResponse and UserFeedback are analytics models kept in database
 from knowledge_base.db.models import BotResponse, UserFeedback
 
@@ -206,6 +206,7 @@ async def check_auto_escalation(
 
     Returns True if auto-escalation was triggered.
     """
+    await init_db()
     if feedback_type == "helpful":
         return False
 
@@ -256,6 +257,7 @@ async def _get_escalation_context(message_ts: str, chunk_ids: list[str]) -> dict
 
     Bot response from database, chunk metadata from Graphiti.
     """
+    await init_db()
     context = {
         "query": None,
         "response": None,
