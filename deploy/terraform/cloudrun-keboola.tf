@@ -208,6 +208,11 @@ resource "google_cloud_run_v2_job" "keboola_sync" {
     google_secret_manager_secret_version.keboola_api_token,
     google_secret_manager_secret_version.neo4j_password,
   ]
+
+  # Image managed by CI/CD pipeline (gcloud artifacts docker tags)
+  lifecycle {
+    ignore_changes = [template[0].template[0].containers[0].image]
+  }
 }
 
 # =============================================================================
@@ -395,4 +400,9 @@ resource "google_cloud_run_v2_job" "keboola_batch_import" {
     google_secret_manager_secret_version.keboola_api_token,
     google_secret_manager_secret_version.neo4j_password,
   ]
+
+  # Image managed by CI/CD pipeline (gcloud artifacts docker tags)
+  lifecycle {
+    ignore_changes = [template[0].template[0].containers[0].image]
+  }
 }
