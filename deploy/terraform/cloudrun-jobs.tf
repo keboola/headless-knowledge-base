@@ -182,6 +182,11 @@ resource "google_cloud_run_v2_job" "pipeline" {
     google_secret_manager_secret_version.confluence_email,
     google_secret_manager_secret_version.confluence_api_token,
   ]
+
+  # Image managed by CI/CD pipeline (gcloud artifacts docker tags)
+  lifecycle {
+    ignore_changes = [template[0].template[0].containers[0].image]
+  }
 }
 
 resource "google_service_account" "jobs" {

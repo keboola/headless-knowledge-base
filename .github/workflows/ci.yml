@@ -280,11 +280,47 @@ jobs:
             --project=${{ env.PROJECT_ID }}
 
   # ============================================
+  # Stage 3c: Apply Terraform for Staging Cloud Run
+  # Ensures env vars, scaling, secrets from Terraform are applied after image deploy
+  # ============================================
+  terraform-staging:
+    needs: [deploy-staging, deploy-mcp-staging]
+    if: always() && needs.deploy-staging.result == 'success' && needs.deploy-mcp-staging.result == 'success'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: terraform-apply
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: deploy/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.4"
+      - name: Terraform Init
+        run: terraform init -input=false
+      - name: Terraform Apply (staging Cloud Run only)
+        timeout-minutes: 10
+        run: |
+          terraform apply -auto-approve -input=false \
+            -target='google_cloud_run_v2_service.slack_bot_staging' \
+            -target='google_cloud_run_v2_service.mcp_server_staging' \
+            -target='google_cloud_run_v2_job.confluence_sync_staging'
+
+  # ============================================
   # Stage 4: E2E Tests against Staging (ALL tests)
   # ============================================
   e2e-tests-staging:
-    needs: [deploy-staging, deploy-mcp-staging]
-    if: always() && needs.deploy-staging.result == 'success' && needs.deploy-mcp-staging.result == 'success'
+    needs: [deploy-staging, deploy-mcp-staging, terraform-staging]
+    if: >
+      always() &&
+      needs.deploy-staging.result == 'success' &&
+      needs.deploy-mcp-staging.result == 'success' &&
+      needs.terraform-staging.result == 'success'
     runs-on: ubuntu-latest
     env:
       # Slack configuration (Pattern: {SERVICE}_{ENV}_*)
@@ -415,6 +451,39 @@ jobs:
             --project=${{ env.PROJECT_ID }}
 
   # ============================================
+  # Stage 5c: Apply Terraform for Production Cloud Run (from PR)
+  # ============================================
+  terraform-production-from-pr:
+    needs: [deploy-production-from-pr, deploy-mcp-production-from-pr]
+    if: always() && needs.deploy-production-from-pr.result == 'success' && needs.deploy-mcp-production-from-pr.result == 'success'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: terraform-apply
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: deploy/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.4"
+      - name: Terraform Init
+        run: terraform init -input=false
+      - name: Terraform Apply (production Cloud Run only)
+        timeout-minutes: 10
+        run: |
+          terraform apply -auto-approve -input=false \
+            -target='google_cloud_run_v2_service.slack_bot' \
+            -target='google_cloud_run_v2_service.mcp_server' \
+            -target='google_cloud_run_v2_job.pipeline' \
+            -target='google_cloud_run_v2_job.keboola_sync' \
+            -target='google_cloud_run_v2_job.keboola_batch_import'
+
+  # ============================================
   # Stage 5 (fallback): Deploy to Production (direct push to main only)
   # This only runs for direct pushes to main (rare/emergency).
   # Normal PR flow uses deploy-production-from-pr above.
@@ -467,3 +536,36 @@ jobs:
             --image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/knowledge-base/mcp-server:$TAG \
             --region=${{ env.REGION }} \
             --project=${{ env.PROJECT_ID }}
+
+  # ============================================
+  # Stage 5c (fallback): Apply Terraform for Production Cloud Run (direct push)
+  # ============================================
+  terraform-production:
+    needs: [deploy-production, deploy-mcp-production]
+    if: always() && needs.deploy-production.result == 'success' && needs.deploy-mcp-production.result == 'success'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: terraform-apply
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: deploy/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.4"
+      - name: Terraform Init
+        run: terraform init -input=false
+      - name: Terraform Apply (production Cloud Run only)
+        timeout-minutes: 10
+        run: |
+          terraform apply -auto-approve -input=false \
+            -target='google_cloud_run_v2_service.slack_bot' \
+            -target='google_cloud_run_v2_service.mcp_server' \
+            -target='google_cloud_run_v2_job.pipeline' \
+            -target='google_cloud_run_v2_job.keboola_sync' \
+            -target='google_cloud_run_v2_job.keboola_batch_import'

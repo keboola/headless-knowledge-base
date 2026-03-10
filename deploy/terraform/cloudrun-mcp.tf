@@ -223,6 +223,11 @@ resource "google_cloud_run_v2_service" "mcp_server" {
     google_secret_manager_secret_version.mcp_oauth_client_id,
     google_secret_manager_secret_version.mcp_oauth_client_secret,
   ]
+
+  # Image managed by CI/CD pipeline (gcloud run deploy --image=SHA)
+  lifecycle {
+    ignore_changes = [template[0].containers[0].image]
+  }
 }
 
 # Allow unauthenticated access (OAuth is handled at application level)
@@ -386,6 +391,11 @@ resource "google_cloud_run_v2_service" "mcp_server_staging" {
     google_secret_manager_secret_version.mcp_oauth_client_secret,
     google_compute_instance.neo4j_staging,
   ]
+
+  # Image managed by CI/CD pipeline (gcloud run deploy --image=SHA)
+  lifecycle {
+    ignore_changes = [template[0].containers[0].image]
+  }
 }
 
 # Allow unauthenticated access (OAuth is handled at application level)

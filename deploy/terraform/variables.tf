@@ -49,6 +49,7 @@ variable "staging_domain" {
 variable "iap_support_email" {
   description = "Email address for IAP brand support"
   type        = string
+  default     = "jiri.manas@keboola.com"
 }
 
 variable "iap_authorized_users" {

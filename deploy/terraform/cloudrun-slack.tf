@@ -150,6 +150,11 @@ resource "google_cloud_run_v2_service" "slack_bot" {
     google_secret_manager_secret_version.slack_bot_token,
     google_secret_manager_secret_version.slack_signing_secret,
   ]
+
+  # Image managed by CI/CD pipeline (gcloud run deploy --image=SHA)
+  lifecycle {
+    ignore_changes = [template[0].containers[0].image]
+  }
 }
 
 # Allow unauthenticated access (Slack needs to reach the endpoint)

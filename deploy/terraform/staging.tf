@@ -64,6 +64,13 @@ resource "google_compute_disk" "neo4j_staging_data" {
     environment = "staging"
     purpose     = "neo4j-data"
   }
+
+  # Nightly staging refresh (staging-data-refresh job) replaces this disk from
+  # a prod snapshot. Ignore the snapshot attribute to prevent Terraform from
+  # seeing drift and force-replacing the disk on every apply.
+  lifecycle {
+    ignore_changes = [snapshot]
+  }
 }
 
 resource "google_service_account" "neo4j_staging" {
@@ -281,6 +288,11 @@ resource "google_cloud_run_v2_service" "slack_bot_staging" {
     google_secret_manager_secret_version.slack_signing_secret_staging,
     google_compute_instance.neo4j_staging,
   ]
+
+  # Image managed by CI/CD pipeline (gcloud run deploy --image=SHA)
+  lifecycle {
+    ignore_changes = [template[0].containers[0].image]
+  }
 }
 
 resource "google_cloud_run_v2_service_iam_member" "slack_bot_staging_invoker" {
@@ -512,6 +524,11 @@ resource "google_cloud_run_v2_job" "confluence_sync_staging" {
   depends_on = [
     google_compute_instance.neo4j_staging,
   ]
+
+  # Image managed by CI/CD pipeline (gcloud artifacts docker tags)
+  lifecycle {
+    ignore_changes = [template[0].template[0].containers[0].image]
+  }
 }
 
 # IAM: staging SA can read/write pipeline state
