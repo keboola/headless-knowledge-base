@@ -97,9 +97,12 @@ async def handle_create_knowledge(ack: Any, command: dict, client: WebClient) ->
             else:
                 # Original flow — no governance
                 indexer = GraphitiIndexer()
-                await indexer.index_single_chunk(chunk_data)
+                indexed = await indexer.index_single_chunk(chunk_data)
 
-                logger.info(f"Created and indexed quick knowledge: {chunk_id}")
+                if indexed:
+                    logger.info(f"Created and indexed quick knowledge: {chunk_id}")
+                else:
+                    logger.warning(f"Created quick knowledge but indexing failed: {chunk_id}")
 
                 await client.chat_postEphemeral(
                     channel=channel_id,
@@ -165,9 +168,12 @@ async def _process_with_governance(
 
     # Index to Graphiti (always -- even pending content gets entity extraction)
     indexer = GraphitiIndexer()
-    await indexer.index_single_chunk(chunk_data)
+    indexed = await indexer.index_single_chunk(chunk_data)
 
-    logger.info(f"Created and indexed quick knowledge: {chunk_id}")
+    if indexed:
+        logger.info(f"Created and indexed quick knowledge: {chunk_id}")
+    else:
+        logger.warning(f"Created quick knowledge but indexing failed: {chunk_id}")
 
     # Record governance decision and notify admins
     engine = ApprovalEngine()

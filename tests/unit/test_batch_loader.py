@@ -10,6 +10,9 @@ from knowledge_base.batch.loader import Neo4jBulkLoader, _sanitize_label
 from knowledge_base.batch.models import ResolvedEntity, ResolvedRelationship
 from knowledge_base.vectorstore.indexer import ChunkData
 
+# 768-dim embedding for tests (matches Vertex AI text-embedding-005 dimension)
+_FAKE_EMBEDDING_768 = [0.01] * 768
+
 
 # ---------------------------------------------------------------------------
 # _sanitize_label tests
@@ -306,14 +309,13 @@ class TestLoadEntities:
         self, loader: Neo4jBulkLoader, mock_driver: AsyncMock
     ) -> None:
         """Entity batch rows contain all expected fields."""
-        embedding = [0.1, 0.2, 0.3]
         entities = [
             _make_entity(
                 uuid="ent-1",
                 canonical_name="Alice",
                 entity_type="Person",
                 summary="An engineer.",
-                name_embedding=embedding,
+                name_embedding=_FAKE_EMBEDDING_768,
             )
         ]
 
@@ -324,7 +326,7 @@ class TestLoadEntities:
         assert row["uuid"] == "ent-1"
         assert row["name"] == "Alice"
         assert row["group_id"] == "test-group"
-        assert row["name_embedding"] == embedding
+        assert row["name_embedding"] == _FAKE_EMBEDDING_768
         assert row["summary"] == "An engineer."
 
     @pytest.mark.asyncio
@@ -368,7 +370,6 @@ class TestLoadRelationships:
         self, loader: Neo4jBulkLoader, mock_driver: AsyncMock
     ) -> None:
         """Relationship batch rows contain all expected fields."""
-        embedding = [0.5, 0.6]
         rels = [
             _make_relationship(
                 uuid="rel-1",
@@ -376,7 +377,7 @@ class TestLoadRelationships:
                 target_entity_uuid="ent-2",
                 relationship_name="manages",
                 fact="A manages B.",
-                fact_embedding=embedding,
+                fact_embedding=_FAKE_EMBEDDING_768,
                 episode_uuids=["ep-1", "ep-2"],
             )
         ]
@@ -390,7 +391,7 @@ class TestLoadRelationships:
         assert row["target_uuid"] == "ent-2"
         assert row["name"] == "manages"
         assert row["fact"] == "A manages B."
-        assert row["fact_embedding"] == embedding
+        assert row["fact_embedding"] == _FAKE_EMBEDDING_768
         assert row["episodes"] == ["ep-1", "ep-2"]
         assert row["group_id"] == "test-group"
 

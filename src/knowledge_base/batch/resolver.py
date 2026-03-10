@@ -207,6 +207,15 @@ class EntityResolver:
             for raw in group.raw_names:
                 registry[(_normalize_name(raw), norm_type)] = entity
 
+        # Filter out entities with empty canonical names (bad LLM extraction output)
+        before_count = len(resolved)
+        resolved = [e for e in resolved if e.canonical_name.strip()]
+        if len(resolved) < before_count:
+            logger.warning(
+                "Filtered %d entities with empty canonical names",
+                before_count - len(resolved),
+            )
+
         return resolved, registry
 
     def _resolve_relationships(
