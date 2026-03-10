@@ -181,6 +181,27 @@ class Neo4jBulkLoader:
             entities: List of resolved entities to write.
         """
         logger.info("Loading %d entities into Neo4j", len(entities))
+
+        # Validate entities before writing to Neo4j
+        valid_entities = []
+        skipped = 0
+        for ent in entities:
+            if not ent.canonical_name.strip():
+                logger.warning("Skipping entity with empty name: uuid=%s", ent.uuid)
+                skipped += 1
+                continue
+            if ent.name_embedding and len(ent.name_embedding) != 768:
+                logger.warning(
+                    "Skipping entity with wrong embedding dim (%d): uuid=%s name=%s",
+                    len(ent.name_embedding), ent.uuid, ent.canonical_name[:50],
+                )
+                skipped += 1
+                continue
+            valid_entities.append(ent)
+        if skipped:
+            logger.warning("Skipped %d/%d entities with data quality issues", skipped, len(entities))
+        entities = valid_entities
+
         now_iso = _utcnow_iso()
 
         # Group by entity_type for label assignment
@@ -223,6 +244,26 @@ class Neo4jBulkLoader:
             relationships: List of resolved relationships to write.
         """
         logger.info("Loading %d relationships into Neo4j", len(relationships))
+
+        valid_rels = []
+        skipped = 0
+        for rel in relationships:
+            if not rel.fact.strip():
+                logger.warning("Skipping edge with empty fact: uuid=%s", rel.uuid)
+                skipped += 1
+                continue
+            if rel.fact_embedding and len(rel.fact_embedding) != 768:
+                logger.warning(
+                    "Skipping edge with wrong embedding dim (%d): uuid=%s",
+                    len(rel.fact_embedding), rel.uuid,
+                )
+                skipped += 1
+                continue
+            valid_rels.append(rel)
+        if skipped:
+            logger.warning("Skipped %d/%d relationships with data quality issues", skipped, len(relationships))
+        relationships = valid_rels
+
         now_iso = _utcnow_iso()
 
         batch: list[dict] = []

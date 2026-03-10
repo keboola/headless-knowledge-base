@@ -78,3 +78,41 @@ async def check_vector_indices(driver: Neo4jDriver) -> dict[str, str]:
 
     logger.info("Vector index status: %s", result)
     return result
+
+
+async def verify_data_quality(driver: Neo4jDriver) -> dict[str, int]:
+    """Run quick data quality checks after write operations.
+
+    Returns:
+        Dict with check names and counts of bad records found.
+    """
+    checks = {
+        "empty_name_entities": (
+            "MATCH (n:Entity) WHERE n.name IS NULL OR trim(n.name) = '' "
+            "RETURN count(n) AS cnt"
+        ),
+        "bad_embedding_entities": (
+            "MATCH (n:Entity) WHERE n.name_embedding IS NOT NULL "
+            "AND size(n.name_embedding) <> 768 AND size(n.name_embedding) > 0 "
+            "RETURN count(n) AS cnt"
+        ),
+        "empty_embedding_entities": (
+            "MATCH (n:Entity) WHERE n.name_embedding IS NOT NULL "
+            "AND size(n.name_embedding) = 0 "
+            "RETURN count(n) AS cnt"
+        ),
+    }
+
+    results: dict[str, int] = {}
+    for name, query in checks.items():
+        try:
+            records, _, _ = await driver.execute_query(query)
+            count = records[0]["cnt"] if records else 0
+            results[name] = count
+            if count > 0:
+                logger.warning("Data quality issue: %s = %d", name, count)
+        except Exception as e:
+            logger.error("Data quality check %s failed: %s", name, e)
+            results[name] = -1
+
+    return results
