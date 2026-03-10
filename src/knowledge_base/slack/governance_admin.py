@@ -16,6 +16,7 @@ from typing import Any
 from slack_sdk import WebClient
 
 from knowledge_base.config import settings
+from knowledge_base.db.database import init_db
 from knowledge_base.db.models import KnowledgeGovernanceRecord
 
 logger = logging.getLogger(__name__)
@@ -351,6 +352,7 @@ async def notify_admin_medium_risk(
 async def handle_governance_approve(ack: Any, body: dict, client: WebClient) -> None:
     """Handle [Approve] button click from admin."""
     await ack()
+    await init_db()
 
     user_id = body["user"]["id"]
     channel_id = body["channel"]["id"]
@@ -412,6 +414,7 @@ async def handle_governance_approve(ack: Any, body: dict, client: WebClient) -> 
 async def handle_governance_reject(ack: Any, body: dict, client: WebClient) -> None:
     """Handle [Reject] button click -- opens modal for rejection reason."""
     await ack()
+    await init_db()
 
     user_id = body["user"]["id"]
     channel_id = body["channel"]["id"]
@@ -483,6 +486,7 @@ async def handle_governance_reject_submit(
 ) -> None:
     """Handle rejection modal submission."""
     await ack()
+    await init_db()
 
     user_id = body["user"]["id"]
     chunk_id = view["private_metadata"]
@@ -525,6 +529,7 @@ async def handle_governance_reject_submit(
 async def handle_governance_revert(ack: Any, body: dict, client: WebClient) -> None:
     """Handle [Revert] button -- opens confirmation modal before reverting."""
     await ack()
+    await init_db()
 
     user_id = body["user"]["id"]
     channel_id = body["channel"]["id"]
@@ -603,6 +608,7 @@ async def handle_governance_revert_submit(
 ) -> None:
     """Handle revert confirmation modal submission."""
     await ack()
+    await init_db()
 
     user_id = body["user"]["id"]
     meta = json.loads(view["private_metadata"])
@@ -665,6 +671,7 @@ async def handle_governance_mark_reviewed(
     Just updates the message to remove buttons and show reviewed status.
     """
     await ack()
+    await init_db()
 
     user_id = body["user"]["id"]
     channel_id = body["channel"]["id"]
@@ -709,6 +716,7 @@ async def handle_governance_queue(
 ) -> None:
     """Handle /governance-queue command -- show pending items."""
     await ack()
+    await init_db()
 
     user_id = command["user_id"]
     channel_id = command["channel_id"]

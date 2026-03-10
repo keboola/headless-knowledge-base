@@ -13,6 +13,7 @@ from typing import Any
 from slack_sdk import WebClient
 
 from knowledge_base.config import settings
+from knowledge_base.db.database import init_db
 from knowledge_base.graph.graphiti_indexer import GraphitiIndexer
 from knowledge_base.vectorstore.indexer import ChunkData
 
@@ -43,6 +44,8 @@ async def handle_create_knowledge(ack: Any, command: dict, client: WebClient) ->
     async def process_command():
         """Background task — runs after HTTP 200 is sent to Slack."""
         try:
+            await init_db()
+
             if not text:
                 await client.chat_postEphemeral(
                     channel=channel_id,
