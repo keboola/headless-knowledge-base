@@ -970,7 +970,7 @@ def run_http_mode(port: int = 8080) -> None:
         except Exception as e:
             logger.error("Health check DB failure: %s", e)
             return JSONResponse(
-                {"status": "degraded", "service": "slack-bot", "db": str(e)},
+                {"status": "degraded", "service": "slack-bot", "db": "unavailable"},
                 status_code=503,
             )
 
@@ -998,7 +998,7 @@ def run_bot(port: int = 3000, use_socket_mode: bool = False) -> None:
         use_socket_mode: Use Socket Mode instead of HTTP (requires SLACK_APP_TOKEN)
     """
     import asyncio
-    asyncio.get_event_loop().run_until_complete(init_db())
+    asyncio.run(init_db())
     logger.info("Database initialized at startup")
 
     app = create_app()

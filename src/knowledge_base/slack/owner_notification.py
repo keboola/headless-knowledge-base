@@ -251,7 +251,7 @@ async def send_to_admin_channel(
         owner_notified=owner_notified,
     )
 
-    logger.info(f"Posting to admin channel ID={admin_channel_id} (env={ADMIN_CHANNEL})")
+    logger.debug("Posting feedback notification to admin channel")
     try:
         await client.chat_postMessage(
             channel=admin_channel_id,
