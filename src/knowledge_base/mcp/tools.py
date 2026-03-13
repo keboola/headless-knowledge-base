@@ -258,12 +258,16 @@ async def _execute_ask_question(
         if label in seen_titles:
             continue
         seen_titles.add(label)
+        # For Quick Facts, show who provided and who approved
+        doc_type = metadata.get("doc_type", "")
+        reviewer = metadata.get("reviewed_by", "")
+        suffix = f" (approved by {reviewer})" if doc_type == "quick_fact" and reviewer else ""
         if url and title:
-            sources.append(f"- [{title}]({url})")
+            sources.append(f"- [{title}]({url}){suffix}")
         elif url:
-            sources.append(f"- {url}")
+            sources.append(f"- {url}{suffix}")
         else:
-            sources.append(f"- {title}")
+            sources.append(f"- {title}{suffix}")
 
     result = answer
     if sources:

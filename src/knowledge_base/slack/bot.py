@@ -588,7 +588,15 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
             if title in seen_titles:
                 continue
             seen_titles.add(title)
-            source_lines.append(f"• {title}")
+            # For Quick Facts, show who provided and who approved
+            if chunk.doc_type == "quick_fact":
+                reviewer = chunk.metadata.get("reviewed_by", "")
+                if reviewer:
+                    source_lines.append(f"• {title} _(approved by {reviewer})_")
+                else:
+                    source_lines.append(f"• {title}")
+            else:
+                source_lines.append(f"• {title}")
             if len(source_lines) >= 3:
                 break
         if source_lines:
