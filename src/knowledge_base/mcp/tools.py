@@ -204,6 +204,9 @@ async def execute_tool(
     user: dict[str, Any],
 ) -> list[TextContent]:
     """Execute a tool and return results as TextContent list."""
+    from knowledge_base.db.database import init_db
+    await init_db()
+
     logger.info(f"Executing tool: {tool_name}, user: {user.get('sub', 'unknown')}")
 
     try:
@@ -255,12 +258,16 @@ async def _execute_ask_question(
         if label in seen_titles:
             continue
         seen_titles.add(label)
+        # For Quick Facts, show who provided and who approved
+        doc_type = metadata.get("doc_type", "")
+        reviewer = metadata.get("reviewed_by", "")
+        suffix = f" (approved by {reviewer})" if doc_type == "quick_fact" and reviewer else ""
         if url and title:
-            sources.append(f"- [{title}]({url})")
+            sources.append(f"- [{title}]({url}){suffix}")
         elif url:
-            sources.append(f"- {url}")
+            sources.append(f"- {url}{suffix}")
         else:
-            sources.append(f"- {title}")
+            sources.append(f"- {title}{suffix}")
 
     result = answer
     if sources:

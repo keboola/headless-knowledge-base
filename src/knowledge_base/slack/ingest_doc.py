@@ -18,7 +18,7 @@ from markdownify import markdownify as md
 from slack_sdk import WebClient
 
 from knowledge_base.config import settings
-from knowledge_base.db.database import async_session_maker
+from knowledge_base.db.database import async_session_maker, init_db
 # RawPage kept for sync tracking only
 from knowledge_base.db.models import RawPage
 from knowledge_base.chunking.markdown_chunker import MarkdownChunker, ChunkConfig
@@ -598,6 +598,7 @@ async def handle_ingest_doc(ack: Any, command: dict, client: WebClient) -> None:
     async def process_ingestion():
         """Background task to handle the actual ingestion work."""
         try:
+            await init_db()
             ingester = get_ingester()
             result = await ingester.ingest_url(text, user_id, channel_id, slack_client=client)
 

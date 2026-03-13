@@ -58,14 +58,9 @@ resource_server = OAuthResourceServer(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global resource_server
-
-    resource_server = OAuthResourceServer(
-        resource=mcp_settings.MCP_OAUTH_RESOURCE_IDENTIFIER,
-        authorization_servers=[mcp_settings.MCP_OAUTH_AUTHORIZATION_SERVER],
-        audience=_get_oauth_audience(),
-        scopes_supported=_get_advertised_scopes(),
-    )
+    from knowledge_base.db.database import init_db
+    await init_db()
+    logger.info("Database initialized at startup")
 
     logger.info(f"MCP Server started on {mcp_settings.MCP_HOST}:{mcp_settings.MCP_PORT}")
 

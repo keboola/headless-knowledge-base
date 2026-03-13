@@ -14,7 +14,7 @@ from slack_sdk.errors import SlackApiError
 from sqlalchemy import select
 
 from knowledge_base.config import settings
-from knowledge_base.db.database import async_session_maker
+from knowledge_base.db.database import async_session_maker, init_db
 from knowledge_base.db.models import BotResponse
 
 logger = logging.getLogger(__name__)
@@ -251,7 +251,7 @@ async def send_to_admin_channel(
         owner_notified=owner_notified,
     )
 
-    logger.info(f"Posting to admin channel ID={admin_channel_id} (env={ADMIN_CHANNEL})")
+    logger.debug("Posting feedback notification to admin channel")
     try:
         await client.chat_postMessage(
             channel=admin_channel_id,
@@ -536,6 +536,7 @@ async def _get_feedback_context(message_ts: str, chunk_ids: list[str]) -> dict[s
     Returns:
         Dict with query, response, source_titles
     """
+    await init_db()
     context: dict[str, Any] = {
         "query": None,
         "response": None,
