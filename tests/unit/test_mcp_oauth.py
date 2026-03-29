@@ -114,6 +114,31 @@ class TestExtractUserContext:
         ctx = extract_user_context(claims)
         assert ctx["email"] == "user-no-email"
 
+    def test_google_access_token_with_scopes_gets_kb_read(self):
+        """Google access token (with 'scope' claim) should still get kb.read."""
+        claims = {
+            "iss": "https://accounts.google.com",
+            "sub": "google-uid-access",
+            "email": "user@example.com",
+            "email_verified": True,
+            "scope": "openid email profile",
+        }
+        ctx = extract_user_context(claims)
+        assert "kb.read" in ctx["scopes"]
+        assert "openid" in ctx["scopes"]
+
+    def test_google_issuer_without_https_still_grants_scopes(self):
+        """Issuer 'accounts.google.com' without https should still be recognized."""
+        claims = {
+            "iss": "accounts.google.com",
+            "sub": "google-uid-nohttps",
+            "email": "alice@keboola.com",
+            "email_verified": True,
+        }
+        ctx = extract_user_context(claims)
+        assert "kb.read" in ctx["scopes"]
+        assert "kb.write" in ctx["scopes"]
+
     def test_claims_are_preserved(self):
         """Original claims dict should be available in the context."""
         claims = {
