@@ -103,7 +103,6 @@ async def oauth_middleware(request: Request, call_next):
         "/token",
         "/register",
         "/callback",
-        "/",
     ]
     if request.url.path in skip_paths:
         return await call_next(request)
@@ -452,6 +451,20 @@ async def mcp_endpoint(request: Request, mcp_request: MCPRequest):
             id=mcp_request.id,
             error={"code": -32603, "message": str(e)},
         )
+
+
+# Root path aliases — some MCP clients (e.g. Claude.ai) may send requests
+# to "/" instead of "/mcp" depending on how the URL is registered.
+@app.post("/")
+async def mcp_root_endpoint(request: Request, mcp_request: MCPRequest):
+    """Root path alias for MCP JSON-RPC endpoint."""
+    return await mcp_endpoint(request, mcp_request)
+
+
+@app.get("/")
+async def mcp_root_sse_endpoint(request: Request):
+    """Root path alias for MCP SSE endpoint."""
+    return await mcp_sse_endpoint(request)
 
 
 async def handle_tools_list(user: dict) -> dict:
