@@ -32,7 +32,7 @@ class MCPSettings(BaseSettings):
             )
         return v
 
-    MCP_OAUTH_AUTHORIZATION_SERVER: str = "https://accounts.google.com"
+    MCP_OAUTH_AUTHORIZATION_SERVER: str = ""  # Defaults to MCP_OAUTH_RESOURCE_IDENTIFIER at runtime
     MCP_OAUTH_AUTHORIZATION_ENDPOINT: str = (
         "https://accounts.google.com/o/oauth2/v2/auth"
     )

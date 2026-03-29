@@ -44,27 +44,27 @@ def extract_user_context(claims: dict[str, Any]) -> dict[str, Any]:
     scope_string = claims.get("scope", "")
     scopes = scope_string.split() if scope_string else []
 
-    # For Google OAuth tokens without scope claim, grant default scopes
-    # Google tokens have 'iss' = 'https://accounts.google.com' and 'email_verified'
-    if not scopes and claims.get("iss") == "https://accounts.google.com":
+    # For Google OAuth tokens, grant default scopes based on email verification and domain.
+    # We always ensure verified users get at least 'kb.read' even if they have other scopes.
+    # Handle both https and non-https issuer for Google.
+    iss = claims.get("iss", "")
+    if iss in ("https://accounts.google.com", "accounts.google.com"):
         email = claims.get("email", "")
         email_verified = claims.get("email_verified", False)
 
         if email_verified and email:
             # Grant read access to all verified Google users
-            scopes = [
-                "openid",
-                "email",
-                "profile",
-                "kb.read",
-            ]
+            for s in ["openid", "email", "profile", "kb.read"]:
+                if s not in scopes:
+                    scopes.append(s)
             logger.info("Google OAuth: granted default scopes for verified user")
 
             # Grant write access for @keboola.com domain (internal users)
             # email_verified is already checked above, but enforce explicitly for write scope
             if email.endswith("@keboola.com") and email_verified:
-                scopes.append("kb.write")
-                logger.info("Google OAuth: granted write scope for internal user")
+                if "kb.write" not in scopes:
+                    scopes.append("kb.write")
+                    logger.info("Google OAuth: granted write scope for internal user")
 
     return {
         "sub": claims.get("sub"),

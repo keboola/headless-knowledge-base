@@ -46,10 +46,12 @@ def _get_advertised_scopes() -> list[str]:
     return ["openid", "email", "profile"]
 
 
-# Initialize resource server
+# Token validation uses Google as the issuer (they issue the JWTs).
+# The protected resource metadata is built dynamically in the endpoint
+# to advertise THIS server as the OAuth AS (since we proxy to Google).
 resource_server = OAuthResourceServer(
     resource=mcp_settings.MCP_OAUTH_RESOURCE_IDENTIFIER,
-    authorization_servers=[mcp_settings.MCP_OAUTH_AUTHORIZATION_SERVER],
+    authorization_servers=[mcp_settings.MCP_OAUTH_ISSUER],
     audience=_get_oauth_audience(),
     scopes_supported=_get_advertised_scopes(),
 )
@@ -160,11 +162,21 @@ async def health_check():
 
 
 @app.get("/.well-known/oauth-protected-resource")
-async def oauth_protected_resource_metadata():
-    """RFC 9728 Protected Resource Metadata endpoint."""
-    if not resource_server:
-        raise HTTPException(status_code=503, detail="OAuth not configured")
-    return resource_server.metadata.to_dict()
+async def oauth_protected_resource_metadata(request: Request):
+    """RFC 9728 Protected Resource Metadata endpoint.
+
+    The authorization_servers field must point to THIS server (the MCP server
+    acts as OAuth AS, proxying to Google). We derive the URL from the request
+    so it works regardless of Cloud Run URL vs custom domain.
+    """
+    base_url = _get_base_url(request)
+    return {
+        "resource": base_url,
+        "authorization_servers": [base_url],
+        "scopes_supported": list(OAUTH_SCOPES.keys()),
+        "bearer_methods_supported": ["header"],
+        "resource_signing_alg_values_supported": ["RS256", "ES256"],
+    }
 
 
 @app.get("/callback")
