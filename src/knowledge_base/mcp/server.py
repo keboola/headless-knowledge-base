@@ -111,10 +111,19 @@ async def oauth_middleware(request: Request, call_next):
     # Extract Bearer token
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
+        # RFC 9728: Include resource_metadata URL in WWW-Authenticate header
+        # so Claude Code CLI can discover our OAuth endpoints automatically.
+        base_url = _get_base_url(request)
+        resource_metadata_url = f"{base_url}/.well-known/oauth-protected-resource"
         return JSONResponse(
             status_code=401,
             content={"error": "unauthorized", "error_description": "Missing Bearer token"},
-            headers={"WWW-Authenticate": 'Bearer realm="knowledge-base-mcp"'},
+            headers={
+                "WWW-Authenticate": (
+                    f'Bearer realm="knowledge-base-mcp",'
+                    f' resource_metadata="{resource_metadata_url}"'
+                )
+            },
         )
 
     token = auth_header[7:]
@@ -137,8 +146,21 @@ async def oauth_middleware(request: Request, call_next):
         try:
             claims = await resource_server.validate_token_async(token)
             request.state.user = extract_user_context(claims)
+            logger.debug(
+                "Token validated: email=%s scopes=%s",
+                request.state.user.get("email", "?"),
+                request.state.user.get("scopes", []),
+            )
             return await call_next(request)
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "Token validation failed for %s %s: %s: %s (token_prefix=%s...)",
+                request.method,
+                request.url.path,
+                type(e).__name__,
+                str(e),
+                token[:20] if len(token) > 20 else "short_token",
+            )
             return JSONResponse(
                 status_code=401,
                 content={"error": "invalid_token", "error_description": "Token validation failed"},
@@ -247,9 +269,9 @@ async def oauth_authorization_server_metadata(request: Request):
 async def oauth_authorize(request: Request):
     """OAuth authorization endpoint - redirects to Google OAuth.
 
-    Claude.AI sends the user here. We redirect to Google's authorize endpoint,
-    mapping scopes and preserving PKCE parameters. Google redirects back to
-    Claude.AI's callback directly.
+    MCP clients (Claude.AI, Claude Code CLI) send the user here. We redirect
+    to Google's authorize endpoint, mapping scopes and preserving PKCE
+    parameters. Google redirects back to the client's redirect_uri directly.
     """
     params = dict(request.query_params)
 
@@ -262,6 +284,22 @@ async def oauth_authorize(request: Request):
     if "client_id" not in params or not params["client_id"]:
         params["client_id"] = mcp_settings.MCP_OAUTH_CLIENT_ID
 
+    # Request offline access so Google returns a refresh_token.
+    # Claude Code CLI needs refresh tokens to maintain sessions beyond the
+    # 1-hour access_token lifetime. prompt=consent ensures Google always
+    # shows the consent screen and issues a new refresh_token.
+    if "access_type" not in params:
+        params["access_type"] = "offline"
+    if "prompt" not in params:
+        params["prompt"] = "consent"
+
+    logger.info(
+        "OAuth authorize redirect: client_id=%s redirect_uri=%s scope=%s",
+        params.get("client_id", "?")[:20] + "...",
+        params.get("redirect_uri", "NOT SET"),
+        params.get("scope", ""),
+    )
+
     google_authorize_url = (
         f"{mcp_settings.MCP_OAUTH_AUTHORIZATION_ENDPOINT}?{urlencode(params)}"
     )
@@ -272,12 +310,20 @@ async def oauth_authorize(request: Request):
 async def oauth_token(request: Request):
     """OAuth token endpoint - proxies token exchange to Google.
 
-    Claude.AI sends the authorization code here. We forward it to Google's
-    token endpoint, adding our client_secret for the exchange.
+    MCP clients send the authorization code (or refresh_token) here.
+    We forward it to Google's token endpoint, adding our client_secret.
     """
     # Parse form data (OAuth token requests use application/x-www-form-urlencoded)
     form_data = await request.form()
     token_params = dict(form_data)
+
+    grant_type = token_params.get("grant_type", "unknown")
+    logger.info(
+        "Token exchange: grant_type=%s redirect_uri=%s has_code_verifier=%s",
+        grant_type,
+        token_params.get("redirect_uri", "NOT SET"),
+        "code_verifier" in token_params,
+    )
 
     # Add our client credentials for the token exchange
     token_params["client_id"] = mcp_settings.MCP_OAUTH_CLIENT_ID
@@ -290,10 +336,26 @@ async def oauth_token(request: Request):
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
 
-    # Return Google's response directly to Claude.AI
+    response_data = response.json()
+
+    if response.status_code != 200:
+        logger.error(
+            "Token exchange FAILED: status=%d error=%s description=%s",
+            response.status_code,
+            response_data.get("error", "unknown"),
+            response_data.get("error_description", "no description"),
+        )
+    else:
+        logger.info(
+            "Token exchange OK: grant_type=%s has_refresh_token=%s expires_in=%s",
+            grant_type,
+            "refresh_token" in response_data,
+            response_data.get("expires_in", "?"),
+        )
+
     return JSONResponse(
         status_code=response.status_code,
-        content=response.json(),
+        content=response_data,
     )
 
 
@@ -308,6 +370,13 @@ async def oauth_register(request: Request):
     body = await request.json()
     redirect_uris = body.get("redirect_uris", [])
     client_name = body.get("client_name", "MCP Client")
+
+    logger.info(
+        "Dynamic client registration: name=%s redirect_uris=%s auth_method=%s",
+        client_name,
+        redirect_uris,
+        body.get("token_endpoint_auth_method", "not specified"),
+    )
 
     return JSONResponse(
         status_code=201,

@@ -243,13 +243,72 @@ class TokenValidator:
         except httpx.RequestError as e:
             raise TokenValidationError(f"Failed to validate token with Google: {type(e).__name__}")
 
+    async def _validate_google_access_token_async(self, token: str) -> dict[str, Any]:
+        """
+        Validate a Google opaque access token asynchronously.
+
+        Uses async httpx to avoid blocking the event loop.
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    "https://www.googleapis.com/oauth2/v3/tokeninfo",
+                    params={"access_token": token},
+                    timeout=10.0,
+                )
+
+            if response.status_code != 200:
+                error_data = response.json() if response.text else {}
+                raise InvalidTokenError(
+                    f"Google token validation failed: {error_data.get('error_description', 'Unknown error')}"
+                )
+
+            claims = response.json()
+
+            # Verify audience matches our client_id
+            token_aud = claims.get("aud") or claims.get("azp")
+            if token_aud != self.audience:
+                raise InvalidAudienceError(
+                    f"Invalid audience: expected {self.audience}, got {token_aud}"
+                )
+
+            # Check expiration
+            exp = claims.get("expires_in")
+            if exp is not None and int(exp) <= 0:
+                raise TokenExpiredError("Token has expired")
+
+            # Normalize claims to match JWT format
+            normalized = {
+                "sub": claims.get("sub"),
+                "email": claims.get("email"),
+                "email_verified": claims.get("email_verified") == "true",
+                "aud": token_aud,
+                "iss": "https://accounts.google.com",
+                "scope": claims.get("scope", ""),
+            }
+
+            return normalized
+
+        except httpx.RequestError as e:
+            raise TokenValidationError(f"Failed to validate token with Google: {type(e).__name__}")
+
     async def validate_async(self, token: str) -> dict[str, Any]:
         """
         Validate a token asynchronously.
 
-        Fetches JWKS if not cached before validation.
+        For opaque Google access tokens, uses async HTTP to avoid blocking
+        the event loop. For JWTs, falls back to synchronous validation
+        (CPU-bound, no I/O).
         """
         await self.fetch_jwks()
+
+        # Check if this is a JWT (3 parts) or opaque token
+        parts = token.split(".")
+        if len(parts) != 3 and self.is_google:
+            # Opaque Google access token - use async validation
+            return await self._validate_google_access_token_async(token)
+
+        # JWT tokens - use synchronous validation (CPU-bound only)
         return self.validate(token)
 
     def get_claims(self, token: str) -> dict[str, Any]:

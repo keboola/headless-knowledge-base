@@ -141,6 +141,31 @@ class TestOAuthAuthorize:
         # Should preserve PKCE params
         assert "code_challenge=abc123" in location
         assert "state=test-state" in location
+        # Should add access_type=offline for refresh tokens
+        assert "access_type=offline" in location
+        # Should add prompt=consent for reliable refresh token issuance
+        assert "prompt=consent" in location
+
+    async def test_preserves_redirect_uri(self, client: AsyncClient):
+        """Localhost redirect_uri must pass through to Google for CLI OAuth."""
+        resp = await client.get(
+            "/authorize",
+            params={
+                "response_type": "code",
+                "redirect_uri": "http://localhost:8888/callback",
+                "scope": "openid email profile kb.read",
+                "state": "cli-test",
+                "code_challenge": "xyz",
+                "code_challenge_method": "S256",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        location = resp.headers["location"]
+        # redirect_uri must be preserved exactly for Google to redirect back to CLI
+        assert "redirect_uri=http" in location
+        assert "localhost" in location
+        assert "8888" in location
 
     async def test_no_auth_required(self, client: AsyncClient):
         """The /authorize endpoint must be accessible without Bearer token."""
@@ -264,6 +289,17 @@ class TestAuthentication:
             json={"jsonrpc": "2.0", "method": "ping", "id": 1},
         )
         assert resp.status_code == 401
+
+    async def test_401_includes_resource_metadata_url(self, client: AsyncClient):
+        """401 must include resource_metadata in WWW-Authenticate for RFC 9728 discovery."""
+        resp = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "method": "ping", "id": 1},
+        )
+        assert resp.status_code == 401
+        www_auth = resp.headers.get("www-authenticate", "")
+        assert "resource_metadata=" in www_auth
+        assert "/.well-known/oauth-protected-resource" in www_auth
 
     async def test_post_mcp_with_invalid_auth_scheme_returns_401(self, client: AsyncClient):
         """POST /mcp with non-Bearer auth should return 401."""
