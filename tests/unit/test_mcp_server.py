@@ -335,6 +335,8 @@ class TestMCPInitialize:
         assert result["protocolVersion"] == "2024-11-05"
         assert "tools" in result["capabilities"]
         assert result["serverInfo"]["name"] == "keboola-knowledge-base"
+        # JSON-RPC 2.0: success response MUST NOT contain "error" field
+        assert "error" not in body, "JSON-RPC success must not include 'error' field"
 
 
 # ===========================================================================

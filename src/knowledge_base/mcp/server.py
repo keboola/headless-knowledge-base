@@ -429,13 +429,22 @@ class MCPRequest(BaseModel):
     id: Optional[int | str] = None
 
 
-class MCPResponse(BaseModel):
-    """MCP JSON-RPC response."""
+def _jsonrpc_response(
+    id: int | str | None,
+    result: Any = None,
+    error: dict[str, Any] | None = None,
+) -> JSONResponse:
+    """Build a JSON-RPC 2.0 response.
 
-    jsonrpc: str = "2.0"
-    result: Optional[Any] = None
-    error: Optional[dict[str, Any]] = None
-    id: Optional[int | str] = None
+    Per spec, a response MUST contain either 'result' or 'error', never both.
+    Including both (even as null) violates the spec and breaks strict clients.
+    """
+    body: dict[str, Any] = {"jsonrpc": "2.0", "id": id}
+    if error is not None:
+        body["error"] = error
+    else:
+        body["result"] = result
+    return JSONResponse(content=body)
 
 
 @app.get("/mcp")
@@ -488,7 +497,7 @@ async def mcp_endpoint(request: Request, mcp_request: MCPRequest):
                 },
             }
         elif method == "notifications/initialized":
-            return MCPResponse(id=mcp_request.id, result={})
+            return _jsonrpc_response(id=mcp_request.id, result={})
         elif method == "tools/list":
             result = await handle_tools_list(user)
         elif method == "tools/call":
@@ -496,28 +505,28 @@ async def mcp_endpoint(request: Request, mcp_request: MCPRequest):
         elif method == "resources/list":
             result = {"resources": []}
         elif method == "resources/read":
-            return MCPResponse(
+            return _jsonrpc_response(
                 id=mcp_request.id,
                 error={"code": -32601, "message": "No resources available"},
             )
         elif method == "ping":
             result = {}
         else:
-            return MCPResponse(
+            return _jsonrpc_response(
                 id=mcp_request.id,
                 error={"code": -32601, "message": f"Method not found: {method}"},
             )
 
-        return MCPResponse(id=mcp_request.id, result=result)
+        return _jsonrpc_response(id=mcp_request.id, result=result)
 
     except HTTPException as e:
-        return MCPResponse(
+        return _jsonrpc_response(
             id=mcp_request.id,
             error={"code": -32000, "message": e.detail},
         )
     except Exception as e:
         logger.exception(f"Error handling MCP request: {e}")
-        return MCPResponse(
+        return _jsonrpc_response(
             id=mcp_request.id,
             error={"code": -32603, "message": str(e)},
         )
