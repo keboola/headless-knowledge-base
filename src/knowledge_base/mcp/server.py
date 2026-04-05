@@ -177,6 +177,13 @@ async def oauth_middleware(request: Request, call_next):
 # =============================================================================
 
 
+@app.get("/")
+@app.post("/")
+async def root():
+    """Root endpoint - returns server info for health/connectivity checks."""
+    return {"status": "healthy", "service": "knowledge-base-mcp-server"}
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
