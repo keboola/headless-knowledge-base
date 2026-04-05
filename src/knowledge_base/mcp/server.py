@@ -178,9 +178,59 @@ async def oauth_middleware(request: Request, call_next):
 
 
 @app.get("/")
+async def root_get():
+    """Root GET - health/connectivity check."""
+    return {"status": "healthy", "service": "knowledge-base-mcp-server"}
+
+
 @app.post("/")
-async def root():
-    """Root endpoint - returns server info for health/connectivity checks."""
+async def root_post(request: Request):
+    """Root POST - Claude.ai sends MCP JSON-RPC requests here.
+
+    Claude.ai uses the base URL (/) for MCP requests, while Claude Code CLI
+    uses /mcp. Handle both: if it looks like JSON-RPC, forward to MCP handler;
+    otherwise return health status.
+    """
+    # Check if this is an MCP JSON-RPC request
+    content_type = request.headers.get("content-type", "")
+    if "json" in content_type:
+        try:
+            body = await request.json()
+            if "jsonrpc" in body or "method" in body:
+                # This is an MCP request - needs authentication
+                auth_header = request.headers.get("Authorization", "")
+                if not auth_header.startswith("Bearer "):
+                    base_url = _get_base_url(request)
+                    resource_metadata_url = f"{base_url}/.well-known/oauth-protected-resource"
+                    return JSONResponse(
+                        status_code=401,
+                        content={"error": "unauthorized", "error_description": "Missing Bearer token"},
+                        headers={
+                            "WWW-Authenticate": (
+                                f'Bearer realm="knowledge-base-mcp",'
+                                f' resource_metadata="{resource_metadata_url}"'
+                            )
+                        },
+                    )
+
+                # Validate token and handle MCP request
+                token = auth_header[7:]
+                try:
+                    claims = await resource_server.validate_token_async(token)
+                    user = extract_user_context(claims)
+                except Exception as e:
+                    logger.warning("Root MCP token validation failed: %s", e)
+                    return JSONResponse(
+                        status_code=401,
+                        content={"error": "invalid_token", "error_description": "Token validation failed"},
+                        headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
+                    )
+
+                mcp_request = MCPRequest(**body)
+                return await _handle_mcp_request(mcp_request, user)
+        except Exception:
+            pass
+
     return {"status": "healthy", "service": "knowledge-base-mcp-server"}
 
 
@@ -482,11 +532,15 @@ async def mcp_sse_endpoint(request: Request):
 
 @app.post("/mcp")
 async def mcp_endpoint(request: Request, mcp_request: MCPRequest):
-    """MCP JSON-RPC endpoint."""
+    """MCP JSON-RPC endpoint (used by Claude Code CLI)."""
     user = getattr(request.state, "user", None)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    return await _handle_mcp_request(mcp_request, user)
 
+
+async def _handle_mcp_request(mcp_request: MCPRequest, user: dict) -> JSONResponse:
+    """Core MCP JSON-RPC request handler, shared by / and /mcp."""
     method = mcp_request.method
     params = mcp_request.params or {}
 
