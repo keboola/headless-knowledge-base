@@ -93,11 +93,12 @@ def _make_relationship(
 
 
 @pytest.fixture
-def resolver() -> EntityResolver:
+def resolver():
     """Create an EntityResolver with default similarity threshold."""
     with patch("knowledge_base.batch.resolver.settings") as mock_settings:
         mock_settings.BATCH_ENTITY_SIMILARITY_THRESHOLD = 0.85
-        return EntityResolver()
+        mock_settings.BATCH_ENTITY_FUZZY_MERGE_ENABLED = False
+        yield EntityResolver()
 
 
 @pytest.fixture
@@ -143,7 +144,8 @@ def loader(mock_graphiti_client: MagicMock):
 class TestResolverEmptyNameFiltering:
     """Test that _build_registry filters out entities with empty canonical names."""
 
-    def test_empty_name_entity_filtered(self, resolver: EntityResolver) -> None:
+    @pytest.mark.asyncio
+    async def test_empty_name_entity_filtered(self, resolver: EntityResolver) -> None:
         """Entities where all raw name variants are empty/whitespace are filtered out."""
         extractions = {
             "chunk-1": _make_extraction([
@@ -153,13 +155,14 @@ class TestResolverEmptyNameFiltering:
         }
         episode_uuids = {"chunk-1": "ep-1"}
 
-        entities, _ = resolver.resolve(extractions, episode_uuids)
+        entities, _ = await resolver.resolve(extractions, episode_uuids)
 
         # Only Alice should remain; the empty-name entity is filtered
         assert len(entities) == 1
         assert entities[0].canonical_name == "Alice"
 
-    def test_whitespace_only_name_filtered(self, resolver: EntityResolver) -> None:
+    @pytest.mark.asyncio
+    async def test_whitespace_only_name_filtered(self, resolver: EntityResolver) -> None:
         """Entities where canonical name is only whitespace are filtered out."""
         extractions = {
             "chunk-1": _make_extraction([
@@ -169,12 +172,13 @@ class TestResolverEmptyNameFiltering:
         }
         episode_uuids = {"chunk-1": "ep-1"}
 
-        entities, _ = resolver.resolve(extractions, episode_uuids)
+        entities, _ = await resolver.resolve(extractions, episode_uuids)
 
         assert len(entities) == 1
         assert entities[0].canonical_name == "Bob"
 
-    def test_empty_name_filter_logs_warning(
+    @pytest.mark.asyncio
+    async def test_empty_name_filter_logs_warning(
         self, resolver: EntityResolver, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Filtering empty-name entities logs a warning with the count."""
@@ -188,7 +192,7 @@ class TestResolverEmptyNameFiltering:
         episode_uuids = {"chunk-1": "ep-1"}
 
         with caplog.at_level(logging.WARNING, logger="knowledge_base.batch.resolver"):
-            entities, _ = resolver.resolve(extractions, episode_uuids)
+            entities, _ = await resolver.resolve(extractions, episode_uuids)
 
         assert len(entities) == 1
         # Check that a warning about filtered entities was logged
@@ -221,7 +225,8 @@ class TestResolverEmptyNameFiltering:
         assert len(resolved) == 1
         assert resolved[0].canonical_name == "Alice"
 
-    def test_valid_entities_pass_through(self, resolver: EntityResolver) -> None:
+    @pytest.mark.asyncio
+    async def test_valid_entities_pass_through(self, resolver: EntityResolver) -> None:
         """All valid entities are preserved after filtering."""
         extractions = {
             "chunk-1": _make_extraction([
@@ -232,7 +237,7 @@ class TestResolverEmptyNameFiltering:
         }
         episode_uuids = {"chunk-1": "ep-1"}
 
-        entities, _ = resolver.resolve(extractions, episode_uuids)
+        entities, _ = await resolver.resolve(extractions, episode_uuids)
 
         assert len(entities) == 3
         names = {e.canonical_name for e in entities}

@@ -100,7 +100,12 @@ class TestGovernanceSearchFilter:
         graphiti_results = [
             _make_graphiti_result(name="edge-approved", score=0.9, episodes=[ep_uuid]),
         ]
-        mock_graphiti.search = AsyncMock(return_value=graphiti_results)
+        mock_search_results = MagicMock()
+        mock_search_results.edges = graphiti_results
+        mock_search_results.edge_reranker_scores = [r.score for r in graphiti_results]
+        mock_search_results.episodes = []
+        mock_search_results.episode_reranker_scores = []
+        mock_graphiti.search_ = AsyncMock(return_value=mock_search_results)
 
         episode_data = {
             ep_uuid: _make_episode_data(
@@ -137,7 +142,12 @@ class TestGovernanceSearchFilter:
             _make_graphiti_result(name="edge-approved", score=0.9, episodes=[ep_uuid_approved]),
             _make_graphiti_result(name="edge-pending", score=0.8, episodes=[ep_uuid_pending]),
         ]
-        mock_graphiti.search = AsyncMock(return_value=graphiti_results)
+        mock_search_results = MagicMock()
+        mock_search_results.edges = graphiti_results
+        mock_search_results.edge_reranker_scores = [r.score for r in graphiti_results]
+        mock_search_results.episodes = []
+        mock_search_results.episode_reranker_scores = []
+        mock_graphiti.search_ = AsyncMock(return_value=mock_search_results)
 
         episode_data = {
             ep_uuid_approved: _make_episode_data(
@@ -176,7 +186,12 @@ class TestGovernanceSearchFilter:
         graphiti_results = [
             _make_graphiti_result(name="edge-legacy", score=0.9, episodes=[ep_uuid]),
         ]
-        mock_graphiti.search = AsyncMock(return_value=graphiti_results)
+        mock_search_results = MagicMock()
+        mock_search_results.edges = graphiti_results
+        mock_search_results.edge_reranker_scores = [r.score for r in graphiti_results]
+        mock_search_results.episodes = []
+        mock_search_results.episode_reranker_scores = []
+        mock_graphiti.search_ = AsyncMock(return_value=mock_search_results)
 
         # No governance_status in metadata -- should default to 'approved'
         episode_data = {
@@ -214,7 +229,12 @@ class TestGovernanceSearchFilter:
             _make_graphiti_result(name="edge-approved", score=0.9, episodes=[ep_uuid_approved]),
             _make_graphiti_result(name="edge-pending", score=0.8, episodes=[ep_uuid_pending]),
         ]
-        mock_graphiti.search = AsyncMock(return_value=graphiti_results)
+        mock_search_results = MagicMock()
+        mock_search_results.edges = graphiti_results
+        mock_search_results.edge_reranker_scores = [r.score for r in graphiti_results]
+        mock_search_results.episodes = []
+        mock_search_results.episode_reranker_scores = []
+        mock_graphiti.search_ = AsyncMock(return_value=mock_search_results)
 
         episode_data = {
             ep_uuid_approved: _make_episode_data(
@@ -259,7 +279,12 @@ class TestGovernanceSearchFilter:
             _make_graphiti_result(name="edge-good", score=0.9, episodes=[ep_uuid_good]),
             _make_graphiti_result(name="edge-rejected", score=0.8, episodes=[ep_uuid_rejected]),
         ]
-        mock_graphiti.search = AsyncMock(return_value=graphiti_results)
+        mock_search_results = MagicMock()
+        mock_search_results.edges = graphiti_results
+        mock_search_results.edge_reranker_scores = [r.score for r in graphiti_results]
+        mock_search_results.episodes = []
+        mock_search_results.episode_reranker_scores = []
+        mock_graphiti.search_ = AsyncMock(return_value=mock_search_results)
 
         episode_data = {
             ep_uuid_good: _make_episode_data(
@@ -301,7 +326,12 @@ class TestGovernanceSearchFilter:
             _make_graphiti_result(name="edge-good", score=0.9, episodes=[ep_uuid_good]),
             _make_graphiti_result(name="edge-reverted", score=0.8, episodes=[ep_uuid_reverted]),
         ]
-        mock_graphiti.search = AsyncMock(return_value=graphiti_results)
+        mock_search_results = MagicMock()
+        mock_search_results.edges = graphiti_results
+        mock_search_results.edge_reranker_scores = [r.score for r in graphiti_results]
+        mock_search_results.episodes = []
+        mock_search_results.episode_reranker_scores = []
+        mock_graphiti.search_ = AsyncMock(return_value=mock_search_results)
 
         episode_data = {
             ep_uuid_good: _make_episode_data(

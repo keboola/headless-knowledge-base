@@ -17,6 +17,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from graphiti_core.search.search_config import SearchConfig, SearchResults
+from graphiti_core.search.search_config_recipes import COMBINED_HYBRID_SEARCH_RRF
+
 from knowledge_base.config import settings
 from knowledge_base.graph.entity_schemas import GraphEntityType
 from knowledge_base.graph.graphiti_client import get_graphiti_client, GraphitiClientError
@@ -166,13 +169,20 @@ class GraphitiRetriever:
 
         return metadata
 
-    def _to_search_result(self, graphiti_result: Any, episode_data: dict | None = None) -> SearchResult:
+    def _to_search_result(
+        self,
+        graphiti_result: Any,
+        episode_data: dict | None = None,
+        score: float | None = None,
+    ) -> SearchResult:
         """Convert a Graphiti search result to SearchResult.
 
         Args:
             graphiti_result: Result from Graphiti search (edge or entity)
             episode_data: Optional episode data (content + metadata) looked up
                 from the edge's episode references
+            score: Optional explicit score (e.g. RRF reranker score). If None,
+                falls back to the result's own score attribute or 1.0.
 
         Returns:
             SearchResult object
@@ -196,13 +206,13 @@ class GraphitiRetriever:
         if fact and episode_data and content:
             content = f"Key fact: {fact}\n\n{content}"
 
-        # Get score
-        score = getattr(graphiti_result, 'score', 1.0)
+        # Get score: prefer explicit score, then result attribute, then default
+        resolved_score = score if score is not None else getattr(graphiti_result, 'score', 1.0)
 
         return SearchResult(
             chunk_id=chunk_id,
             content=content,
-            score=score,
+            score=resolved_score,
             metadata=metadata,
         )
 
@@ -274,6 +284,8 @@ class GraphitiRetriever:
         """Search for chunks and return SearchResult objects.
 
         This is the primary search interface (replacing ChromaDB search).
+        Uses Graphiti's ``search_()`` with COMBINED_HYBRID_SEARCH_RRF config
+        to get real RRF reranker scores for edges and episodes.
 
         Args:
             query: Search query
@@ -295,21 +307,38 @@ class GraphitiRetriever:
                 graphiti = await self._get_graphiti()
 
                 # Always over-fetch to account for empty-content results being filtered
-                fetch_count = num_results * 3
+                fetch_limit = num_results * 3
 
-                results = await graphiti.search(
+                # Build search config with higher limit for over-fetching
+                search_config = COMBINED_HYBRID_SEARCH_RRF.model_copy(
+                    update={"limit": fetch_limit}
+                )
+
+                search_results_obj: SearchResults = await graphiti.search_(
                     query=query,
-                    num_results=fetch_count,
+                    config=search_config,
                     group_ids=[self.group_id],
                 )
 
-                logger.info(f"Graphiti raw search returned {len(results)} results for: {query[:50]}...")
+                raw_edge_count = len(search_results_obj.edges)
+                raw_episode_count = len(search_results_obj.episodes)
+                logger.info(
+                    f"Graphiti search_ returned {raw_edge_count} edges, "
+                    f"{raw_episode_count} episodes for: {query[:50]}..."
+                )
 
+                # --- Process edges with their RRF scores ---
                 # Collect all episode UUIDs from edge results for batch lookup
                 all_episode_uuids = []
-                for result in results:
-                    episodes = getattr(result, 'episodes', None) or []
+                for edge in search_results_obj.edges:
+                    episodes = getattr(edge, 'episodes', None) or []
                     all_episode_uuids.extend(episodes)
+
+                # Also collect episode UUIDs from episode results themselves
+                for episode in search_results_obj.episodes:
+                    ep_uuid = getattr(episode, 'uuid', None)
+                    if ep_uuid:
+                        all_episode_uuids.append(ep_uuid)
 
                 # Batch lookup episode content and metadata
                 episode_data = {}
@@ -318,16 +347,18 @@ class GraphitiRetriever:
                     episode_data = await self._lookup_episodes(unique_uuids)
                     logger.info(
                         f"Looked up {len(episode_data)}/{len(unique_uuids)} episodes "
-                        f"for {len(results)} search results"
+                        f"for edges+episodes"
                     )
 
-                # Convert and filter results
-                search_results = []
-                seen_episodes = set()  # Deduplicate by episode
-                empty_content_count = 0
-                for result in results:
-                    # Get episode data for this result (use first episode)
-                    episodes = getattr(result, 'episodes', None) or []
+                # Build scored results from edges
+                scored_candidates: list[SearchResult] = []
+                seen_episodes: set[str] = set()
+
+                for edge, rrf_score in zip(
+                    search_results_obj.edges,
+                    search_results_obj.edge_reranker_scores,
+                ):
+                    episodes = getattr(edge, 'episodes', None) or []
                     ep_data = None
                     for ep_uuid in episodes:
                         if ep_uuid in episode_data and ep_uuid not in seen_episodes:
@@ -335,17 +366,52 @@ class GraphitiRetriever:
                             seen_episodes.add(ep_uuid)
                             break
 
-                    sr = self._to_search_result(result, episode_data=ep_data)
+                    sr = self._to_search_result(edge, episode_data=ep_data, score=rrf_score)
+                    scored_candidates.append(sr)
 
+                # Build scored results from episodes (BM25 matched chunk text)
+                for episode, rrf_score in zip(
+                    search_results_obj.episodes,
+                    search_results_obj.episode_reranker_scores,
+                ):
+                    ep_uuid = getattr(episode, 'uuid', None)
+                    if ep_uuid and ep_uuid in seen_episodes:
+                        continue  # Already included via an edge
+
+                    # Build SearchResult directly from episode
+                    source_desc = getattr(episode, 'source_description', None)
+                    metadata = self._parse_metadata(source_desc)
+                    content = getattr(episode, 'content', '') or ''
+                    chunk_id = metadata.get('chunk_id', getattr(episode, 'name', ''))
+
+                    sr = SearchResult(
+                        chunk_id=chunk_id,
+                        content=content,
+                        score=rrf_score,
+                        metadata=metadata,
+                    )
+                    scored_candidates.append(sr)
+                    if ep_uuid:
+                        seen_episodes.add(ep_uuid)
+
+                # Sort all candidates by RRF score descending
+                scored_candidates.sort(key=lambda x: x.score, reverse=True)
+
+                # Filter and collect final results
+                search_results: list[SearchResult] = []
+                empty_content_count = 0
+                total_raw = raw_edge_count + raw_episode_count
+
+                for sr in scored_candidates:
                     # Skip deleted chunks
                     if sr.metadata.get('deleted'):
                         continue
 
-                    # Governance filter: exclude non-approved episodes when governance is enabled
+                    # Governance filter
                     if settings.GOVERNANCE_ENABLED:
                         governance_status = sr.metadata.get('governance_status', 'approved')
                         if governance_status not in VALID_GOVERNANCE_STATUSES:
-                            governance_status = 'approved'  # Default unknown values to approved (backward compat)
+                            governance_status = 'approved'
                         if governance_status != 'approved':
                             continue
 
@@ -357,7 +423,7 @@ class GraphitiRetriever:
                     if min_quality_score and sr.quality_score < min_quality_score:
                         continue
 
-                    # Skip results with no meaningful content (edge-only facts without episode data)
+                    # Skip results with no meaningful content
                     if len(sr.content.strip()) < settings.SEARCH_MIN_CONTENT_LENGTH:
                         empty_content_count += 1
                         continue
@@ -369,16 +435,19 @@ class GraphitiRetriever:
 
                 if empty_content_count > 0:
                     logger.info(
-                        f"Filtered out {empty_content_count}/{len(results)} empty-content results "
+                        f"Filtered out {empty_content_count}/{total_raw} empty-content results "
                         f"(min_length={settings.SEARCH_MIN_CONTENT_LENGTH})"
                     )
 
-                if len(results) > 0 and len(search_results) == 0:
+                if total_raw > 0 and len(search_results) == 0:
                     logger.warning(
-                        f"Graphiti returned {len(results)} raw results but ALL were filtered out "
+                        f"Graphiti returned {total_raw} raw results but ALL were filtered out "
                         f"(space_key={space_key}, doc_type={doc_type}, min_quality={min_quality_score})"
                     )
-                logger.info(f"Graphiti search_chunks returning {len(search_results)}/{len(results)} results for: {query[:50]}...")
+                logger.info(
+                    f"Graphiti search_chunks returning {len(search_results)}/{total_raw} "
+                    f"results for: {query[:50]}..."
+                )
                 return search_results
 
             except Exception as e:
@@ -937,6 +1006,70 @@ class GraphitiRetriever:
         except Exception as e:
             logger.error(f"Failed to get recent episodes: {e}")
             return []
+
+    async def search_communities(
+        self,
+        query: str,
+        num_results: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Search for relevant topic communities.
+
+        Uses HNSW vector index on Community nodes to find communities
+        whose names/summaries match the query semantically.
+
+        Returns list of dicts with uuid, name, summary, members, score.
+        """
+        if not self.is_enabled or not settings.COMMUNITY_DETECTION_ENABLED:
+            return []
+
+        max_retries = settings.NEO4J_SEARCH_MAX_RETRIES
+        for attempt in range(1 + max_retries):
+            try:
+                graphiti = await self._get_graphiti()
+                driver = graphiti.driver
+
+                # Embed the query
+                from knowledge_base.vectorstore.embeddings import get_embeddings
+                embedder = get_embeddings("vertex-ai")
+                query_embedding = await embedder.embed_single(query)
+
+                # HNSW vector search on Community nodes
+                records, _, _ = await driver.execute_query(
+                    """
+                    CALL db.index.vector.queryNodes('community_name_embedding', $limit, $embedding)
+                    YIELD node, score
+                    OPTIONAL MATCH (node)-[:HAS_MEMBER]->(member:Entity)
+                    WITH node, score, collect(member.name) AS members
+                    RETURN node.uuid AS uuid, node.name AS name,
+                           node.summary AS summary, members, score
+                    ORDER BY score DESC
+                    """,
+                    limit=num_results,
+                    embedding=query_embedding,
+                )
+
+                results = []
+                for record in records:
+                    results.append({
+                        "uuid": record["uuid"],
+                        "name": record["name"],
+                        "summary": record["summary"],
+                        "members": record["members"],
+                        "score": record["score"],
+                    })
+
+                logger.info("Community search returned %d results for: %s", len(results), query[:50])
+                return results
+
+            except Exception as e:
+                if attempt < max_retries and _is_connection_error(e):
+                    logger.warning("Neo4j connection error in community search, retrying: %s", e)
+                    await self.client.reset_and_reconnect()
+                    self._graphiti = None
+                    continue
+                logger.warning("Community search failed: %s", e)
+                return []
+        return []
 
     async def close(self) -> None:
         """Close the Graphiti connection."""

@@ -69,6 +69,7 @@ TOOL_SCOPE_REQUIREMENTS: dict[str, list[str]] = {
     "create_knowledge": ["kb.write"],
     "ingest_document": ["kb.write"],
     "submit_feedback": ["kb.write"],
+    "search_communities": ["kb.read"],
     "check_health": ["kb.read"],
 }
 

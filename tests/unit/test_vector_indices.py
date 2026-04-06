@@ -23,14 +23,14 @@ class TestCreateVectorIndices:
     """Tests for create_vector_indices function."""
 
     @pytest.mark.asyncio
-    async def test_creates_two_indices(self) -> None:
-        """create_vector_indices calls execute_query twice (entity + edge)."""
+    async def test_creates_three_indices(self) -> None:
+        """create_vector_indices calls execute_query three times (entity + edge + community)."""
         mock_driver = AsyncMock()
         mock_driver.execute_query = AsyncMock(return_value=([], None, None))
 
         await create_vector_indices(mock_driver)
 
-        assert mock_driver.execute_query.call_count == 2
+        assert mock_driver.execute_query.call_count == 3
 
     @pytest.mark.asyncio
     async def test_entity_index_query_structure(self) -> None:

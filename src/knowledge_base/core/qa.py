@@ -119,6 +119,17 @@ def _deduplicate_results(
     return merged[:limit]
 
 
+async def search_communities(query: str, limit: int | None = None) -> list[dict]:
+    """Search for topic communities relevant to a query."""
+    from knowledge_base.graph.graphiti_retriever import get_graphiti_retriever
+
+    if limit is None:
+        limit = settings.COMMUNITY_SEARCH_LIMIT
+
+    retriever = get_graphiti_retriever()
+    return await retriever.search_communities(query, num_results=limit)
+
+
 async def generate_answer(
     question: str,
     chunks: list[SearchResult],
