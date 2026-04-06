@@ -324,6 +324,21 @@ Merge expanded results with original
 
 Graph expansion is always enabled with Graphiti (`GRAPH_EXPANSION_ENABLED: true`). Graphiti's search natively leverages graph structure, so expansion is inherent in the hybrid retrieval.
 
+### Search Architecture
+
+The search pipeline uses Graphiti's `search_()` method with `COMBINED_HYBRID_SEARCH_RRF`
+configuration, which fuses multiple retrieval signals via Reciprocal Rank Fusion (RRF):
+
+- **Edge search**: BM25 + cosine similarity on relationship facts
+- **Episode search**: BM25 on chunk text content
+- **Node search**: BM25 + cosine similarity on entity names
+
+Results from all layers are merged and sorted by RRF score. The quality boost
+layer then adjusts scores based on chunk quality scores (feedback-driven).
+
+HNSW vector indices on Entity.name_embedding, RELATES_TO.fact_embedding, and
+Community.name_embedding provide O(log N) vector lookups instead of brute-force scans.
+
 ---
 
 ## Technology Stack
@@ -336,8 +351,7 @@ Graph expansion is always enabled with Graphiti (`GRAPH_EXPANSION_ENABLED: true`
 | Metadata DB | SQLite + SQLAlchemy 2.0 (async, NullPool) | Page sync state, checkpoints, feedback, behavioral signals |
 | Checkpoint Storage | GCS bucket + FUSE mount | Persistent pipeline state across Cloud Run Job executions |
 | Task Queue | Celery + Redis 7 | Background jobs (sync, indexing) |
-| LLM (primary) | Anthropic Claude (Sonnet) | Answer generation, entity extraction |
-| LLM (alternative) | Google Gemini 2.5 Flash (Vertex AI) | Entity extraction fallback |
+| LLM (primary) | Google Gemini 2.5 Flash (Vertex AI) | Answer generation, entity extraction |
 | Embeddings | sentence-transformers (all-MiniLM-L6-v2) | Local embedding generation |
 | Embeddings (GCP) | Vertex AI text-embedding-005 (768-dim) | Cloud embedding generation |
 | Bot | Slack Bolt (HTTP mode) | User interface |
@@ -382,6 +396,7 @@ Search operations always filter by `group_ids=[group_id]` to ensure tenant isola
 - [ADR-0006](adr/0006-duckdb-ephemeral-local-storage.md) - DuckDB ephemeral local storage (SUPERSEDED)
 - [ADR-0007](adr/0007-github-actions-ci-cd.md) - GitHub Actions CI/CD (ACTIVE)
 - [ADR-0008](adr/0008-staging-environment.md) - Staging environment (ACTIVE)
+- [ADR-0012](adr/0012-search-quality-fuzzy-merge-communities.md) — Search Quality, Fuzzy Entity Resolution, Community Detection
 
 ---
 
