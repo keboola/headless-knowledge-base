@@ -1627,195 +1627,127 @@ async def _fuzzy_merge(dry_run: bool, threshold: float | None, verbose: bool) ->
     )
 
     try:
-        # Step 1: Fetch all Entity nodes with embeddings
-        click.echo("\nStep 1: Fetching entities from Neo4j...")
+        # Step 1: Get entity type counts (no embeddings loaded yet)
+        click.echo("\nStep 1: Discovering entity types...")
+        max_type_size = settings.BATCH_FUZZY_MERGE_BATCH_SIZE
         async with driver.session() as session:
             result = await session.run(
-                "MATCH (e:Entity) "
-                "RETURN e.uuid AS uuid, e.name AS name, "
-                "e.entity_type AS entity_type, e.name_embedding AS name_embedding"
+                "MATCH (e:Entity) WHERE e.name_embedding IS NOT NULL "
+                "RETURN e.entity_type AS entity_type, count(e) AS cnt "
+                "ORDER BY cnt DESC"
             )
-            records = [record async for record in result]
+            type_counts = [(r["entity_type"] or "unknown", r["cnt"]) async for r in result]
 
-        click.echo(f"  Found {len(records)} Entity nodes")
+        total_entities = sum(c for _, c in type_counts)
+        click.echo(f"  {len(type_counts)} entity types, {total_entities} total entities with embeddings")
+        for etype, cnt in type_counts:
+            flag = " [SKIP - too large for pairwise]" if cnt > max_type_size else ""
+            click.echo(f"    {etype}: {cnt}{flag}")
 
-        # Filter to entities with embeddings
-        entities = []
-        skipped = 0
-        for record in records:
-            embedding = record["name_embedding"]
-            if embedding is None or len(embedding) == 0:
-                skipped += 1
-                continue
-            entities.append({
-                "uuid": record["uuid"],
-                "name": record["name"],
-                "entity_type": record["entity_type"] or "unknown",
-                "embedding": list(embedding),
-            })
-
-        if skipped > 0:
-            click.echo(f"  Skipped {skipped} entities without embeddings")
-        click.echo(f"  Processing {len(entities)} entities with embeddings")
-
-        if len(entities) < 2:
-            click.echo("\nNot enough entities to compare. Exiting.")
-            return
-
-        # Step 2: Group by entity_type
-        click.echo("\nStep 2: Grouping by entity type...")
-        type_buckets: dict[str, list[dict]] = defaultdict(list)
-        for ent in entities:
-            type_buckets[ent["entity_type"]].append(ent)
-
-        click.echo(f"  {len(type_buckets)} entity types found")
-        for etype, ents in sorted(type_buckets.items(), key=lambda x: -len(x[1])):
-            if verbose or len(ents) > 1:
-                click.echo(f"    {etype}: {len(ents)} entities")
-
-        # Step 3: Pairwise cosine similarity within each type
-        click.echo("\nStep 3: Computing pairwise similarities...")
-        merge_candidates: list[dict] = []
-
-        for etype, ents in type_buckets.items():
-            if len(ents) <= 1:
-                continue
-
-            n = len(ents)
-            uf = _UnionFind(n)
-
-            for i in range(n):
-                for j in range(i + 1, n):
-                    sim = _cosine_similarity(
-                        ents[i]["embedding"], ents[j]["embedding"]
-                    )
-                    if sim >= similarity_threshold:
-                        uf.union(i, j)
-                        merge_candidates.append({
-                            "entity_a": ents[i]["name"],
-                            "uuid_a": ents[i]["uuid"],
-                            "entity_b": ents[j]["name"],
-                            "uuid_b": ents[j]["uuid"],
-                            "entity_type": etype,
-                            "similarity": sim,
-                        })
-
-        click.echo(f"  Found {len(merge_candidates)} merge candidate pairs")
-
-        if not merge_candidates:
-            click.echo("\nNo merge candidates found. Graph is clean.")
-            return
-
-        # Print candidates
-        click.echo("\nMerge candidates:")
-        for mc in sorted(merge_candidates, key=lambda x: -x["similarity"]):
-            click.echo(
-                f"  [{mc['similarity']:.4f}] {mc['entity_a']!r} <-> {mc['entity_b']!r} "
-                f"(type={mc['entity_type']})"
-            )
-
-        if dry_run:
-            click.echo(f"\n[DRY RUN] {len(merge_candidates)} pairs would be merged. No changes applied.")
-            return
-
-        # Step 4: Apply merges -- cluster and merge
-        click.echo("\nStep 4: Applying merges...")
-
+        # Step 2: Process each type independently (one at a time to control memory)
+        click.echo("\nStep 2: Computing pairwise similarities per type...")
+        all_candidates: list[dict] = []
         total_merged = 0
         total_edges_redirected = 0
 
-        for etype, ents in type_buckets.items():
-            if len(ents) <= 1:
+        for etype, cnt in type_counts:
+            if cnt <= 1:
                 continue
+            if cnt > max_type_size:
+                click.echo(f"  Skipping {etype} ({cnt} entities > {max_type_size} limit)")
+                continue
+
+            click.echo(f"  Processing {etype} ({cnt} entities)...")
+
+            # Fetch entities for this type only
+            async with driver.session() as session:
+                result = await session.run(
+                    "MATCH (e:Entity) WHERE e.entity_type = $etype "
+                    "AND e.name_embedding IS NOT NULL "
+                    "RETURN e.uuid AS uuid, e.name AS name, "
+                    "e.name_embedding AS name_embedding",
+                    etype=etype,
+                )
+                ents = [
+                    {"uuid": r["uuid"], "name": r["name"], "embedding": list(r["name_embedding"])}
+                    async for r in result
+                ]
 
             n = len(ents)
             uf = _UnionFind(n)
+            type_candidates: list[dict] = []
 
             for i in range(n):
                 for j in range(i + 1, n):
-                    sim = _cosine_similarity(
-                        ents[i]["embedding"], ents[j]["embedding"]
-                    )
+                    sim = _cosine_similarity(ents[i]["embedding"], ents[j]["embedding"])
                     if sim >= similarity_threshold:
                         uf.union(i, j)
+                        type_candidates.append({
+                            "entity_a": ents[i]["name"], "uuid_a": ents[i]["uuid"],
+                            "entity_b": ents[j]["name"], "uuid_b": ents[j]["uuid"],
+                            "entity_type": etype, "similarity": sim,
+                        })
 
-            # Build clusters
-            clusters: dict[int, list[int]] = defaultdict(list)
-            for i in range(n):
-                clusters[uf.find(i)].append(i)
+            all_candidates.extend(type_candidates)
+            click.echo(f"    Found {len(type_candidates)} merge candidates")
 
-            for members in clusters.values():
-                if len(members) <= 1:
-                    continue
+            # Apply merges for this type if not dry-run
+            if not dry_run and type_candidates:
+                clusters: dict[int, list[int]] = defaultdict(list)
+                for i in range(n):
+                    clusters[uf.find(i)].append(i)
 
-                # Keep the entity with the longest name as canonical
-                canonical_idx = max(members, key=lambda i: len(ents[i]["name"]))
-                canonical_uuid = ents[canonical_idx]["uuid"]
-                duplicates = [
-                    ents[i] for i in members if i != canonical_idx
-                ]
-
-                for dup in duplicates:
-                    async with driver.session() as session:
-                        # Redirect RELATES_TO edges from duplicate to canonical
-                        result = await session.run(
-                            "MATCH (dup:Entity {uuid: $dup_uuid})-[r:RELATES_TO]->(target) "
-                            "WHERE target.uuid <> $canonical_uuid "
-                            "MERGE (canonical:Entity {uuid: $canonical_uuid})-[:RELATES_TO]->(target) "
-                            "DELETE r "
-                            "RETURN count(r) AS redirected",
-                            dup_uuid=dup["uuid"],
-                            canonical_uuid=canonical_uuid,
-                        )
-                        record = await result.single()
-                        outgoing = record["redirected"] if record else 0
-
-                        # Redirect incoming RELATES_TO edges
-                        result = await session.run(
-                            "MATCH (source)-[r:RELATES_TO]->(dup:Entity {uuid: $dup_uuid}) "
-                            "WHERE source.uuid <> $canonical_uuid "
-                            "MERGE (source)-[:RELATES_TO]->(canonical:Entity {uuid: $canonical_uuid}) "
-                            "DELETE r "
-                            "RETURN count(r) AS redirected",
-                            dup_uuid=dup["uuid"],
-                            canonical_uuid=canonical_uuid,
-                        )
-                        record = await result.single()
-                        incoming = record["redirected"] if record else 0
-
-                        # Redirect MENTIONS edges
-                        result = await session.run(
-                            "MATCH (ep)-[r:MENTIONS]->(dup:Entity {uuid: $dup_uuid}) "
-                            "MERGE (ep)-[:MENTIONS]->(canonical:Entity {uuid: $canonical_uuid}) "
-                            "DELETE r "
-                            "RETURN count(r) AS redirected",
-                            dup_uuid=dup["uuid"],
-                            canonical_uuid=canonical_uuid,
-                        )
-                        record = await result.single()
-                        mentions = record["redirected"] if record else 0
-
-                        edges = outgoing + incoming + mentions
-
-                        # Delete the duplicate node
-                        await session.run(
-                            "MATCH (dup:Entity {uuid: $dup_uuid}) "
-                            "DETACH DELETE dup",
-                            dup_uuid=dup["uuid"],
-                        )
-
-                        total_edges_redirected += edges
+                for members in clusters.values():
+                    if len(members) <= 1:
+                        continue
+                    canonical_idx = max(members, key=lambda i: len(ents[i]["name"]))
+                    canonical_uuid = ents[canonical_idx]["uuid"]
+                    for idx in members:
+                        if idx == canonical_idx:
+                            continue
+                        dup = ents[idx]
+                        async with driver.session() as session:
+                            r = await session.run(
+                                "MATCH (d:Entity {uuid: $d})-[r:RELATES_TO]->(t) WHERE t.uuid <> $c "
+                                "MERGE (:Entity {uuid: $c})-[:RELATES_TO]->(t) DELETE r RETURN count(r) AS n",
+                                d=dup["uuid"], c=canonical_uuid)
+                            out = (await r.single())["n"]
+                            r = await session.run(
+                                "MATCH (s)-[r:RELATES_TO]->(d:Entity {uuid: $d}) WHERE s.uuid <> $c "
+                                "MERGE (s)-[:RELATES_TO]->(:Entity {uuid: $c}) DELETE r RETURN count(r) AS n",
+                                d=dup["uuid"], c=canonical_uuid)
+                            inc = (await r.single())["n"]
+                            r = await session.run(
+                                "MATCH (ep)-[r:MENTIONS]->(d:Entity {uuid: $d}) "
+                                "MERGE (ep)-[:MENTIONS]->(:Entity {uuid: $c}) DELETE r RETURN count(r) AS n",
+                                d=dup["uuid"], c=canonical_uuid)
+                            men = (await r.single())["n"]
+                            await session.run("MATCH (d:Entity {uuid: $d}) DETACH DELETE d", d=dup["uuid"])
                         total_merged += 1
-
+                        total_edges_redirected += out + inc + men
                         if verbose:
-                            click.echo(
-                                f"  Merged {dup['name']!r} -> {ents[canonical_idx]['name']!r} "
-                                f"({edges} edges redirected)"
-                            )
+                            click.echo(f"      Merged {dup['name']!r} -> {ents[canonical_idx]['name']!r} ({out+inc+men} edges)")
 
-        click.echo(f"\nMerge complete:")
-        click.echo(f"  Entities merged: {total_merged}")
-        click.echo(f"  Edges redirected: {total_edges_redirected}")
+            del ents  # Free memory before next type
+
+        # Summary
+        click.echo(f"\nTotal merge candidates: {len(all_candidates)}")
+        if all_candidates:
+            click.echo("\nTop merge candidates:")
+            for mc in sorted(all_candidates, key=lambda x: -x["similarity"])[:50]:
+                click.echo(
+                    f"  [{mc['similarity']:.4f}] {mc['entity_a']!r} <-> {mc['entity_b']!r} "
+                    f"(type={mc['entity_type']})"
+                )
+            if len(all_candidates) > 50:
+                click.echo(f"  ... and {len(all_candidates) - 50} more")
+
+        if dry_run:
+            click.echo(f"\n[DRY RUN] {len(all_candidates)} pairs would be merged. No changes applied.")
+        else:
+            click.echo(f"\nMerge complete:")
+            click.echo(f"  Entities merged: {total_merged}")
+            click.echo(f"  Edges redirected: {total_edges_redirected}")
 
     finally:
         await driver.close()
