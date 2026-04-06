@@ -31,7 +31,17 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "You are an expert knowledge graph builder for a corporate knowledge base.\n"
-    "Extract named entities and their factual relationships from the given text."
+    "Extract named entities and their factual relationships from the given text.\n\n"
+    "IMPORTANT: Every extracted relationship must convey meaningful information\n"
+    "that is NOT already obvious from the entity names alone.\n\n"
+    "BAD (circular/trivial) extractions to AVOID:\n"
+    '- "Keboola PRODUCT is a product of KEBOOLA" (tautological)\n'
+    '- "Data Pipeline is a type of pipeline" (restates the name)\n'
+    '- "Engineering Team is a team in Engineering" (circular)\n\n'
+    "GOOD extractions:\n"
+    '- "Keboola uses Snowflake as its primary data warehouse backend"\n'
+    '- "Data Pipeline runs nightly at 02:00 UTC and processes CDC events"\n'
+    '- "Engineering Team owns the data-pipeline and orchestration-service repositories"'
 )
 
 USER_PROMPT_TEMPLATE = """\
@@ -42,6 +52,9 @@ Rules:
 - Use canonical/full entity names consistently
 - Relationship facts must be directly supported by the text
 - Each relationship must reference entities from your entity list
+- Skip trivial or circular relationships (e.g., "X is a type of X", "Product Y is a product")
+- Prefer what/how/why facts over definitional tautologies
+- Each fact should convey information not already obvious from the entity names alone
 
 Text:
 {content}

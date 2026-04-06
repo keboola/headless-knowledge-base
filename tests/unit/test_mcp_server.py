@@ -348,7 +348,7 @@ class TestMCPToolsList:
     async def test_tools_list_returns_all_tools_in_dev_mode(
         self, client: AsyncClient, dev_auth_header: dict
     ):
-        """Dev mode grants all scopes, so all 6 tools should be listed."""
+        """Dev mode grants all scopes, so all 7 tools should be listed."""
         resp = await client.post(
             "/mcp",
             json={"jsonrpc": "2.0", "method": "tools/list", "id": 2},
@@ -357,7 +357,7 @@ class TestMCPToolsList:
         assert resp.status_code == 200
         body = resp.json()
         tools = body["result"]["tools"]
-        assert len(tools) == 6
+        assert len(tools) == 7
         names = {t["name"] for t in tools}
         assert "ask_question" in names
         assert "search_knowledge" in names
@@ -405,7 +405,7 @@ class TestMCPToolsListScopeFiltering:
         assert resp.status_code == 200
         tools = resp.json()["result"]["tools"]
         names = {t["name"] for t in tools}
-        assert names == {"ask_question", "search_knowledge", "check_health"}
+        assert names == {"ask_question", "search_knowledge", "check_health", "search_communities"}
 
 
 # ===========================================================================

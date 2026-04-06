@@ -76,7 +76,7 @@ class TestGetToolsForScopes:
         """kb.read should return ask_question, search_knowledge, check_health."""
         tools = get_tools_for_scopes(["kb.read"])
         names = {t.name for t in tools}
-        assert names == {"ask_question", "search_knowledge", "check_health"}
+        assert names == {"ask_question", "search_knowledge", "check_health", "search_communities"}
 
     def test_write_scopes_return_write_tools(self):
         """kb.write should return create_knowledge, ingest_document, submit_feedback."""
@@ -85,13 +85,14 @@ class TestGetToolsForScopes:
         assert names == {"create_knowledge", "ingest_document", "submit_feedback"}
 
     def test_both_scopes_return_all_tools(self):
-        """kb.read + kb.write should return all 6 tools."""
+        """kb.read + kb.write should return all 7 tools."""
         tools = get_tools_for_scopes(["kb.read", "kb.write"])
         names = {t.name for t in tools}
-        assert len(names) == 6
+        assert len(names) == 7
         assert names == {
             "ask_question",
             "search_knowledge",
+            "search_communities",
             "check_health",
             "create_knowledge",
             "ingest_document",
@@ -116,8 +117,8 @@ class TestGetToolsForScopes:
             assert hasattr(tool, "inputSchema")
 
     def test_tool_definitions_count(self):
-        """TOOLS list should contain exactly 6 tool definitions."""
-        assert len(TOOLS) == 6
+        """TOOLS list should contain exactly 7 tool definitions."""
+        assert len(TOOLS) == 7
 
 
 # ===========================================================================
@@ -537,7 +538,7 @@ class TestExecuteToolUnknown:
     async def test_tool_execution_exception_returns_error(self):
         """If a tool raises an exception, it should be caught and returned as text."""
         with patch(
-            "knowledge_base.core.qa.search_with_expansion",
+            "knowledge_base.core.qa.search_knowledge",
             new_callable=AsyncMock,
             side_effect=RuntimeError("connection lost"),
         ):

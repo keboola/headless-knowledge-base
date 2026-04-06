@@ -14,20 +14,20 @@ Algorithm overview:
 7. Drop self-referential edges created by resolution merges.
 8. Attach ``mentioned_in_episodes`` to each entity.
 
-Future enhancement (not yet implemented):
-    Between steps 3 and 4, an embedding-based similarity merge could
-    cluster near-duplicates (e.g. "Platform Team" vs "platform-team")
-    that differ beyond simple normalisation.  The threshold is already
-    configurable via ``settings.BATCH_ENTITY_SIMILARITY_THRESHOLD``
-    (default 0.85 cosine).  For the first version, exact normalised
-    match is sufficient -- it handles the vast majority of duplicates
-    (case, whitespace, punctuation) and avoids an embedding dependency
-    at resolve time, keeping the resolver fast and deterministic.
+Optional fuzzy merge (BATCH_ENTITY_FUZZY_MERGE_ENABLED):
+    Between steps 3 and 4, an embedding-based similarity merge clusters
+    near-duplicates (e.g. "Platform Team" vs "platform-team") that
+    differ beyond simple normalisation.  The threshold is configurable
+    via ``settings.BATCH_ENTITY_SIMILARITY_THRESHOLD`` (default 0.85
+    cosine).  Groups are partitioned by entity_type (never merges
+    across types), canonical names are embedded, and single-linkage
+    clustering via union-find merges groups above the threshold.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 import re
 import uuid
 from collections import defaultdict
@@ -43,6 +43,16 @@ logger = logging.getLogger(__name__)
 
 # Pre-compiled regex for whitespace normalisation
 _MULTI_WS = re.compile(r"\s+")
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
 
 
 def _normalize_name(raw: str) -> str:
@@ -79,7 +89,7 @@ class EntityResolver:
     # Public API
     # ------------------------------------------------------------------
 
-    def resolve(
+    async def resolve(
         self,
         extractions: dict[str, ChunkExtractionResult],
         episode_uuids: dict[str, str],
@@ -111,6 +121,13 @@ class EntityResolver:
             "Grouped raw entities into %d unique (name, type) groups",
             len(entity_groups),
         )
+
+        # Optional: fuzzy merge near-duplicates via embedding similarity
+        if settings.BATCH_ENTITY_FUZZY_MERGE_ENABLED:
+            entity_groups = await self._fuzzy_merge_groups(entity_groups)
+            logger.info(
+                "After fuzzy merge: %d entity groups", len(entity_groups)
+            )
 
         # Step 4-5: Assign UUIDs and build lookup registry
         resolved_entities, registry = self._build_registry(entity_groups)
@@ -395,6 +412,127 @@ class EntityResolver:
             total_mentions,
             len(resolved_entities),
         )
+
+
+    async def _fuzzy_merge_groups(
+        self,
+        entity_groups: dict[tuple[str, str], _EntityGroup],
+    ) -> dict[tuple[str, str], _EntityGroup]:
+        """Merge near-duplicate entity groups using embedding similarity.
+
+        Partitions groups by entity_type (never merges across types),
+        embeds all canonical names, computes pairwise cosine similarity,
+        and uses single-linkage clustering (union-find) to merge groups
+        above the similarity threshold.
+        """
+        from knowledge_base.vectorstore.embeddings import get_embeddings
+
+        embedder = get_embeddings()
+
+        # Partition groups by entity_type
+        type_buckets: dict[str, list[tuple[str, str]]] = defaultdict(list)
+        for key in entity_groups:
+            _norm_name, norm_type = key
+            type_buckets[norm_type].append(key)
+
+        merged_groups: dict[tuple[str, str], _EntityGroup] = {}
+        total_merges = 0
+
+        for entity_type, keys in type_buckets.items():
+            if len(keys) <= 1:
+                # Nothing to merge for a single group
+                for k in keys:
+                    merged_groups[k] = entity_groups[k]
+                continue
+
+            # Embed canonical names in batches
+            canonical_names = [
+                entity_groups[k].normalized_name for k in keys
+            ]
+
+            batch_size = settings.BATCH_FUZZY_MERGE_BATCH_SIZE
+            all_embeddings: list[list[float]] = []
+            for i in range(0, len(canonical_names), batch_size):
+                batch = canonical_names[i : i + batch_size]
+                batch_embeddings = await embedder.embed(batch)
+                all_embeddings.extend(batch_embeddings)
+
+            # Pairwise cosine similarity + union-find clustering
+            n = len(keys)
+            uf = _UnionFind(n)
+
+            for i in range(n):
+                for j in range(i + 1, n):
+                    sim = _cosine_similarity(all_embeddings[i], all_embeddings[j])
+                    if sim >= self.similarity_threshold:
+                        uf.union(i, j)
+                        logger.debug(
+                            "Fuzzy merge: %r <-> %r (sim=%.4f, type=%s)",
+                            canonical_names[i],
+                            canonical_names[j],
+                            sim,
+                            entity_type,
+                        )
+
+            # Build clusters from union-find
+            clusters: dict[int, list[int]] = defaultdict(list)
+            for i in range(n):
+                clusters[uf.find(i)].append(i)
+
+            # Merge each cluster into a single group
+            for members in clusters.values():
+                if len(members) > 1:
+                    total_merges += len(members) - 1
+
+                # Use the first member's key as the canonical key
+                primary_key = keys[members[0]]
+                primary_group = _EntityGroup(
+                    normalized_name=entity_groups[primary_key].normalized_name,
+                    entity_type=entity_type,
+                )
+
+                for idx in members:
+                    source_group = entity_groups[keys[idx]]
+                    primary_group.raw_names.update(source_group.raw_names)
+                    primary_group.summaries.extend(source_group.summaries)
+                    primary_group.source_chunk_ids.update(
+                        source_group.source_chunk_ids
+                    )
+
+                merged_groups[primary_key] = primary_group
+
+        if total_merges > 0:
+            logger.info(
+                "Fuzzy merge reduced groups by %d (from %d to %d)",
+                total_merges,
+                len(entity_groups),
+                len(merged_groups),
+            )
+
+        return merged_groups
+
+
+# ---------------------------------------------------------------------------
+# Union-Find for single-linkage clustering
+# ---------------------------------------------------------------------------
+
+
+class _UnionFind:
+    """Simple union-find (disjoint set) for clustering."""
+
+    def __init__(self, n: int) -> None:
+        self.parent = list(range(n))
+
+    def find(self, x: int) -> int:
+        while self.parent[x] != x:
+            self.parent[x] = self.parent[self.parent[x]]  # path compression
+            x = self.parent[x]
+        return x
+
+    def union(self, x: int, y: int) -> None:
+        px, py = self.find(x), self.find(y)
+        if px != py:
+            self.parent[px] = py
 
 
 # ---------------------------------------------------------------------------

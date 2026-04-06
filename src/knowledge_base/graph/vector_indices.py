@@ -24,6 +24,7 @@ VECTOR_SIMILARITY_FUNCTION = "cosine"
 
 ENTITY_INDEX_NAME = "entity_name_embedding"
 EDGE_INDEX_NAME = "edge_fact_embedding"
+COMMUNITY_INDEX_NAME = "community_name_embedding"
 
 
 async def create_vector_indices(driver: Neo4jDriver) -> None:
@@ -58,6 +59,17 @@ async def create_vector_indices(driver: Neo4jDriver) -> None:
 
     logger.info("Creating HNSW vector index: %s (RELATES_TO.fact_embedding)", EDGE_INDEX_NAME)
     await driver.execute_query(edge_query)
+
+    community_query = (
+        f"CREATE VECTOR INDEX {COMMUNITY_INDEX_NAME} IF NOT EXISTS "
+        "FOR (n:Community) ON (n.name_embedding) "
+        "OPTIONS { indexConfig: { "
+        f"`vector.dimensions`: {VECTOR_INDEX_DIMENSION}, "
+        f"`vector.similarity_function`: '{VECTOR_SIMILARITY_FUNCTION}' "
+        "} }"
+    )
+    logger.info("Creating HNSW vector index: %s (Community.name_embedding)", COMMUNITY_INDEX_NAME)
+    await driver.execute_query(community_query)
 
     logger.info("Vector index creation commands issued (IF NOT EXISTS)")
 

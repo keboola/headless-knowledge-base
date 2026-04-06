@@ -106,7 +106,12 @@ class TestEmptyContentFiltering:
         ]
 
         mock_graphiti = AsyncMock()
-        mock_graphiti.search = AsyncMock(return_value=graphiti_results)
+        mock_search_results = MagicMock()
+        mock_search_results.edges = graphiti_results
+        mock_search_results.edge_reranker_scores = [r.score for r in graphiti_results]
+        mock_search_results.episodes = []
+        mock_search_results.episode_reranker_scores = []
+        mock_graphiti.search_ = AsyncMock(return_value=mock_search_results)
 
         mock_client = MagicMock()
         mock_client.get_client = AsyncMock(return_value=mock_graphiti)
@@ -163,7 +168,12 @@ class TestEmptyContentFiltering:
         ]
 
         mock_graphiti = AsyncMock()
-        mock_graphiti.search = AsyncMock(return_value=graphiti_results)
+        mock_search_results = MagicMock()
+        mock_search_results.edges = graphiti_results
+        mock_search_results.edge_reranker_scores = [r.score for r in graphiti_results]
+        mock_search_results.episodes = []
+        mock_search_results.episode_reranker_scores = []
+        mock_graphiti.search_ = AsyncMock(return_value=mock_search_results)
 
         mock_client = MagicMock()
         mock_client.get_client = AsyncMock(return_value=mock_graphiti)
@@ -227,7 +237,12 @@ class TestEmptyContentFiltering:
         ]
 
         mock_graphiti = AsyncMock()
-        mock_graphiti.search = AsyncMock(return_value=graphiti_results)
+        mock_search_results = MagicMock()
+        mock_search_results.edges = graphiti_results
+        mock_search_results.edge_reranker_scores = [r.score for r in graphiti_results]
+        mock_search_results.episodes = []
+        mock_search_results.episode_reranker_scores = []
+        mock_graphiti.search_ = AsyncMock(return_value=mock_search_results)
 
         mock_client = MagicMock()
         mock_client.get_client = AsyncMock(return_value=mock_graphiti)
@@ -289,7 +304,12 @@ class TestEmptyContentFiltering:
         ]
 
         mock_graphiti = AsyncMock()
-        mock_graphiti.search = AsyncMock(return_value=graphiti_results)
+        mock_search_results = MagicMock()
+        mock_search_results.edges = graphiti_results
+        mock_search_results.edge_reranker_scores = [r.score for r in graphiti_results]
+        mock_search_results.episodes = []
+        mock_search_results.episode_reranker_scores = []
+        mock_graphiti.search_ = AsyncMock(return_value=mock_search_results)
 
         mock_client = MagicMock()
         mock_client.get_client = AsyncMock(return_value=mock_graphiti)
@@ -353,7 +373,12 @@ class TestEmptyContentFiltering:
         ]
 
         mock_graphiti = AsyncMock()
-        mock_graphiti.search = AsyncMock(return_value=graphiti_results)
+        mock_search_results = MagicMock()
+        mock_search_results.edges = graphiti_results
+        mock_search_results.edge_reranker_scores = [r.score for r in graphiti_results]
+        mock_search_results.episodes = []
+        mock_search_results.episode_reranker_scores = []
+        mock_graphiti.search_ = AsyncMock(return_value=mock_search_results)
 
         mock_client = MagicMock()
         mock_client.get_client = AsyncMock(return_value=mock_graphiti)
@@ -402,7 +427,12 @@ class TestEmptyContentFiltering:
         mock_settings.SEARCH_MIN_CONTENT_LENGTH = 20
 
         mock_graphiti = AsyncMock()
-        mock_graphiti.search = AsyncMock(return_value=[])
+        mock_search_results = MagicMock()
+        mock_search_results.edges = []
+        mock_search_results.edge_reranker_scores = []
+        mock_search_results.episodes = []
+        mock_search_results.episode_reranker_scores = []
+        mock_graphiti.search_ = AsyncMock(return_value=mock_search_results)
 
         mock_client = MagicMock()
         mock_client.get_client = AsyncMock(return_value=mock_graphiti)
@@ -419,11 +449,10 @@ class TestEmptyContentFiltering:
             # Request 5 results -- Graphiti should be called with 15 (5 * 3)
             await retriever.search_chunks(query="test", num_results=5)
 
-        mock_graphiti.search.assert_called_once_with(
-            query="test",
-            num_results=15,  # 5 * 3
-            group_ids=["test"],
-        )
+        mock_graphiti.search_.assert_called_once()
+        call_kwargs = mock_graphiti.search_.call_args[1]  # keyword args
+        assert call_kwargs['query'] == 'test'
+        assert call_kwargs['config'].limit == 15  # 5 * 3
 
     @pytest.mark.asyncio
     @patch("knowledge_base.graph.graphiti_retriever.get_graphiti_client")
@@ -453,7 +482,12 @@ class TestEmptyContentFiltering:
         ]
 
         mock_graphiti = AsyncMock()
-        mock_graphiti.search = AsyncMock(return_value=graphiti_results)
+        mock_search_results = MagicMock()
+        mock_search_results.edges = graphiti_results
+        mock_search_results.edge_reranker_scores = [r.score for r in graphiti_results]
+        mock_search_results.episodes = []
+        mock_search_results.episode_reranker_scores = []
+        mock_graphiti.search_ = AsyncMock(return_value=mock_search_results)
 
         mock_client = MagicMock()
         mock_client.get_client = AsyncMock(return_value=mock_graphiti)

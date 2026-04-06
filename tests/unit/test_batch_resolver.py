@@ -47,11 +47,12 @@ class TestNormalizeName:
 
 
 @pytest.fixture
-def resolver() -> EntityResolver:
+def resolver():
     """Create an EntityResolver with default similarity threshold."""
     with patch("knowledge_base.batch.resolver.settings") as mock_settings:
         mock_settings.BATCH_ENTITY_SIMILARITY_THRESHOLD = 0.85
-        return EntityResolver()
+        mock_settings.BATCH_ENTITY_FUZZY_MERGE_ENABLED = False
+        yield EntityResolver()
 
 
 def _make_extraction(
@@ -90,7 +91,8 @@ def _make_extraction(
 class TestEntityDeduplication:
     """Tests for entity normalization and exact-match deduplication."""
 
-    def test_exact_match_deduplication(self, resolver: EntityResolver) -> None:
+    @pytest.mark.asyncio
+    async def test_exact_match_deduplication(self, resolver: EntityResolver) -> None:
         """Same normalized name + type across chunks -> one entity."""
         extractions = {
             "chunk-1": _make_extraction([
@@ -102,12 +104,13 @@ class TestEntityDeduplication:
         }
         episode_uuids = {"chunk-1": "ep-1", "chunk-2": "ep-2"}
 
-        entities, _ = resolver.resolve(extractions, episode_uuids)
+        entities, _ = await resolver.resolve(extractions, episode_uuids)
 
         assert len(entities) == 1
         assert entities[0].canonical_name in ("Platform Team", "platform team")
 
-    def test_different_types_remain_separate(self, resolver: EntityResolver) -> None:
+    @pytest.mark.asyncio
+    async def test_different_types_remain_separate(self, resolver: EntityResolver) -> None:
         """Same name but different entity_type -> separate entities."""
         extractions = {
             "chunk-1": _make_extraction([
@@ -117,13 +120,14 @@ class TestEntityDeduplication:
         }
         episode_uuids = {"chunk-1": "ep-1"}
 
-        entities, _ = resolver.resolve(extractions, episode_uuids)
+        entities, _ = await resolver.resolve(extractions, episode_uuids)
 
         assert len(entities) == 2
         entity_types = {e.entity_type for e in entities}
         assert "technology" in entity_types or "Technology" in {e.entity_type for e in entities}
 
-    def test_canonical_name_picks_longest_variant(self, resolver: EntityResolver) -> None:
+    @pytest.mark.asyncio
+    async def test_canonical_name_picks_longest_variant(self, resolver: EntityResolver) -> None:
         """The longest raw name variant is chosen as canonical."""
         extractions = {
             "chunk-1": _make_extraction([
@@ -142,7 +146,7 @@ class TestEntityDeduplication:
             "chunk-3": "ep-3",
         }
 
-        entities, _ = resolver.resolve(extractions, episode_uuids)
+        entities, _ = await resolver.resolve(extractions, episode_uuids)
 
         # All normalize to "platform team" / "team" -> one entity
         assert len(entities) == 1
@@ -153,7 +157,8 @@ class TestEntityDeduplication:
             "Platform Team", "platform team", "PLATFORM TEAM"
         }
 
-    def test_raw_names_accumulated(self, resolver: EntityResolver) -> None:
+    @pytest.mark.asyncio
+    async def test_raw_names_accumulated(self, resolver: EntityResolver) -> None:
         """All surface-form name variants are kept in raw_names."""
         extractions = {
             "chunk-1": _make_extraction([
@@ -172,7 +177,7 @@ class TestEntityDeduplication:
             "chunk-3": "ep-3",
         }
 
-        entities, _ = resolver.resolve(extractions, episode_uuids)
+        entities, _ = await resolver.resolve(extractions, episode_uuids)
         assert len(entities) == 1
         assert "Platform Team" in entities[0].raw_names
         assert "platform team" in entities[0].raw_names
@@ -187,7 +192,8 @@ class TestEntityDeduplication:
 class TestRelationshipResolution:
     """Tests for relationship mapping, deduplication, and filtering."""
 
-    def test_relationship_mapped_to_resolved_uuids(self, resolver: EntityResolver) -> None:
+    @pytest.mark.asyncio
+    async def test_relationship_mapped_to_resolved_uuids(self, resolver: EntityResolver) -> None:
         """Relationships reference resolved entity UUIDs, not raw names."""
         extractions = {
             "chunk-1": _make_extraction(
@@ -202,7 +208,7 @@ class TestRelationshipResolution:
         }
         episode_uuids = {"chunk-1": "ep-1"}
 
-        entities, relationships = resolver.resolve(extractions, episode_uuids)
+        entities, relationships = await resolver.resolve(extractions, episode_uuids)
 
         assert len(relationships) == 1
         rel = relationships[0]
@@ -213,7 +219,8 @@ class TestRelationshipResolution:
         assert entity_by_uuid[rel.source_entity_uuid].canonical_name == "Alice"
         assert entity_by_uuid[rel.target_entity_uuid].canonical_name == "Platform Team"
 
-    def test_relationship_deduplication_merges_episodes(
+    @pytest.mark.asyncio
+    async def test_relationship_deduplication_merges_episodes(
         self, resolver: EntityResolver
     ) -> None:
         """Same (source, target, name) across chunks -> one relationship with merged episodes."""
@@ -239,12 +246,13 @@ class TestRelationshipResolution:
         }
         episode_uuids = {"chunk-1": "ep-1", "chunk-2": "ep-2"}
 
-        _, relationships = resolver.resolve(extractions, episode_uuids)
+        _, relationships = await resolver.resolve(extractions, episode_uuids)
 
         assert len(relationships) == 1
         assert sorted(relationships[0].episode_uuids) == ["ep-1", "ep-2"]
 
-    def test_self_referential_edge_removed(self, resolver: EntityResolver) -> None:
+    @pytest.mark.asyncio
+    async def test_self_referential_edge_removed(self, resolver: EntityResolver) -> None:
         """Edges where source and target resolve to the same entity are dropped."""
         extractions = {
             "chunk-1": _make_extraction(
@@ -259,12 +267,13 @@ class TestRelationshipResolution:
         }
         episode_uuids = {"chunk-1": "ep-1"}
 
-        _, relationships = resolver.resolve(extractions, episode_uuids)
+        _, relationships = await resolver.resolve(extractions, episode_uuids)
 
         # The two entity names resolve to the same entity, so the edge is self-referential
         assert len(relationships) == 0
 
-    def test_unresolvable_entities_in_relationship_skipped(
+    @pytest.mark.asyncio
+    async def test_unresolvable_entities_in_relationship_skipped(
         self, resolver: EntityResolver
     ) -> None:
         """Relationships referencing entities not in the extraction are skipped."""
@@ -281,11 +290,12 @@ class TestRelationshipResolution:
         }
         episode_uuids = {"chunk-1": "ep-1"}
 
-        _, relationships = resolver.resolve(extractions, episode_uuids)
+        _, relationships = await resolver.resolve(extractions, episode_uuids)
 
         assert len(relationships) == 0
 
-    def test_relationship_fact_picks_longest(self, resolver: EntityResolver) -> None:
+    @pytest.mark.asyncio
+    async def test_relationship_fact_picks_longest(self, resolver: EntityResolver) -> None:
         """When deduplicating relationships, the longest fact is kept."""
         extractions = {
             "chunk-1": _make_extraction(
@@ -309,7 +319,7 @@ class TestRelationshipResolution:
         }
         episode_uuids = {"chunk-1": "ep-1", "chunk-2": "ep-2"}
 
-        _, relationships = resolver.resolve(extractions, episode_uuids)
+        _, relationships = await resolver.resolve(extractions, episode_uuids)
 
         assert len(relationships) == 1
         assert "much longer" in relationships[0].fact
@@ -323,7 +333,8 @@ class TestRelationshipResolution:
 class TestEpisodeMentions:
     """Tests for mentioned_in_episodes population."""
 
-    def test_mentioned_in_episodes_populated(self, resolver: EntityResolver) -> None:
+    @pytest.mark.asyncio
+    async def test_mentioned_in_episodes_populated(self, resolver: EntityResolver) -> None:
         """Each entity's mentioned_in_episodes lists the episodes it appeared in."""
         extractions = {
             "chunk-1": _make_extraction([
@@ -336,7 +347,7 @@ class TestEpisodeMentions:
         }
         episode_uuids = {"chunk-1": "ep-1", "chunk-2": "ep-2"}
 
-        entities, _ = resolver.resolve(extractions, episode_uuids)
+        entities, _ = await resolver.resolve(extractions, episode_uuids)
 
         entities_by_name = {
             e.canonical_name.lower(): e for e in entities
@@ -348,7 +359,8 @@ class TestEpisodeMentions:
         assert sorted(alice.mentioned_in_episodes) == ["ep-1", "ep-2"]
         assert bob.mentioned_in_episodes == ["ep-1"]
 
-    def test_missing_episode_uuid_skipped(self, resolver: EntityResolver) -> None:
+    @pytest.mark.asyncio
+    async def test_missing_episode_uuid_skipped(self, resolver: EntityResolver) -> None:
         """Chunks without episode UUIDs do not contribute to mentions."""
         extractions = {
             "chunk-1": _make_extraction([
@@ -361,7 +373,7 @@ class TestEpisodeMentions:
         # chunk-2 has no episode UUID
         episode_uuids = {"chunk-1": "ep-1"}
 
-        entities, _ = resolver.resolve(extractions, episode_uuids)
+        entities, _ = await resolver.resolve(extractions, episode_uuids)
 
         assert len(entities) == 1
         assert entities[0].mentioned_in_episodes == ["ep-1"]
@@ -375,13 +387,15 @@ class TestEpisodeMentions:
 class TestEdgeCases:
     """Edge case tests for the resolver."""
 
-    def test_empty_input_returns_empty(self, resolver: EntityResolver) -> None:
+    @pytest.mark.asyncio
+    async def test_empty_input_returns_empty(self, resolver: EntityResolver) -> None:
         """No extractions -> no entities, no relationships."""
-        entities, relationships = resolver.resolve({}, {})
+        entities, relationships = await resolver.resolve({}, {})
         assert entities == []
         assert relationships == []
 
-    def test_extraction_with_no_entities_or_relationships(
+    @pytest.mark.asyncio
+    async def test_extraction_with_no_entities_or_relationships(
         self, resolver: EntityResolver
     ) -> None:
         """Chunks with empty entity/relationship lists produce nothing."""
@@ -390,11 +404,12 @@ class TestEdgeCases:
         }
         episode_uuids = {"chunk-1": "ep-1"}
 
-        entities, relationships = resolver.resolve(extractions, episode_uuids)
+        entities, relationships = await resolver.resolve(extractions, episode_uuids)
         assert entities == []
         assert relationships == []
 
-    def test_entity_uuid_is_unique(self, resolver: EntityResolver) -> None:
+    @pytest.mark.asyncio
+    async def test_entity_uuid_is_unique(self, resolver: EntityResolver) -> None:
         """Each resolved entity gets a unique UUID."""
         extractions = {
             "chunk-1": _make_extraction([
@@ -405,12 +420,13 @@ class TestEdgeCases:
         }
         episode_uuids = {"chunk-1": "ep-1"}
 
-        entities, _ = resolver.resolve(extractions, episode_uuids)
+        entities, _ = await resolver.resolve(extractions, episode_uuids)
 
         uuids = [e.uuid for e in entities]
         assert len(uuids) == len(set(uuids))
 
-    def test_relationship_uuid_is_unique(self, resolver: EntityResolver) -> None:
+    @pytest.mark.asyncio
+    async def test_relationship_uuid_is_unique(self, resolver: EntityResolver) -> None:
         """Each resolved relationship gets a unique UUID."""
         extractions = {
             "chunk-1": _make_extraction(
@@ -428,7 +444,7 @@ class TestEdgeCases:
         }
         episode_uuids = {"chunk-1": "ep-1"}
 
-        _, relationships = resolver.resolve(extractions, episode_uuids)
+        _, relationships = await resolver.resolve(extractions, episode_uuids)
 
         uuids = [r.uuid for r in relationships]
         assert len(uuids) == len(set(uuids))

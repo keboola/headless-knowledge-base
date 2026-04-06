@@ -43,6 +43,7 @@ _PHASE_ORDER = [
     "resolved",
     # "embedded" removed -- embed+load are now a single streaming phase
     "complete",
+    "communities",
 ]
 
 
@@ -262,7 +263,7 @@ class BatchImportPipeline:
         if not _phase_done(current_phase, "resolved"):
             logger.info("Phase 4/5 RESOLVE: deduplicating entities and relationships")
 
-            entities, relationships = self._resolver.resolve(
+            entities, relationships = await self._resolver.resolve(
                 extractions, episode_uuids
             )
             logger.info(
@@ -282,7 +283,7 @@ class BatchImportPipeline:
             logger.info(
                 "Phase 4/5 RESOLVE: already completed -- re-resolving from extractions"
             )
-            entities, relationships = self._resolver.resolve(
+            entities, relationships = await self._resolver.resolve(
                 extractions, episode_uuids
             )
             logger.info(
@@ -349,6 +350,31 @@ class BatchImportPipeline:
             logger.info("Phase 5/5 LOAD: already completed -- nothing to do")
 
         # ------------------------------------------------------------------
+        # Phase 6: COMMUNITIES (optional)
+        # ------------------------------------------------------------------
+        if settings.COMMUNITY_DETECTION_ENABLED and not _phase_done(current_phase, "communities"):
+            logger.info("Phase 6 COMMUNITIES: running label propagation + LLM summarization")
+
+            graphiti = await self._get_graphiti()
+            group_ids = [self._settings.GRAPH_GROUP_ID]
+            communities, community_edges = await graphiti.build_communities(group_ids=group_ids)
+            logger.info(
+                "Built %d communities with %d community edges",
+                len(communities),
+                len(community_edges),
+            )
+
+            self._save_state(BatchImportState(
+                phase="communities",
+                batch_job_name=batch_job_name,
+                output_dir=output_dir,
+                chunks_total=len(chunks),
+                timestamp=_utcnow_iso(),
+            ))
+        elif settings.COMMUNITY_DETECTION_ENABLED:
+            logger.info("Phase 6 COMMUNITIES: already completed -- skipping")
+
+        # ------------------------------------------------------------------
         # Summary
         # ------------------------------------------------------------------
         elapsed = time.monotonic() - pipeline_start
@@ -377,6 +403,12 @@ class BatchImportPipeline:
         )
 
         return summary
+
+    async def _get_graphiti(self):
+        """Get Graphiti client for community detection."""
+        from knowledge_base.graph.graphiti_client import get_graphiti_client
+        client = get_graphiti_client()
+        return await client.get_client()
 
     # ------------------------------------------------------------------
     # GCS state persistence

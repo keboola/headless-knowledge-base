@@ -157,6 +157,10 @@ class Settings(BaseSettings):
     GRAPHITI_BULK_INITIAL_BATCH: int = 2  # Starting batch size (doubles in slow_start)
     GRAPHITI_BULK_MAX_BATCH: int = 20  # Maximum batch size cap
 
+    # MCP ask_question performance
+    MCP_ASK_QUESTION_SEARCH_LIMIT: int = 5  # Fewer results for faster response
+    MCP_ASK_QUESTION_LLM_TIMEOUT: float = 45.0  # Seconds before LLM generation times out
+
     # Batch Import Pipeline (Gemini Batch API + direct Neo4j import)
     BATCH_GCS_BUCKET: str = ""  # GCS bucket for batch JSONL files
     BATCH_GCS_PREFIX: str = "batch-import"  # Path prefix within bucket
@@ -166,6 +170,15 @@ class Settings(BaseSettings):
     BATCH_EMBEDDING_CONCURRENCY: int = 3  # Max parallel embedding batches (keep low to avoid 429)
     BATCH_POLL_INTERVAL: int = 60  # Seconds between batch job polls
     BATCH_MAX_POLL_DURATION: int = 21600  # Max wait for batch job (6 hours)
+
+    # Fuzzy entity merge (opt-in)
+    BATCH_ENTITY_FUZZY_MERGE_ENABLED: bool = False
+    BATCH_FUZZY_MERGE_BATCH_SIZE: int = 500
+
+    # Community Detection (opt-in)
+    COMMUNITY_DETECTION_ENABLED: bool = False
+    COMMUNITY_MIN_CLUSTER_SIZE: int = 3
+    COMMUNITY_SEARCH_LIMIT: int = 5
 
     @property
     def governance_trusted_domain_list(self) -> list[str]:

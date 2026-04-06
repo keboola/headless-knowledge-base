@@ -1578,6 +1578,221 @@ async def _keboola_batch_import(
 
 
 # =============================================================================
+# FUZZY ENTITY MERGE
+# =============================================================================
+
+
+@cli.command(name="fuzzy-merge")
+@click.option("--dry-run", is_flag=True, help="Report candidates without applying merges")
+@click.option("--threshold", type=float, default=None, help="Override similarity threshold (default from config)")
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed progress")
+def fuzzy_merge(dry_run: bool, threshold: float | None, verbose: bool) -> None:
+    """Find and merge near-duplicate entities in the knowledge graph."""
+    asyncio.run(_fuzzy_merge(dry_run, threshold, verbose))
+
+
+async def _fuzzy_merge(dry_run: bool, threshold: float | None, verbose: bool) -> None:
+    """Async implementation of fuzzy-merge command.
+
+    Connects to Neo4j, fetches all Entity nodes with name embeddings,
+    groups by entity_type, computes pairwise cosine similarity, and
+    merges near-duplicates (redirect edges + delete duplicate node).
+    """
+    import math
+    from collections import defaultdict
+
+    from neo4j import AsyncGraphDatabase
+
+    from knowledge_base.batch.resolver import _cosine_similarity, _UnionFind
+
+    similarity_threshold = threshold if threshold is not None else settings.BATCH_ENTITY_SIMILARITY_THRESHOLD
+
+    if verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    click.echo("Fuzzy Entity Merge")
+    click.echo("=" * 60)
+    click.echo(f"  Neo4j URI: {settings.NEO4J_URI}")
+    click.echo(f"  Similarity threshold: {similarity_threshold}")
+    click.echo(f"  Mode: {'DRY RUN' if dry_run else 'APPLY'}")
+    click.echo("=" * 60)
+
+    if not settings.NEO4J_URI or not settings.NEO4J_PASSWORD:
+        click.echo("Error: NEO4J_URI and NEO4J_PASSWORD are required.", err=True)
+        sys.exit(1)
+
+    driver = AsyncGraphDatabase.driver(
+        settings.NEO4J_URI,
+        auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD),
+    )
+
+    try:
+        # Step 1: Get entity type counts (no embeddings loaded yet)
+        click.echo("\nStep 1: Discovering entity types...")
+        max_type_size = settings.BATCH_FUZZY_MERGE_BATCH_SIZE
+        async with driver.session() as session:
+            result = await session.run(
+                "MATCH (e:Entity) WHERE e.name_embedding IS NOT NULL "
+                "RETURN e.entity_type AS entity_type, count(e) AS cnt "
+                "ORDER BY cnt DESC"
+            )
+            type_counts = [(r["entity_type"] or "unknown", r["cnt"]) async for r in result]
+
+        total_entities = sum(c for _, c in type_counts)
+        click.echo(f"  {len(type_counts)} entity types, {total_entities} total entities with embeddings")
+        for etype, cnt in type_counts:
+            flag = " [SKIP - too large for pairwise]" if cnt > max_type_size else ""
+            click.echo(f"    {etype}: {cnt}{flag}")
+
+        # Step 2: Process each type independently (one at a time to control memory)
+        click.echo("\nStep 2: Computing pairwise similarities per type...")
+        all_candidates: list[dict] = []
+        total_merged = 0
+        total_edges_redirected = 0
+
+        for etype, cnt in type_counts:
+            if cnt <= 1:
+                continue
+            if cnt > max_type_size:
+                click.echo(f"  Skipping {etype} ({cnt} entities > {max_type_size} limit)")
+                continue
+
+            click.echo(f"  Processing {etype} ({cnt} entities)...")
+
+            # Fetch entities for this type only
+            async with driver.session() as session:
+                result = await session.run(
+                    "MATCH (e:Entity) WHERE e.entity_type = $etype "
+                    "AND e.name_embedding IS NOT NULL "
+                    "RETURN e.uuid AS uuid, e.name AS name, "
+                    "e.name_embedding AS name_embedding",
+                    etype=etype,
+                )
+                ents = [
+                    {"uuid": r["uuid"], "name": r["name"], "embedding": list(r["name_embedding"])}
+                    async for r in result
+                ]
+
+            n = len(ents)
+            uf = _UnionFind(n)
+            type_candidates: list[dict] = []
+
+            for i in range(n):
+                for j in range(i + 1, n):
+                    sim = _cosine_similarity(ents[i]["embedding"], ents[j]["embedding"])
+                    if sim >= similarity_threshold:
+                        uf.union(i, j)
+                        type_candidates.append({
+                            "entity_a": ents[i]["name"], "uuid_a": ents[i]["uuid"],
+                            "entity_b": ents[j]["name"], "uuid_b": ents[j]["uuid"],
+                            "entity_type": etype, "similarity": sim,
+                        })
+
+            all_candidates.extend(type_candidates)
+            click.echo(f"    Found {len(type_candidates)} merge candidates")
+
+            # Apply merges for this type if not dry-run
+            if not dry_run and type_candidates:
+                clusters: dict[int, list[int]] = defaultdict(list)
+                for i in range(n):
+                    clusters[uf.find(i)].append(i)
+
+                for members in clusters.values():
+                    if len(members) <= 1:
+                        continue
+                    canonical_idx = max(members, key=lambda i: len(ents[i]["name"]))
+                    canonical_uuid = ents[canonical_idx]["uuid"]
+                    for idx in members:
+                        if idx == canonical_idx:
+                            continue
+                        dup = ents[idx]
+                        async with driver.session() as session:
+                            r = await session.run(
+                                "MATCH (d:Entity {uuid: $d})-[r:RELATES_TO]->(t) WHERE t.uuid <> $c "
+                                "MERGE (:Entity {uuid: $c})-[:RELATES_TO]->(t) DELETE r RETURN count(r) AS n",
+                                d=dup["uuid"], c=canonical_uuid)
+                            out = (await r.single())["n"]
+                            r = await session.run(
+                                "MATCH (s)-[r:RELATES_TO]->(d:Entity {uuid: $d}) WHERE s.uuid <> $c "
+                                "MERGE (s)-[:RELATES_TO]->(:Entity {uuid: $c}) DELETE r RETURN count(r) AS n",
+                                d=dup["uuid"], c=canonical_uuid)
+                            inc = (await r.single())["n"]
+                            r = await session.run(
+                                "MATCH (ep)-[r:MENTIONS]->(d:Entity {uuid: $d}) "
+                                "MERGE (ep)-[:MENTIONS]->(:Entity {uuid: $c}) DELETE r RETURN count(r) AS n",
+                                d=dup["uuid"], c=canonical_uuid)
+                            men = (await r.single())["n"]
+                            await session.run("MATCH (d:Entity {uuid: $d}) DETACH DELETE d", d=dup["uuid"])
+                        total_merged += 1
+                        total_edges_redirected += out + inc + men
+                        if verbose:
+                            click.echo(f"      Merged {dup['name']!r} -> {ents[canonical_idx]['name']!r} ({out+inc+men} edges)")
+
+            del ents  # Free memory before next type
+
+        # Summary
+        click.echo(f"\nTotal merge candidates: {len(all_candidates)}")
+        if all_candidates:
+            click.echo("\nTop merge candidates:")
+            for mc in sorted(all_candidates, key=lambda x: -x["similarity"])[:50]:
+                click.echo(
+                    f"  [{mc['similarity']:.4f}] {mc['entity_a']!r} <-> {mc['entity_b']!r} "
+                    f"(type={mc['entity_type']})"
+                )
+            if len(all_candidates) > 50:
+                click.echo(f"  ... and {len(all_candidates) - 50} more")
+
+        if dry_run:
+            click.echo(f"\n[DRY RUN] {len(all_candidates)} pairs would be merged. No changes applied.")
+        else:
+            click.echo(f"\nMerge complete:")
+            click.echo(f"  Entities merged: {total_merged}")
+            click.echo(f"  Edges redirected: {total_edges_redirected}")
+
+    finally:
+        await driver.close()
+
+
+# =============================================================================
+# COMMUNITY DETECTION
+# =============================================================================
+
+
+@cli.command(name="build-communities")
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed progress")
+def build_communities(verbose: bool) -> None:
+    """Build topic communities using Graphiti's label propagation."""
+    asyncio.run(_build_communities(verbose))
+
+
+async def _build_communities(verbose: bool) -> None:
+    """Async implementation of build-communities command."""
+    from knowledge_base.graph.graphiti_client import get_graphiti_client
+    from knowledge_base.graph.vector_indices import create_vector_indices
+
+    click.echo("Connecting to Graphiti...")
+    client = get_graphiti_client()
+    graphiti = await client.get_client()
+
+    group_ids = [settings.GRAPH_GROUP_ID]
+    click.echo(f"Building communities for group_ids={group_ids}...")
+
+    communities, community_edges = await graphiti.build_communities(group_ids=group_ids)
+
+    click.echo(f"Built {len(communities)} communities, {len(community_edges)} community edges")
+
+    if verbose:
+        for c in communities[:20]:
+            click.echo(f"  - {c.name}: {c.summary[:100] if c.summary else '(no summary)'}...")
+
+    # Ensure vector indices exist (including community index)
+    click.echo("Creating/verifying vector indices...")
+    await create_vector_indices(graphiti.driver)
+
+    click.echo("Done!")
+
+
+# =============================================================================
 # SEARCH COMMANDS (Phase 05.5)
 # =============================================================================
 

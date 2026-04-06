@@ -170,6 +170,31 @@ TOOLS = [
         },
     ),
     Tool(
+        name="search_communities",
+        description=(
+            "Search for topic communities in the Keboola knowledge graph. "
+            "Returns groups of related entities with community names, summaries, "
+            "and member lists. Useful for understanding how topics relate."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query for finding relevant communities",
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Number of results (1-10, default 5)",
+                    "minimum": 1,
+                    "maximum": 10,
+                    "default": 5,
+                },
+            },
+            "required": ["query"],
+        },
+    ),
+    Tool(
         name="check_health",
         description=(
             "Check the health of the Keboola knowledge base system. "
@@ -220,6 +245,8 @@ async def execute_tool(
             return await _execute_ingest_document(arguments, user)
         elif tool_name == "submit_feedback":
             return await _execute_submit_feedback(arguments, user)
+        elif tool_name == "search_communities":
+            return await _execute_search_communities(arguments, user)
         elif tool_name == "check_health":
             return await _execute_check_health(arguments, user)
         else:
@@ -233,17 +260,49 @@ async def _execute_ask_question(
     arguments: dict[str, Any],
     user: dict[str, Any],
 ) -> list[TextContent]:
-    """Execute ask_question tool."""
-    from knowledge_base.core.qa import generate_answer, search_with_expansion
+    """Execute ask_question tool.
+
+    Uses a single search call (no query expansion) and wraps the LLM
+    generation in a timeout to stay within MCP response limits.
+    If the LLM times out, the top search results are returned as-is.
+    """
+    import asyncio
+
+    from knowledge_base.config import settings
+    from knowledge_base.core.qa import generate_answer, search_knowledge
 
     question = arguments["question"]
     conversation_history = arguments.get("conversation_history")
 
-    # Search for relevant chunks with query expansion
-    chunks = await search_with_expansion(question)
+    # Single search call (faster than search_with_expansion which does 3x parallel)
+    chunks = await search_knowledge(question, limit=settings.MCP_ASK_QUESTION_SEARCH_LIMIT)
 
-    # Generate answer
-    answer = await generate_answer(question, chunks, conversation_history)
+    # Generate answer with timeout fallback
+    try:
+        answer = await asyncio.wait_for(
+            generate_answer(question, chunks, conversation_history),
+            timeout=settings.MCP_ASK_QUESTION_LLM_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "LLM generation timed out after %.0fs for question: %s",
+            settings.MCP_ASK_QUESTION_LLM_TIMEOUT,
+            question[:100],
+        )
+        # Fallback: format top 3 search results as plain text
+        fallback_lines = [
+            "The answer generation timed out. Here are the most relevant results:\n"
+        ]
+        for i, chunk in enumerate(chunks[:3], 1):
+            title = chunk.page_title if hasattr(chunk, "page_title") else ""
+            url = chunk.metadata.get("url", "") if hasattr(chunk, "metadata") else ""
+            snippet = chunk.content[:300] if chunk.content else "(no content)"
+            header = f"**{i}. {title}**" if title else f"**{i}.**"
+            fallback_lines.append(header)
+            if url:
+                fallback_lines.append(f"URL: {url}")
+            fallback_lines.append(snippet + "\n")
+        return [TextContent(type="text", text="\n".join(fallback_lines))]
 
     # Build sources section (skip empty, deduplicate)
     sources = []
@@ -519,6 +578,34 @@ async def _execute_submit_feedback(
             f"**Feedback ID:** {feedback.id}"
         ),
     )]
+
+
+async def _execute_search_communities(
+    arguments: dict[str, Any],
+    user: dict[str, Any],
+) -> list[TextContent]:
+    """Execute search_communities tool."""
+    from knowledge_base.core.qa import search_communities
+
+    query = arguments["query"]
+    top_k = arguments.get("top_k", 5)
+
+    results = await search_communities(query, limit=top_k)
+
+    if not results:
+        return [TextContent(type="text", text=f"No communities found for: {query}")]
+
+    lines = [f"Found {len(results)} communities for: {query}\n"]
+    for i, c in enumerate(results, 1):
+        members_str = ", ".join(c["members"][:10]) if c["members"] else "(no members)"
+        if len(c["members"]) > 10:
+            members_str += f" ... and {len(c['members']) - 10} more"
+        lines.append(f"### {i}. {c['name']}")
+        lines.append(f"**Score:** {c['score']:.3f}")
+        lines.append(f"**Summary:** {c['summary']}")
+        lines.append(f"**Members:** {members_str}\n")
+
+    return [TextContent(type="text", text="\n".join(lines))]
 
 
 async def _execute_check_health(
