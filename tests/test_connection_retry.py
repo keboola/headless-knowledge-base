@@ -90,18 +90,24 @@ class TestSearchChunksRetry:
         """search_chunks retries once on TCPTransport RuntimeError."""
         mock_graphiti = AsyncMock()
         # First call raises connection error, second succeeds
-        mock_result = MagicMock()
-        mock_result.episodes = []
-        mock_result.score = 0.9
-        mock_result.content = "This is test content that is long enough to pass the minimum content length filter"
-        mock_result.name = "test"
-        mock_result.source_description = None
-        mock_result.fact = None
+        mock_edge = MagicMock()
+        mock_edge.episodes = []
+        mock_edge.score = 0.9
+        mock_edge.content = "This is test content that is long enough to pass the minimum content length filter"
+        mock_edge.name = "test"
+        mock_edge.source_description = None
+        mock_edge.fact = None
 
-        mock_graphiti.search = AsyncMock(
+        mock_search_results = MagicMock()
+        mock_search_results.edges = [mock_edge]
+        mock_search_results.edge_reranker_scores = [0.9]
+        mock_search_results.episodes = []
+        mock_search_results.episode_reranker_scores = []
+
+        mock_graphiti.search_ = AsyncMock(
             side_effect=[
                 RuntimeError("unable to perform operation on <TCPTransport closed=True>"),
-                [mock_result],
+                mock_search_results,
             ]
         )
         retriever._graphiti = mock_graphiti
@@ -113,13 +119,13 @@ class TestSearchChunksRetry:
 
         assert len(results) == 1
         assert retriever.client.reset_and_reconnect.call_count == 1
-        assert mock_graphiti.search.call_count == 2
+        assert mock_graphiti.search_.call_count == 2
 
     @pytest.mark.asyncio
     async def test_no_retry_on_regular_error(self, retriever):
         """search_chunks does NOT retry on non-connection errors."""
         mock_graphiti = AsyncMock()
-        mock_graphiti.search = AsyncMock(side_effect=ValueError("bad query"))
+        mock_graphiti.search_ = AsyncMock(side_effect=ValueError("bad query"))
         retriever._graphiti = mock_graphiti
         retriever._get_graphiti = AsyncMock(return_value=mock_graphiti)
 
@@ -127,13 +133,13 @@ class TestSearchChunksRetry:
 
         assert results == []
         assert retriever.client.reset_and_reconnect.call_count == 0
-        assert mock_graphiti.search.call_count == 1
+        assert mock_graphiti.search_.call_count == 1
 
     @pytest.mark.asyncio
     async def test_returns_empty_after_exhausted_retries(self, retriever):
         """search_chunks returns empty list when all retries fail."""
         mock_graphiti = AsyncMock()
-        mock_graphiti.search = AsyncMock(
+        mock_graphiti.search_ = AsyncMock(
             side_effect=RuntimeError("unable to perform operation on <TCPTransport closed=True>")
         )
         retriever._graphiti = mock_graphiti
@@ -144,21 +150,27 @@ class TestSearchChunksRetry:
         assert results == []
         assert retriever.client.reset_and_reconnect.call_count == 1
         # 2 attempts: initial + 1 retry
-        assert mock_graphiti.search.call_count == 2
+        assert mock_graphiti.search_.call_count == 2
 
     @pytest.mark.asyncio
     async def test_succeeds_without_retry(self, retriever):
         """search_chunks succeeds on first attempt without retry."""
         mock_graphiti = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.episodes = []
-        mock_result.score = 0.9
-        mock_result.content = "This is test content that is long enough to pass the minimum content length filter"
-        mock_result.name = "test"
-        mock_result.source_description = None
-        mock_result.fact = None
+        mock_edge = MagicMock()
+        mock_edge.episodes = []
+        mock_edge.score = 0.9
+        mock_edge.content = "This is test content that is long enough to pass the minimum content length filter"
+        mock_edge.name = "test"
+        mock_edge.source_description = None
+        mock_edge.fact = None
 
-        mock_graphiti.search = AsyncMock(return_value=[mock_result])
+        mock_search_results = MagicMock()
+        mock_search_results.edges = [mock_edge]
+        mock_search_results.edge_reranker_scores = [0.9]
+        mock_search_results.episodes = []
+        mock_search_results.episode_reranker_scores = []
+
+        mock_graphiti.search_ = AsyncMock(return_value=mock_search_results)
         retriever._graphiti = mock_graphiti
         retriever._get_graphiti = AsyncMock(return_value=mock_graphiti)
 
@@ -166,7 +178,7 @@ class TestSearchChunksRetry:
 
         assert len(results) == 1
         assert retriever.client.reset_and_reconnect.call_count == 0
-        assert mock_graphiti.search.call_count == 1
+        assert mock_graphiti.search_.call_count == 1
 
 
 class TestLookupEpisodesRetry:
