@@ -8,6 +8,7 @@ from typing import Callable
 import httpx
 from tenacity import (
     retry,
+    retry_if_exception,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
@@ -271,9 +272,10 @@ class VertexAIEmbeddings(BaseEmbeddings):
         return [e.values for e in embeddings]
 
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=30),
-        retry=retry_if_exception_type((ConnectionError, TimeoutError)),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=2, min=4, max=60),
+        retry=retry_if_exception_type((ConnectionError, TimeoutError))
+        | retry_if_exception(lambda e: "429" in str(e) or "ResourceExhausted" in type(e).__name__),
     )
     async def embed(
         self, texts: list[str], task_type: str = "RETRIEVAL_DOCUMENT"
