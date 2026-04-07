@@ -26,6 +26,7 @@ Optional fuzzy merge (BATCH_ENTITY_FUZZY_MERGE_ENABLED):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import re
@@ -456,6 +457,9 @@ class EntityResolver:
                 batch = canonical_names[i : i + batch_size]
                 batch_embeddings = await embedder.embed(batch)
                 all_embeddings.extend(batch_embeddings)
+                # Rate-limit between batches to avoid Vertex AI 429
+                if i + batch_size < len(canonical_names):
+                    await asyncio.sleep(1.0)
 
             # Pairwise cosine similarity + union-find clustering
             n = len(keys)
