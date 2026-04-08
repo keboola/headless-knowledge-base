@@ -1633,7 +1633,7 @@ async def _fuzzy_merge(dry_run: bool, threshold: float | None, verbose: bool) ->
         async with driver.session() as session:
             result = await session.run(
                 "MATCH (e:Entity) WHERE e.name_embedding IS NOT NULL "
-                "RETURN e.entity_type AS entity_type, count(e) AS cnt "
+                "RETURN coalesce(e.entity_type, head([l IN labels(e) WHERE l <> 'Entity'])) AS entity_type, count(e) AS cnt "
                 "ORDER BY cnt DESC"
             )
             type_counts = [(r["entity_type"] or "unknown", r["cnt"]) async for r in result]
@@ -1662,8 +1662,8 @@ async def _fuzzy_merge(dry_run: bool, threshold: float | None, verbose: bool) ->
             # Fetch entities for this type only
             async with driver.session() as session:
                 result = await session.run(
-                    "MATCH (e:Entity) WHERE e.entity_type = $etype "
-                    "AND e.name_embedding IS NOT NULL "
+                    "MATCH (e:Entity) WHERE e.name_embedding IS NOT NULL "
+                    "AND (e.entity_type = $etype OR ($etype IN labels(e))) "
                     "RETURN e.uuid AS uuid, e.name AS name, "
                     "e.name_embedding AS name_embedding",
                     etype=etype,

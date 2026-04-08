@@ -330,6 +330,25 @@ class TestLoadEntities:
         assert row["summary"] == "An engineer."
 
     @pytest.mark.asyncio
+    async def test_entity_data_includes_entity_type(
+        self, loader: Neo4jBulkLoader, mock_driver: AsyncMock
+    ) -> None:
+        """Entity batch rows include entity_type and SET clause writes it."""
+        entities = [
+            _make_entity(uuid="ent-1", entity_type="Technology")
+        ]
+
+        await loader.load_entities(entities)
+
+        # Verify entity_type in batch data
+        batch_data = mock_driver.execute_query.call_args[1]["params"]["batch"]
+        assert batch_data[0]["entity_type"] == "Technology"
+
+        # Verify SET clause includes entity_type
+        query = mock_driver.execute_query.call_args[0][0]
+        assert "n.entity_type = ent.entity_type" in query
+
+    @pytest.mark.asyncio
     async def test_entity_without_embedding_uses_empty_list(
         self, loader: Neo4jBulkLoader, mock_driver: AsyncMock
     ) -> None:

@@ -211,6 +211,7 @@ class Neo4jBulkLoader:
             row = {
                 "uuid": ent.uuid,
                 "name": ent.canonical_name,
+                "entity_type": ent.entity_type,
                 "group_id": self.group_id,
                 "name_embedding": ent.name_embedding or [],
                 "summary": ent.summary,
@@ -226,6 +227,7 @@ class Neo4jBulkLoader:
                 "UNWIND $batch AS ent "
                 f"MERGE (n:Entity:{type_label} {{uuid: ent.uuid}}) "
                 "SET n.name = ent.name, "
+                "    n.entity_type = ent.entity_type, "
                 "    n.group_id = ent.group_id, "
                 "    n.name_embedding = ent.name_embedding, "
                 "    n.summary = ent.summary, "
