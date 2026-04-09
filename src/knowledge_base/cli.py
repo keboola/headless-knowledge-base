@@ -1654,6 +1654,11 @@ async def _fuzzy_merge_apply(
 ) -> tuple[int, int]:
     """Apply merge operations for a set of candidates using Union-Find clustering.
 
+    Clusters larger than FUZZY_MERGE_MAX_CLUSTER_SIZE are skipped to prevent
+    chain-merge mega-clusters from corrupting the graph.
+
+    Uses MATCH (not MERGE) for the canonical entity to avoid creating new nodes.
+
     Returns (entities_merged, edges_redirected).
     """
     from collections import defaultdict
@@ -1662,6 +1667,8 @@ async def _fuzzy_merge_apply(
 
     if not candidates:
         return 0, 0
+
+    max_cluster = settings.FUZZY_MERGE_MAX_CLUSTER_SIZE
 
     # Build uuid->index mapping
     uuid_set: dict[str, int] = {}
@@ -1686,10 +1693,21 @@ async def _fuzzy_merge_apply(
 
     total_merged = 0
     total_edges = 0
+    skipped_clusters = 0
 
     for members in clusters.values():
         if len(members) <= 1:
             continue
+        if max_cluster and len(members) > max_cluster:
+            skipped_clusters += 1
+            if verbose:
+                sample_names = [name_map[uuid_list[i]] for i in members[:3]]
+                click.echo(
+                    f"    Skipping cluster of {len(members)} entities "
+                    f"(exceeds max {max_cluster}): {sample_names!r}..."
+                )
+            continue
+
         # Pick canonical: longest name
         canonical_idx = max(members, key=lambda i: len(name_map[uuid_list[i]]))
         canonical_uuid = uuid_list[canonical_idx]
@@ -1698,30 +1716,40 @@ async def _fuzzy_merge_apply(
             if idx == canonical_idx:
                 continue
             dup_uuid = uuid_list[idx]
+            # Single Cypher query: redirect all edges then delete duplicate.
+            # Uses MATCH (not MERGE) for canonical to avoid creating new nodes.
             async with driver.session() as session:
                 r = await session.run(
-                    "MATCH (d:Entity {uuid: $d})-[r:RELATES_TO]->(t) WHERE t.uuid <> $c "
-                    "MERGE (:Entity {uuid: $c})-[:RELATES_TO]->(t) DELETE r RETURN count(r) AS n",
-                    d=dup_uuid, c=canonical_uuid)
-                out = (await r.single())["n"]
-                r = await session.run(
-                    "MATCH (s)-[r:RELATES_TO]->(d:Entity {uuid: $d}) WHERE s.uuid <> $c "
-                    "MERGE (s)-[:RELATES_TO]->(:Entity {uuid: $c}) DELETE r RETURN count(r) AS n",
-                    d=dup_uuid, c=canonical_uuid)
-                inc = (await r.single())["n"]
-                r = await session.run(
-                    "MATCH (ep)-[r:MENTIONS]->(d:Entity {uuid: $d}) "
-                    "MERGE (ep)-[:MENTIONS]->(:Entity {uuid: $c}) DELETE r RETURN count(r) AS n",
-                    d=dup_uuid, c=canonical_uuid)
-                men = (await r.single())["n"]
-                await session.run("MATCH (d:Entity {uuid: $d}) DETACH DELETE d", d=dup_uuid)
+                    "MATCH (c:Entity {uuid: $c}), (d:Entity {uuid: $d}) "
+                    "OPTIONAL MATCH (d)-[r1:RELATES_TO]->(t) WHERE t.uuid <> $c "
+                    "OPTIONAL MATCH (s)-[r2:RELATES_TO]->(d) WHERE s.uuid <> $c "
+                    "OPTIONAL MATCH (ep)-[r3:MENTIONS]->(d) "
+                    "WITH c, d, "
+                    "     collect(DISTINCT r1) AS out_rels, collect(DISTINCT t) AS out_targets, "
+                    "     collect(DISTINCT r2) AS in_rels, collect(DISTINCT s) AS in_sources, "
+                    "     collect(DISTINCT r3) AS men_rels, collect(DISTINCT ep) AS men_eps "
+                    "FOREACH (t IN out_targets | MERGE (c)-[:RELATES_TO]->(t)) "
+                    "FOREACH (s IN in_sources | MERGE (s)-[:RELATES_TO]->(c)) "
+                    "FOREACH (ep IN men_eps | MERGE (ep)-[:MENTIONS]->(c)) "
+                    "FOREACH (r IN out_rels | DELETE r) "
+                    "FOREACH (r IN in_rels | DELETE r) "
+                    "FOREACH (r IN men_rels | DELETE r) "
+                    "DETACH DELETE d "
+                    "RETURN size(out_rels) + size(in_rels) + size(men_rels) AS edges",
+                    c=canonical_uuid, d=dup_uuid,
+                )
+                record = await r.single()
+                edge_count = record["edges"] if record else 0
             total_merged += 1
-            total_edges += out + inc + men
+            total_edges += edge_count
             if verbose:
                 click.echo(
                     f"      Merged {name_map[dup_uuid]!r} -> "
-                    f"{name_map[canonical_uuid]!r} ({out+inc+men} edges)"
+                    f"{name_map[canonical_uuid]!r} ({edge_count} edges)"
                 )
+
+    if skipped_clusters:
+        click.echo(f"    Skipped {skipped_clusters} clusters exceeding max size {max_cluster}")
 
     return total_merged, total_edges
 
