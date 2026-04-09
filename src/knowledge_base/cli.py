@@ -1760,6 +1760,22 @@ async def _fuzzy_merge(dry_run: bool, threshold: float | None, verbose: bool) ->
     )
 
     try:
+        # Pre-flight: verify HNSW index exists
+        async with driver.session() as session:
+            result = await session.run(
+                "SHOW INDEXES YIELD name, type, state "
+                "WHERE type = 'VECTOR' AND name = 'entity_name_embedding' "
+                "RETURN name, state"
+            )
+            idx = await result.single()
+        if not idx:
+            click.echo("Error: HNSW index 'entity_name_embedding' not found. "
+                        "Run vector index creation first.", err=True)
+            sys.exit(1)
+        if idx["state"] != "ONLINE":
+            click.echo(f"Warning: HNSW index state is '{idx['state']}' (not ONLINE). "
+                        "Queries may be slow or incomplete.")
+
         # Step 1: Discover entity types
         click.echo("\nStep 1: Discovering entity types...")
         async with driver.session() as session:
@@ -1835,6 +1851,7 @@ async def _fuzzy_merge(dry_run: bool, threshold: float | None, verbose: bool) ->
 # =============================================================================
 
 # Regex patterns for junk entity names that should be removed.
+# Patterns are validated at import time to catch syntax errors early.
 _JUNK_ENTITY_PATTERNS: list[tuple[str, str]] = [
     (r"^[0-9a-f]{8}-[0-9a-f]{4}-", "UUID"),
     (r"^[0-9a-f]{32,64}$", "SHA hash"),
@@ -1843,6 +1860,14 @@ _JUNK_ENTITY_PATTERNS: list[tuple[str, str]] = [
     (r"^https?://", "URL"),
     (r"^[A-Z]:\\\\", "Windows path"),
 ]
+
+# Validate all patterns compile at import time (fail fast on bad regex)
+import re as _re
+for _pat, _label in _JUNK_ENTITY_PATTERNS:
+    try:
+        _re.compile(_pat)
+    except _re.error as _e:
+        raise ValueError(f"Invalid junk entity regex pattern '{_label}': {_e}") from _e
 
 
 @cli.command(name="prune-entities")
