@@ -175,6 +175,14 @@ class Settings(BaseSettings):
     BATCH_ENTITY_FUZZY_MERGE_ENABLED: bool = False
     BATCH_FUZZY_MERGE_BATCH_SIZE: int = 500
 
+    # HNSW-accelerated fuzzy merge (CLI: fuzzy-merge)
+    FUZZY_MERGE_HNSW_K: int = 10  # Nearest neighbors per entity in HNSW query
+    FUZZY_MERGE_QUERY_BATCH_SIZE: int = 200  # Entities per HNSW batch query
+    FUZZY_MERGE_MAX_TYPE_SIZE: int = 0  # 0 = no limit (process all types)
+
+    # Entity pruning (CLI: prune-entities)
+    PRUNE_ENTITY_MIN_NAME_LENGTH: int = 3
+
     # Community Detection (opt-in)
     COMMUNITY_DETECTION_ENABLED: bool = False
     COMMUNITY_MIN_CLUSTER_SIZE: int = 3

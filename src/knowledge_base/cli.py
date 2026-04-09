@@ -1587,33 +1587,166 @@ async def _keboola_batch_import(
 @click.option("--threshold", type=float, default=None, help="Override similarity threshold (default from config)")
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed progress")
 def fuzzy_merge(dry_run: bool, threshold: float | None, verbose: bool) -> None:
-    """Find and merge near-duplicate entities in the knowledge graph."""
+    """Find and merge near-duplicate entities using HNSW vector index."""
     asyncio.run(_fuzzy_merge(dry_run, threshold, verbose))
+
+
+async def _fuzzy_merge_discover_candidates_hnsw(
+    driver: "AsyncDriver",
+    etype: str,
+    cnt: int,
+    similarity_threshold: float,
+    verbose: bool,
+) -> list[dict]:
+    """Discover merge candidates for a single entity type via HNSW KNN.
+
+    Instead of O(n^2) pairwise comparison, queries the HNSW vector index
+    for each entity's K nearest neighbors.  Complexity: O(n * K * log N).
+    """
+    hnsw_k = settings.FUZZY_MERGE_HNSW_K
+    batch_size = settings.FUZZY_MERGE_QUERY_BATCH_SIZE
+    candidates: list[dict] = []
+    offset = 0
+
+    while offset < cnt:
+        async with driver.session() as session:
+            result = await session.run(
+                "MATCH (e:Entity) "
+                "WHERE e.entity_type = $etype AND e.name_embedding IS NOT NULL "
+                "WITH e ORDER BY e.uuid SKIP $offset LIMIT $batch_size "
+                "CALL db.index.vector.queryNodes('entity_name_embedding', $k, e.name_embedding) "
+                "YIELD node AS candidate, score "
+                "WHERE candidate.uuid <> e.uuid "
+                "  AND candidate.entity_type = $etype "
+                "  AND score >= $threshold "
+                "  AND e.uuid < candidate.uuid "
+                "RETURN e.uuid AS src_uuid, e.name AS src_name, "
+                "       candidate.uuid AS cand_uuid, candidate.name AS cand_name, score",
+                etype=etype,
+                offset=offset,
+                batch_size=batch_size,
+                k=hnsw_k,
+                threshold=similarity_threshold,
+            )
+            records = [r async for r in result]
+
+        for r in records:
+            candidates.append({
+                "entity_a": r["src_name"],
+                "uuid_a": r["src_uuid"],
+                "entity_b": r["cand_name"],
+                "uuid_b": r["cand_uuid"],
+                "entity_type": etype,
+                "similarity": r["score"],
+            })
+
+        offset += batch_size
+        if verbose and offset % (batch_size * 5) == 0:
+            click.echo(f"    ... scanned {min(offset, cnt)}/{cnt} entities, {len(candidates)} candidates so far")
+
+    return candidates
+
+
+async def _fuzzy_merge_apply(
+    driver: "AsyncDriver",
+    candidates: list[dict],
+    verbose: bool,
+) -> tuple[int, int]:
+    """Apply merge operations for a set of candidates using Union-Find clustering.
+
+    Returns (entities_merged, edges_redirected).
+    """
+    from collections import defaultdict
+
+    from knowledge_base.batch.resolver import _UnionFind
+
+    if not candidates:
+        return 0, 0
+
+    # Build uuid->index mapping
+    uuid_set: dict[str, int] = {}
+    for c in candidates:
+        for u in (c["uuid_a"], c["uuid_b"]):
+            if u not in uuid_set:
+                uuid_set[u] = len(uuid_set)
+
+    uuid_list = list(uuid_set.keys())
+    name_map = {}
+    for c in candidates:
+        name_map[c["uuid_a"]] = c["entity_a"]
+        name_map[c["uuid_b"]] = c["entity_b"]
+
+    uf = _UnionFind(len(uuid_list))
+    for c in candidates:
+        uf.union(uuid_set[c["uuid_a"]], uuid_set[c["uuid_b"]])
+
+    clusters: dict[int, list[int]] = defaultdict(list)
+    for i in range(len(uuid_list)):
+        clusters[uf.find(i)].append(i)
+
+    total_merged = 0
+    total_edges = 0
+
+    for members in clusters.values():
+        if len(members) <= 1:
+            continue
+        # Pick canonical: longest name
+        canonical_idx = max(members, key=lambda i: len(name_map[uuid_list[i]]))
+        canonical_uuid = uuid_list[canonical_idx]
+
+        for idx in members:
+            if idx == canonical_idx:
+                continue
+            dup_uuid = uuid_list[idx]
+            async with driver.session() as session:
+                r = await session.run(
+                    "MATCH (d:Entity {uuid: $d})-[r:RELATES_TO]->(t) WHERE t.uuid <> $c "
+                    "MERGE (:Entity {uuid: $c})-[:RELATES_TO]->(t) DELETE r RETURN count(r) AS n",
+                    d=dup_uuid, c=canonical_uuid)
+                out = (await r.single())["n"]
+                r = await session.run(
+                    "MATCH (s)-[r:RELATES_TO]->(d:Entity {uuid: $d}) WHERE s.uuid <> $c "
+                    "MERGE (s)-[:RELATES_TO]->(:Entity {uuid: $c}) DELETE r RETURN count(r) AS n",
+                    d=dup_uuid, c=canonical_uuid)
+                inc = (await r.single())["n"]
+                r = await session.run(
+                    "MATCH (ep)-[r:MENTIONS]->(d:Entity {uuid: $d}) "
+                    "MERGE (ep)-[:MENTIONS]->(:Entity {uuid: $c}) DELETE r RETURN count(r) AS n",
+                    d=dup_uuid, c=canonical_uuid)
+                men = (await r.single())["n"]
+                await session.run("MATCH (d:Entity {uuid: $d}) DETACH DELETE d", d=dup_uuid)
+            total_merged += 1
+            total_edges += out + inc + men
+            if verbose:
+                click.echo(
+                    f"      Merged {name_map[dup_uuid]!r} -> "
+                    f"{name_map[canonical_uuid]!r} ({out+inc+men} edges)"
+                )
+
+    return total_merged, total_edges
 
 
 async def _fuzzy_merge(dry_run: bool, threshold: float | None, verbose: bool) -> None:
     """Async implementation of fuzzy-merge command.
 
-    Connects to Neo4j, fetches all Entity nodes with name embeddings,
-    groups by entity_type, computes pairwise cosine similarity, and
-    merges near-duplicates (redirect edges + delete duplicate node).
+    Uses HNSW vector index for O(n * K * log N) candidate discovery
+    instead of O(n^2) pairwise comparison.  Handles entity types of any size.
     """
-    import math
-    from collections import defaultdict
-
     from neo4j import AsyncGraphDatabase
 
-    from knowledge_base.batch.resolver import _cosine_similarity, _UnionFind
-
     similarity_threshold = threshold if threshold is not None else settings.BATCH_ENTITY_SIMILARITY_THRESHOLD
+    max_type_size = settings.FUZZY_MERGE_MAX_TYPE_SIZE
 
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    click.echo("Fuzzy Entity Merge")
+    click.echo("Fuzzy Entity Merge (HNSW-accelerated)")
     click.echo("=" * 60)
     click.echo(f"  Neo4j URI: {settings.NEO4J_URI}")
     click.echo(f"  Similarity threshold: {similarity_threshold}")
+    click.echo(f"  HNSW K: {settings.FUZZY_MERGE_HNSW_K}")
+    click.echo(f"  Query batch size: {settings.FUZZY_MERGE_QUERY_BATCH_SIZE}")
+    click.echo(f"  Max type size: {max_type_size or 'unlimited'}")
     click.echo(f"  Mode: {'DRY RUN' if dry_run else 'APPLY'}")
     click.echo("=" * 60)
 
@@ -1627,9 +1760,8 @@ async def _fuzzy_merge(dry_run: bool, threshold: float | None, verbose: bool) ->
     )
 
     try:
-        # Step 1: Get entity type counts (no embeddings loaded yet)
+        # Step 1: Discover entity types
         click.echo("\nStep 1: Discovering entity types...")
-        max_type_size = settings.BATCH_FUZZY_MERGE_BATCH_SIZE
         async with driver.session() as session:
             result = await session.run(
                 "MATCH (e:Entity) WHERE e.name_embedding IS NOT NULL "
@@ -1641,11 +1773,12 @@ async def _fuzzy_merge(dry_run: bool, threshold: float | None, verbose: bool) ->
         total_entities = sum(c for _, c in type_counts)
         click.echo(f"  {len(type_counts)} entity types, {total_entities} total entities with embeddings")
         for etype, cnt in type_counts:
-            flag = " [SKIP - too large for pairwise]" if cnt > max_type_size else ""
+            skip = max_type_size and cnt > max_type_size
+            flag = f" [SKIP - exceeds {max_type_size} limit]" if skip else ""
             click.echo(f"    {etype}: {cnt}{flag}")
 
-        # Step 2: Process each type independently (one at a time to control memory)
-        click.echo("\nStep 2: Computing pairwise similarities per type...")
+        # Step 2: HNSW-based candidate discovery per type
+        click.echo("\nStep 2: Finding merge candidates via HNSW index...")
         all_candidates: list[dict] = []
         total_merged = 0
         total_edges_redirected = 0
@@ -1653,82 +1786,26 @@ async def _fuzzy_merge(dry_run: bool, threshold: float | None, verbose: bool) ->
         for etype, cnt in type_counts:
             if cnt <= 1:
                 continue
-            if cnt > max_type_size:
+            if max_type_size and cnt > max_type_size:
                 click.echo(f"  Skipping {etype} ({cnt} entities > {max_type_size} limit)")
                 continue
 
             click.echo(f"  Processing {etype} ({cnt} entities)...")
 
-            # Fetch entities for this type only
-            async with driver.session() as session:
-                result = await session.run(
-                    "MATCH (e:Entity) WHERE e.name_embedding IS NOT NULL "
-                    "AND (e.entity_type = $etype OR ($etype IN labels(e))) "
-                    "RETURN e.uuid AS uuid, e.name AS name, "
-                    "e.name_embedding AS name_embedding",
-                    etype=etype,
-                )
-                ents = [
-                    {"uuid": r["uuid"], "name": r["name"], "embedding": list(r["name_embedding"])}
-                    async for r in result
-                ]
-
-            n = len(ents)
-            uf = _UnionFind(n)
-            type_candidates: list[dict] = []
-
-            for i in range(n):
-                for j in range(i + 1, n):
-                    sim = _cosine_similarity(ents[i]["embedding"], ents[j]["embedding"])
-                    if sim >= similarity_threshold:
-                        uf.union(i, j)
-                        type_candidates.append({
-                            "entity_a": ents[i]["name"], "uuid_a": ents[i]["uuid"],
-                            "entity_b": ents[j]["name"], "uuid_b": ents[j]["uuid"],
-                            "entity_type": etype, "similarity": sim,
-                        })
+            type_candidates = await _fuzzy_merge_discover_candidates_hnsw(
+                driver, etype, cnt, similarity_threshold, verbose,
+            )
 
             all_candidates.extend(type_candidates)
             click.echo(f"    Found {len(type_candidates)} merge candidates")
 
             # Apply merges for this type if not dry-run
             if not dry_run and type_candidates:
-                clusters: dict[int, list[int]] = defaultdict(list)
-                for i in range(n):
-                    clusters[uf.find(i)].append(i)
-
-                for members in clusters.values():
-                    if len(members) <= 1:
-                        continue
-                    canonical_idx = max(members, key=lambda i: len(ents[i]["name"]))
-                    canonical_uuid = ents[canonical_idx]["uuid"]
-                    for idx in members:
-                        if idx == canonical_idx:
-                            continue
-                        dup = ents[idx]
-                        async with driver.session() as session:
-                            r = await session.run(
-                                "MATCH (d:Entity {uuid: $d})-[r:RELATES_TO]->(t) WHERE t.uuid <> $c "
-                                "MERGE (:Entity {uuid: $c})-[:RELATES_TO]->(t) DELETE r RETURN count(r) AS n",
-                                d=dup["uuid"], c=canonical_uuid)
-                            out = (await r.single())["n"]
-                            r = await session.run(
-                                "MATCH (s)-[r:RELATES_TO]->(d:Entity {uuid: $d}) WHERE s.uuid <> $c "
-                                "MERGE (s)-[:RELATES_TO]->(:Entity {uuid: $c}) DELETE r RETURN count(r) AS n",
-                                d=dup["uuid"], c=canonical_uuid)
-                            inc = (await r.single())["n"]
-                            r = await session.run(
-                                "MATCH (ep)-[r:MENTIONS]->(d:Entity {uuid: $d}) "
-                                "MERGE (ep)-[:MENTIONS]->(:Entity {uuid: $c}) DELETE r RETURN count(r) AS n",
-                                d=dup["uuid"], c=canonical_uuid)
-                            men = (await r.single())["n"]
-                            await session.run("MATCH (d:Entity {uuid: $d}) DETACH DELETE d", d=dup["uuid"])
-                        total_merged += 1
-                        total_edges_redirected += out + inc + men
-                        if verbose:
-                            click.echo(f"      Merged {dup['name']!r} -> {ents[canonical_idx]['name']!r} ({out+inc+men} edges)")
-
-            del ents  # Free memory before next type
+                merged, edges = await _fuzzy_merge_apply(
+                    driver, type_candidates, verbose,
+                )
+                total_merged += merged
+                total_edges_redirected += edges
 
         # Summary
         click.echo(f"\nTotal merge candidates: {len(all_candidates)}")
@@ -1748,6 +1825,151 @@ async def _fuzzy_merge(dry_run: bool, threshold: float | None, verbose: bool) ->
             click.echo(f"\nMerge complete:")
             click.echo(f"  Entities merged: {total_merged}")
             click.echo(f"  Edges redirected: {total_edges_redirected}")
+
+    finally:
+        await driver.close()
+
+
+# =============================================================================
+# ENTITY PRUNING
+# =============================================================================
+
+# Regex patterns for junk entity names that should be removed.
+_JUNK_ENTITY_PATTERNS: list[tuple[str, str]] = [
+    (r"^[0-9a-f]{8}-[0-9a-f]{4}-", "UUID"),
+    (r"^[0-9a-f]{32,64}$", "SHA hash"),
+    (r"^\d{4,}$", "numeric ID"),
+    (r"^(PLG|PST|CFT|CT|QID)-?[0-9a-f]", "internal ID"),
+    (r"^https?://", "URL"),
+    (r"^[A-Z]:\\\\", "Windows path"),
+]
+
+
+@cli.command(name="prune-entities")
+@click.option("--dry-run", is_flag=True, help="Report counts without deleting")
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed progress")
+def prune_entities(dry_run: bool, verbose: bool) -> None:
+    """Remove noise entities (UUIDs, hashes, short names, internal IDs)."""
+    asyncio.run(_prune_entities(dry_run, verbose))
+
+
+async def _prune_entities(dry_run: bool, verbose: bool) -> None:
+    """Async implementation of prune-entities command."""
+    import re
+
+    from neo4j import AsyncGraphDatabase
+
+    min_length = settings.PRUNE_ENTITY_MIN_NAME_LENGTH
+
+    click.echo("Entity Pruning")
+    click.echo("=" * 60)
+    click.echo(f"  Neo4j URI: {settings.NEO4J_URI}")
+    click.echo(f"  Min name length: {min_length}")
+    click.echo(f"  Junk patterns: {len(_JUNK_ENTITY_PATTERNS)}")
+    click.echo(f"  Mode: {'DRY RUN' if dry_run else 'APPLY'}")
+    click.echo("=" * 60)
+
+    if not settings.NEO4J_URI or not settings.NEO4J_PASSWORD:
+        click.echo("Error: NEO4J_URI and NEO4J_PASSWORD are required.", err=True)
+        sys.exit(1)
+
+    driver = AsyncGraphDatabase.driver(
+        settings.NEO4J_URI,
+        auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD),
+    )
+
+    total_pruned = 0
+
+    try:
+        # 1. Short names
+        click.echo(f"\n1. Entities with name length <= {min_length - 1}...")
+        async with driver.session() as session:
+            result = await session.run(
+                "MATCH (e:Entity) WHERE size(e.name) < $min_len "
+                "RETURN count(e) AS cnt",
+                min_len=min_length,
+            )
+            short_count = (await result.single())["cnt"]
+
+        click.echo(f"   Found: {short_count}")
+        if short_count and not dry_run:
+            async with driver.session() as session:
+                result = await session.run(
+                    "MATCH (e:Entity) WHERE size(e.name) < $min_len "
+                    "DETACH DELETE e RETURN count(e) AS deleted",
+                    min_len=min_length,
+                )
+                deleted = (await result.single())["deleted"]
+            click.echo(f"   Deleted: {deleted}")
+            total_pruned += deleted
+
+        # 2. Regex junk patterns
+        for i, (pattern, label) in enumerate(_JUNK_ENTITY_PATTERNS, start=2):
+            click.echo(f"\n{i}. {label} pattern: {pattern}")
+            async with driver.session() as session:
+                result = await session.run(
+                    "MATCH (e:Entity) WHERE e.name =~ $pattern "
+                    "RETURN count(e) AS cnt",
+                    pattern=pattern,
+                )
+                match_count = (await result.single())["cnt"]
+
+            click.echo(f"   Found: {match_count}")
+            if match_count and not dry_run:
+                async with driver.session() as session:
+                    result = await session.run(
+                        "MATCH (e:Entity) WHERE e.name =~ $pattern "
+                        "DETACH DELETE e RETURN count(e) AS deleted",
+                        pattern=pattern,
+                    )
+                    deleted = (await result.single())["deleted"]
+                click.echo(f"   Deleted: {deleted}")
+                total_pruned += deleted
+
+            if verbose and match_count:
+                async with driver.session() as session:
+                    result = await session.run(
+                        "MATCH (e:Entity) WHERE e.name =~ $pattern "
+                        "RETURN e.name AS name LIMIT 5",
+                        pattern=pattern,
+                    )
+                    samples = [r["name"] async for r in result]
+                if samples:
+                    click.echo(f"   Samples: {samples}")
+
+        # 3. File paths starting with /
+        step_num = len(_JUNK_ENTITY_PATTERNS) + 2
+        click.echo(f"\n{step_num}. File paths (starts with '/')...")
+        async with driver.session() as session:
+            result = await session.run(
+                "MATCH (e:Entity) WHERE e.name STARTS WITH '/' "
+                "RETURN count(e) AS cnt"
+            )
+            path_count = (await result.single())["cnt"]
+
+        click.echo(f"   Found: {path_count}")
+        if path_count and not dry_run:
+            async with driver.session() as session:
+                result = await session.run(
+                    "MATCH (e:Entity) WHERE e.name STARTS WITH '/' "
+                    "DETACH DELETE e RETURN count(e) AS deleted"
+                )
+                deleted = (await result.single())["deleted"]
+            click.echo(f"   Deleted: {deleted}")
+            total_pruned += deleted
+
+        # Summary
+        click.echo(f"\n{'=' * 60}")
+        if dry_run:
+            click.echo("[DRY RUN] No entities were deleted.")
+        else:
+            click.echo(f"Total entities pruned: {total_pruned}")
+
+        # Show remaining entity count
+        async with driver.session() as session:
+            result = await session.run("MATCH (e:Entity) RETURN count(e) AS cnt")
+            remaining = (await result.single())["cnt"]
+        click.echo(f"Remaining entities: {remaining}")
 
     finally:
         await driver.close()
