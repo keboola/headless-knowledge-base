@@ -165,7 +165,7 @@ class Settings(BaseSettings):
     BATCH_GCS_BUCKET: str = ""  # GCS bucket for batch JSONL files
     BATCH_GCS_PREFIX: str = "batch-import"  # Path prefix within bucket
     BATCH_GEMINI_MODEL: str = "gemini-2.5-flash"  # Model for batch extraction
-    BATCH_ENTITY_SIMILARITY_THRESHOLD: float = 0.85  # Cosine similarity for entity dedup
+    BATCH_ENTITY_SIMILARITY_THRESHOLD: float = 0.95  # Cosine similarity for entity dedup (0.95 prevents chain merging)
     BATCH_NEO4J_WRITE_SIZE: int = 500  # Rows per UNWIND batch for Neo4j bulk writes
     BATCH_EMBEDDING_CONCURRENCY: int = 3  # Max parallel embedding batches (keep low to avoid 429)
     BATCH_POLL_INTERVAL: int = 60  # Seconds between batch job polls
