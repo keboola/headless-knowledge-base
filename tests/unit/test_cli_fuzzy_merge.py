@@ -219,7 +219,7 @@ class TestFuzzyMergeConfig:
         from knowledge_base.config import Settings
         s = Settings(
             NEO4J_URI="bolt://test:7687",
-            NEO4J_PASSWORD="test",
+            NEO4J_PASSWORD="test-only-not-real",  # noqa: S106
         )
         assert s.FUZZY_MERGE_HNSW_K == 10
 
@@ -227,7 +227,7 @@ class TestFuzzyMergeConfig:
         from knowledge_base.config import Settings
         s = Settings(
             NEO4J_URI="bolt://test:7687",
-            NEO4J_PASSWORD="test",
+            NEO4J_PASSWORD="test-only-not-real",  # noqa: S106
         )
         assert s.FUZZY_MERGE_QUERY_BATCH_SIZE == 200
 
@@ -235,7 +235,7 @@ class TestFuzzyMergeConfig:
         from knowledge_base.config import Settings
         s = Settings(
             NEO4J_URI="bolt://test:7687",
-            NEO4J_PASSWORD="test",
+            NEO4J_PASSWORD="test-only-not-real",  # noqa: S106
         )
         assert s.FUZZY_MERGE_MAX_TYPE_SIZE == 0
 
@@ -243,6 +243,6 @@ class TestFuzzyMergeConfig:
         from knowledge_base.config import Settings
         s = Settings(
             NEO4J_URI="bolt://test:7687",
-            NEO4J_PASSWORD="test",
+            NEO4J_PASSWORD="test-only-not-real",  # noqa: S106
         )
         assert s.PRUNE_ENTITY_MIN_NAME_LENGTH == 3
