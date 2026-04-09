@@ -208,6 +208,45 @@ class TestHnswQueryConstruction:
 
 
 # ---------------------------------------------------------------------------
+# Merge Cypher safety
+# ---------------------------------------------------------------------------
+
+
+class TestMergeCypherSafety:
+    """Verify the merge Cypher uses MATCH (not MERGE) for canonical entity."""
+
+    def test_merge_uses_match_for_canonical(self) -> None:
+        """Canonical entity must be found via MATCH, not created via MERGE."""
+        from knowledge_base.cli import _fuzzy_merge_apply
+        import inspect
+
+        source = inspect.getsource(_fuzzy_merge_apply)
+        # Must MATCH both canonical and duplicate
+        assert "MATCH (c:Entity {uuid: $c}), (d:Entity {uuid: $d})" in source
+        # Must NOT have bare MERGE (:Entity {uuid: $c}) which creates new nodes
+        assert "MERGE (:Entity {uuid: $c})" not in source
+
+    def test_merge_uses_single_query(self) -> None:
+        """All edge redirects + delete in a single Cypher query."""
+        from knowledge_base.cli import _fuzzy_merge_apply
+        import inspect
+
+        source = inspect.getsource(_fuzzy_merge_apply)
+        # Single query with FOREACH for all edge types
+        assert "FOREACH" in source
+        assert "DETACH DELETE d" in source
+
+    def test_cluster_size_cap_in_apply(self) -> None:
+        """Clusters exceeding max size are skipped."""
+        from knowledge_base.cli import _fuzzy_merge_apply
+        import inspect
+
+        source = inspect.getsource(_fuzzy_merge_apply)
+        assert "max_cluster" in source
+        assert "FUZZY_MERGE_MAX_CLUSTER_SIZE" in source
+
+
+# ---------------------------------------------------------------------------
 # Config defaults
 # ---------------------------------------------------------------------------
 
@@ -238,6 +277,14 @@ class TestFuzzyMergeConfig:
             NEO4J_PASSWORD="test-only-not-real",  # noqa: S106
         )
         assert s.FUZZY_MERGE_MAX_TYPE_SIZE == 0
+
+    def test_max_cluster_size_default(self) -> None:
+        from knowledge_base.config import Settings
+        s = Settings(
+            NEO4J_URI="bolt://test:7687",
+            NEO4J_PASSWORD="test-only-not-real",  # noqa: S106
+        )
+        assert s.FUZZY_MERGE_MAX_CLUSTER_SIZE == 50
 
     def test_prune_min_name_length_default(self) -> None:
         from knowledge_base.config import Settings

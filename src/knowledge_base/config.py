@@ -179,6 +179,7 @@ class Settings(BaseSettings):
     FUZZY_MERGE_HNSW_K: int = 10  # Nearest neighbors per entity in HNSW query
     FUZZY_MERGE_QUERY_BATCH_SIZE: int = 200  # Entities per HNSW batch query
     FUZZY_MERGE_MAX_TYPE_SIZE: int = 0  # 0 = no limit (process all types)
+    FUZZY_MERGE_MAX_CLUSTER_SIZE: int = 50  # Skip clusters larger than this (prevents chain-merge mega-clusters)
 
     # Entity pruning (CLI: prune-entities)
     PRUNE_ENTITY_MIN_NAME_LENGTH: int = 3
