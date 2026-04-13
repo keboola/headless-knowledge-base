@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from typing import Any
+from typing import Any, AsyncIterator
 
 from tenacity import (
     retry,
@@ -158,6 +158,85 @@ class GeminiLLM(BaseLLM):
 
         except Exception as e:
             self._handle_error(e)
+
+    async def generate_stream(
+        self, prompt: str, **kwargs: Any
+    ) -> AsyncIterator[str]:
+        """Stream text chunks from Gemini as they are generated.
+
+        Uses Vertex AI's `generate_content(stream=True)`, which returns a
+        synchronous iterator of GenerationResponse.  We bridge it to async
+        by reading chunks in a worker thread via ``asyncio.to_thread``.
+
+        Args:
+            prompt: Prompt to send to Gemini
+            **kwargs: Additional generation parameters (max_output_tokens, temperature)
+
+        Yields:
+            Text chunks as Gemini emits them
+
+        Raises:
+            LLMAuthenticationError: If project is not configured
+            LLMRateLimitError: If rate limit is exceeded
+            LLMConnectionError: If connection fails
+        """
+        if not self.project:
+            raise LLMAuthenticationError(
+                "Vertex AI project not configured", provider=self.provider_name
+            )
+
+        self._initialize()
+
+        from vertexai.generative_models import GenerationConfig
+
+        config = GenerationConfig(
+            max_output_tokens=kwargs.get("max_output_tokens", self.max_output_tokens),
+            temperature=kwargs.get("temperature", self.temperature),
+        )
+
+        # Vertex AI's stream iterator is synchronous, so we pump it through
+        # a background thread one chunk at a time using a queue.
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        SENTINEL = object()
+
+        def _producer() -> None:
+            """Drain the sync iterator into the asyncio queue."""
+            try:
+                stream = self._model.generate_content(
+                    prompt, generation_config=config, stream=True
+                )
+                for chunk in stream:
+                    if not chunk.candidates:
+                        continue
+                    parts = chunk.candidates[0].content.parts
+                    if not parts:
+                        continue
+                    text = parts[0].text
+                    if text:
+                        loop.call_soon_threadsafe(queue.put_nowait, text)
+            except Exception as e:  # noqa: BLE001 -- propagate through queue
+                loop.call_soon_threadsafe(queue.put_nowait, e)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, SENTINEL)
+
+        producer_task = asyncio.create_task(asyncio.to_thread(_producer))
+
+        try:
+            while True:
+                item = await queue.get()
+                if item is SENTINEL:
+                    return
+                if isinstance(item, Exception):
+                    self._handle_error(item)
+                    return
+                yield item
+        finally:
+            # Make sure the producer thread finishes even if consumer aborts
+            try:
+                await producer_task
+            except Exception:  # noqa: BLE001
+                pass
 
     async def generate_json(self, prompt: str, **kwargs: Any) -> dict[str, Any]:
         """Generate a JSON response from a prompt.

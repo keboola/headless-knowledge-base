@@ -161,6 +161,12 @@ class Settings(BaseSettings):
     MCP_ASK_QUESTION_SEARCH_LIMIT: int = 5  # Fewer results for faster response
     MCP_ASK_QUESTION_LLM_TIMEOUT: float = 45.0  # Seconds before LLM generation times out
 
+    # Slack streaming responses (quick answer + token streaming + status updates)
+    SLACK_STREAMING_ENABLED: bool = True  # Master flag, fall back to current sync behavior if False
+    SLACK_STREAMING_UPDATE_INTERVAL: float = 1.5  # Seconds between chat.update calls during streaming
+    SLACK_QUICK_ANSWER_ENABLED: bool = True  # Show 1-sentence preliminary answer before detailed
+    SLACK_QUICK_ANSWER_MAX_TOKENS: int = 80  # Cap quick answer length to keep it fast
+
     # Batch Import Pipeline (Gemini Batch API + direct Neo4j import)
     BATCH_GCS_BUCKET: str = ""  # GCS bucket for batch JSONL files
     BATCH_GCS_PREFIX: str = "batch-import"  # Path prefix within bucket
