@@ -547,6 +547,16 @@ async def _stream_answer_to_slack(
     quick = ""
     if quick_enabled:
         quick = await generate_quick_answer(text, chunks)
+        # Guard against truncated/junk responses (e.g. Gemini 2.5 thinking
+        # tokens consumed the whole budget, leaving 3 chars).  If the answer
+        # is too short to be meaningful, skip showing it.
+        min_len = settings.SLACK_QUICK_ANSWER_MIN_LENGTH
+        if quick and len(quick) < min_len:
+            logger.info(
+                "Quick answer too short (%d chars < %d min), skipping: %r",
+                len(quick), min_len, quick,
+            )
+            quick = ""
         if quick:
             try:
                 fallback, blocks = _render_streaming_answer(
@@ -720,11 +730,55 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
     # Get conversation history for this thread (used by both code paths)
     conversation_history = _get_conversation_history(thread_ts)
 
-    # Search for relevant chunks (always needed, regardless of streaming mode)
-    chunks = await _search_chunks(text)
-    logger.info(f"Search returned {len(chunks)} chunks")
-
     streaming_mode = settings.SLACK_STREAMING_ENABLED and bool(thinking_ts)
+
+    # In streaming mode, run a lightweight ticker DURING search so users see
+    # progress (search can take 2+ minutes on the knowledge graph).
+    search_stop = asyncio.Event()
+    search_ticker_task: Any = None
+    if streaming_mode:
+        search_messages = [
+            "Got it, checking knowledge base...",
+            "Searching documents and graph relationships...",
+            "Reading through the knowledge graph...",
+            "Cross-referencing related topics...",
+            "Still searching, knowledge graph is large...",
+            "Almost done with the search, hang tight...",
+        ]
+
+        async def _search_ticker() -> None:
+            interval = settings.SLACK_SEARCH_TICKER_INTERVAL
+            for msg in search_messages:
+                if search_stop.is_set():
+                    return
+                try:
+                    await async_call(
+                        client.chat_update,
+                        channel=channel,
+                        ts=thinking_ts,
+                        text=msg,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    await asyncio.wait_for(search_stop.wait(), timeout=interval)
+                    return
+                except asyncio.TimeoutError:
+                    pass
+
+        search_ticker_task = asyncio.ensure_future(_search_ticker())
+
+    # Search for relevant chunks (always needed, regardless of streaming mode)
+    try:
+        chunks = await _search_chunks(text)
+        logger.info(f"Search returned {len(chunks)} chunks")
+    finally:
+        if search_ticker_task is not None:
+            search_stop.set()
+            try:
+                await search_ticker_task
+            except Exception:  # noqa: BLE001
+                pass
 
     if streaming_mode:
         # Streaming flow: status -> quick answer -> stream tokens -> final

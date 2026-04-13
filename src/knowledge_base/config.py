@@ -165,7 +165,9 @@ class Settings(BaseSettings):
     SLACK_STREAMING_ENABLED: bool = True  # Master flag, fall back to current sync behavior if False
     SLACK_STREAMING_UPDATE_INTERVAL: float = 1.5  # Seconds between chat.update calls during streaming
     SLACK_QUICK_ANSWER_ENABLED: bool = True  # Show 1-sentence preliminary answer before detailed
-    SLACK_QUICK_ANSWER_MAX_TOKENS: int = 80  # Cap quick answer length to keep it fast
+    SLACK_QUICK_ANSWER_MAX_TOKENS: int = 512  # Quick answer cap (Gemini 2.5 thinking tokens consume budget; 80 was too low and produced truncated 3-char answers)
+    SLACK_QUICK_ANSWER_MIN_LENGTH: int = 20  # Skip showing quick answer if shorter than this (likely truncated/junk)
+    SLACK_SEARCH_TICKER_INTERVAL: float = 5.0  # Seconds between status updates while search is running
 
     # Batch Import Pipeline (Gemini Batch API + direct Neo4j import)
     BATCH_GCS_BUCKET: str = ""  # GCS bucket for batch JSONL files

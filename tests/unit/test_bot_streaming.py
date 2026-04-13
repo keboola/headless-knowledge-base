@@ -233,6 +233,39 @@ class TestStreamAnswerToSlack:
         assert any("Fallback answer." in kw.get("text", "") for kw in update_kwargs)
 
     @pytest.mark.asyncio
+    async def test_quick_answer_skipped_when_too_short(self) -> None:
+        """Short quick-answer (e.g. 'Keb' from Gemini 2.5 thinking-token bug) is dropped."""
+        client = MagicMock()
+        client.chat_update = MagicMock(name="chat_update", return_value={})
+        async_call = _AsyncCall()
+
+        chunks = [_make_chunk()]
+
+        async def fake_stream(question, chunks_arg, history):
+            yield "Detailed answer here."
+
+        with (
+            patch("knowledge_base.slack.bot.generate_quick_answer", AsyncMock(return_value="Keb")),
+            patch("knowledge_base.slack.bot.generate_answer_stream", fake_stream),
+            patch("knowledge_base.slack.bot.settings.SLACK_STREAMING_UPDATE_INTERVAL", 0.0),
+            patch("knowledge_base.slack.bot.settings.SLACK_QUICK_ANSWER_ENABLED", True),
+            patch("knowledge_base.slack.bot.settings.SLACK_QUICK_ANSWER_MIN_LENGTH", 20),
+        ):
+            await _stream_answer_to_slack(
+                client=client,
+                channel="C1",
+                thinking_ts="t1",
+                text="q",
+                chunks=chunks,
+                conversation_history=None,
+                async_call=async_call,
+            )
+
+        # No chat.update should contain "Quick answer: Keb"
+        update_kwargs = [kw for name, kw in async_call.calls if name == "chat_update"]
+        assert all("Quick answer:" not in kw.get("text", "") for kw in update_kwargs)
+
+    @pytest.mark.asyncio
     async def test_quick_answer_skipped_when_disabled(self) -> None:
         client = MagicMock()
         client.chat_update = MagicMock(name="chat_update", return_value={})
