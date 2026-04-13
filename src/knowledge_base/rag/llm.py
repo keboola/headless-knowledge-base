@@ -3,7 +3,7 @@
 import json
 import logging
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -26,6 +26,23 @@ class BaseLLM(ABC):
     async def generate(self, prompt: str, **kwargs: Any) -> str:
         """Generate text from a prompt."""
         pass
+
+    async def generate_stream(self, prompt: str, **kwargs: Any) -> AsyncIterator[str]:
+        """Generate text incrementally, yielding tokens/chunks as they arrive.
+
+        Default implementation falls back to non-streaming generate() and
+        yields the full result as a single chunk.  Providers that support
+        native streaming (e.g., Gemini) should override this.
+
+        Args:
+            prompt: Prompt to send to the LLM
+            **kwargs: Additional generation parameters
+
+        Yields:
+            Text chunks as they are produced by the LLM
+        """
+        result = await self.generate(prompt, **kwargs)
+        yield result
 
     @abstractmethod
     async def generate_json(self, prompt: str, **kwargs: Any) -> dict[str, Any]:

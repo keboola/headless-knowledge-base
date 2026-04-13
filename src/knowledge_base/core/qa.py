@@ -5,6 +5,7 @@ Extracted from the Slack bot to be reusable across interfaces (Slack, MCP, API).
 
 import asyncio
 import logging
+from typing import AsyncIterator
 
 from knowledge_base.config import settings
 from knowledge_base.rag.factory import get_llm
@@ -130,45 +131,41 @@ async def search_communities(query: str, limit: int | None = None) -> list[dict]
     return await retriever.search_communities(query, num_results=limit)
 
 
-async def generate_answer(
+_NO_CHUNKS_MESSAGE = (
+    "I couldn't find relevant information in the knowledge base to answer your question."
+)
+
+
+def _build_answer_prompt(
     question: str,
     chunks: list[SearchResult],
     conversation_history: list[dict[str, str]] | None = None,
-) -> str:
-    """Generate an answer using LLM with retrieved chunks.
-
-    Args:
-        question: The user's question
-        chunks: SearchResult objects from Graphiti containing content and metadata
-        conversation_history: Previous messages in the conversation thread
-    """
+) -> str | None:
+    """Build the full Q&A prompt from chunks.  Returns None if no usable chunks."""
     if not chunks:
-        return "I couldn't find relevant information in the knowledge base to answer your question."
+        return None
 
     content_limit = settings.SEARCH_CHUNK_CONTENT_LIMIT
-
-    # Filter chunks with meaningful content before building LLM context
     valid_chunks = [c for c in chunks if c.content and c.content.strip()]
     if not valid_chunks:
-        return "I couldn't find relevant information in the knowledge base to answer your question."
+        return None
 
-    # Build context from chunks (SearchResult has page_title property and content attribute)
     context_parts = []
     for i, chunk in enumerate(valid_chunks, 1):
         title = chunk.page_title or chunk.url or f"Chunk {chunk.chunk_id}"
-        context_parts.append(
-            f"[Source {i}: {title}]\n{chunk.content[:content_limit]}"
-        )
+        context_parts.append(f"[Source {i}: {title}]\n{chunk.content[:content_limit]}")
     context = "\n\n---\n\n".join(context_parts)
 
-    # Build conversation history section
     conversation_section = ""
     if conversation_history:
         history_parts = []
-        for msg in conversation_history[-6:]:  # Last 6 messages for context
+        for msg in conversation_history[-6:]:
             role = "User" if msg["role"] == "user" else "Assistant"
-            # Truncate long messages in history
-            content = msg["content"][:500] + "..." if len(msg["content"]) > 500 else msg["content"]
+            content = (
+                msg["content"][:500] + "..."
+                if len(msg["content"]) > 500
+                else msg["content"]
+            )
             history_parts.append(f"{role}: {content}")
         if history_parts:
             conversation_section = f"""
@@ -178,7 +175,7 @@ PREVIOUS CONVERSATION:
 (Use this context to understand what the user is asking about and provide continuity)
 """
 
-    prompt = f"""You are Keboola's internal knowledge base assistant. Answer questions based on the provided context documents.
+    return f"""You are Keboola's internal knowledge base assistant. Answer questions based on the provided context documents.
 
 CRITICAL RULES:
 - ONLY use information explicitly stated in the context documents below.
@@ -201,6 +198,23 @@ INSTRUCTIONS:
 
 Provide your answer:"""
 
+
+async def generate_answer(
+    question: str,
+    chunks: list[SearchResult],
+    conversation_history: list[dict[str, str]] | None = None,
+) -> str:
+    """Generate an answer using LLM with retrieved chunks.
+
+    Args:
+        question: The user's question
+        chunks: SearchResult objects from Graphiti containing content and metadata
+        conversation_history: Previous messages in the conversation thread
+    """
+    prompt = _build_answer_prompt(question, chunks, conversation_history)
+    if prompt is None:
+        return _NO_CHUNKS_MESSAGE
+
     try:
         llm = await get_llm()
         logger.info("Using LLM provider: %s", llm.provider_name)
@@ -220,3 +234,107 @@ Provide your answer:"""
             f"I found {len(chunks)} relevant documents but couldn't generate "
             f"an answer at this time. Please try again later."
         )
+
+
+async def generate_answer_stream(
+    question: str,
+    chunks: list[SearchResult],
+    conversation_history: list[dict[str, str]] | None = None,
+) -> AsyncIterator[str]:
+    """Generate an answer incrementally, yielding text chunks as they arrive.
+
+    Mirrors ``generate_answer`` but uses the LLM's streaming API so the
+    Slack bot can update its message progressively rather than waiting for
+    the full answer.
+
+    Args:
+        question: The user's question
+        chunks: SearchResult objects from Graphiti containing content and metadata
+        conversation_history: Previous messages in the conversation thread
+
+    Yields:
+        Text fragments as the LLM produces them.  If no chunks are
+        available, yields a single fallback message.  On LLM failure,
+        yields a friendly error message so the consumer always gets text.
+    """
+    prompt = _build_answer_prompt(question, chunks, conversation_history)
+    if prompt is None:
+        yield _NO_CHUNKS_MESSAGE
+        return
+
+    try:
+        llm = await get_llm()
+        logger.info("Streaming answer via provider: %s", llm.provider_name)
+        async for fragment in llm.generate_stream(prompt):
+            yield fragment
+    except LLMError as e:
+        logger.error("LLM provider error during streaming: %s", e)
+        yield (
+            f"I found {len(chunks)} relevant documents but couldn't generate "
+            f"an answer at this time. Please try again later."
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error("LLM streaming failed: %s", e, exc_info=True)
+        yield (
+            f"I found {len(chunks)} relevant documents but couldn't generate "
+            f"an answer at this time. Please try again later."
+        )
+
+
+async def generate_quick_answer(
+    question: str,
+    chunks: list[SearchResult],
+    max_tokens: int | None = None,
+) -> str:
+    """Generate a 1-2 sentence preliminary answer for fast user feedback.
+
+    Uses only the top 3 chunks, takes the first ~200 chars of each, and caps
+    the output token count to keep latency very low (~3-5 seconds).  The
+    detailed answer follows separately and supersedes the quick answer.
+
+    Args:
+        question: The user's question
+        chunks: SearchResult objects from search
+        max_tokens: Override for max output tokens (defaults to config)
+
+    Returns:
+        A short answer string, or empty string on failure.  Callers should
+        treat empty as "skip the quick answer step" rather than show an error.
+    """
+    if not chunks:
+        return ""
+
+    if max_tokens is None:
+        max_tokens = settings.SLACK_QUICK_ANSWER_MAX_TOKENS
+
+    valid_chunks = [c for c in chunks if c.content and c.content.strip()][:3]
+    if not valid_chunks:
+        return ""
+
+    snippets = []
+    for i, chunk in enumerate(valid_chunks, 1):
+        title = chunk.page_title or chunk.url or f"Source {i}"
+        snippet = chunk.content.strip()[:200].replace("\n", " ")
+        snippets.append(f"[{i}] {title}: {snippet}")
+
+    prompt = f"""Answer the following question in ONE sentence (max 2) based on these source excerpts.
+Be direct and concise. If the excerpts are insufficient, say "Looking into the details now."
+
+Question: {question}
+
+Sources:
+{chr(10).join(snippets)}
+
+One-sentence answer:"""
+
+    try:
+        llm = await get_llm()
+        answer = await llm.generate(
+            prompt,
+            max_output_tokens=max_tokens,
+            temperature=0.1,
+        )
+        return answer.strip()
+    except Exception as e:  # noqa: BLE001 -- quick answer is best-effort
+        logger.warning("Quick answer generation failed (skipping): %s", e)
+        return ""

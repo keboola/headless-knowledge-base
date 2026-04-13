@@ -23,7 +23,12 @@ from knowledge_base.lifecycle import (
     process_thread_message,
     record_bot_response,
 )
-from knowledge_base.core.qa import search_with_expansion, generate_answer
+from knowledge_base.core.qa import (
+    generate_answer,
+    generate_answer_stream,
+    generate_quick_answer,
+    search_with_expansion,
+)
 from knowledge_base.search.models import SearchResult
 from knowledge_base.slack.modals import (
     build_incorrect_feedback_modal,
@@ -433,6 +438,198 @@ def _create_feedback_buttons(message_ts: str) -> list[dict]:
     ]
 
 
+def _build_sources_block(chunks: list) -> dict | None:
+    """Build the sources context block from search chunks.
+
+    Returns None if no usable sources.  De-duplicates by title and caps at 3.
+    """
+    if not chunks:
+        return None
+    source_lines: list[str] = []
+    seen_titles: set[str] = set()
+    for chunk in chunks:
+        title = chunk.page_title
+        if not title or not title.strip() or title in seen_titles:
+            continue
+        seen_titles.add(title)
+        if chunk.doc_type == "quick_fact":
+            reviewer = chunk.metadata.get("reviewed_by", "")
+            if reviewer:
+                source_lines.append(f"• {title} _(approved by {reviewer})_")
+            else:
+                source_lines.append(f"• {title}")
+        else:
+            source_lines.append(f"• {title}")
+        if len(source_lines) >= 3:
+            break
+    if not source_lines:
+        return None
+    return {
+        "type": "context",
+        "elements": [
+            {"type": "mrkdwn", "text": "*Sources:*\n" + "\n".join(source_lines)}
+        ],
+    }
+
+
+def _render_streaming_answer(
+    quick: str,
+    detailed: str,
+    chunks: list | None,
+    streaming: bool,
+) -> tuple[str, list[dict]]:
+    """Build (fallback_text, blocks) for a streaming answer message.
+
+    Args:
+        quick: One-sentence preliminary answer (may be empty).
+        detailed: Accumulated detailed answer text so far.
+        chunks: Source chunks to render in a context block.  Pass None to skip.
+        streaming: If True, append a streaming indicator so users know the
+            answer is still growing.
+
+    Returns:
+        (fallback_text, blocks) suitable for chat.update.
+    """
+    parts: list[str] = []
+    if quick:
+        parts.append(f"*Quick answer:* {quick}")
+    body = detailed
+    if streaming:
+        body = (body or "") + " _(streaming...)_"
+    if body:
+        parts.append(body)
+
+    full_text = "\n\n".join(parts) if parts else "Working on it..."
+    blocks = _split_text_into_blocks(full_text)
+
+    if chunks:
+        sources_block = _build_sources_block(chunks)
+        if sources_block:
+            blocks.append(sources_block)
+
+    fallback_text = full_text[:4000]
+    return fallback_text, blocks
+
+
+async def _stream_answer_to_slack(
+    *,
+    client: Any,
+    channel: str,
+    thinking_ts: str,
+    text: str,
+    chunks: list,
+    conversation_history: list[dict[str, str]] | None,
+    async_call: Any,
+) -> str:
+    """Run the staged streaming response: status -> quick answer -> stream -> final.
+
+    Returns the final detailed answer text so the caller can store it in
+    conversation history and feedback tracking.
+
+    Falls back to ``generate_answer`` (non-streaming) if the streaming LLM
+    call raises before producing any text.
+    """
+    update_interval = settings.SLACK_STREAMING_UPDATE_INTERVAL
+    quick_enabled = settings.SLACK_QUICK_ANSWER_ENABLED
+
+    # Stage 2: search-complete status
+    try:
+        await async_call(
+            client.chat_update,
+            channel=channel,
+            ts=thinking_ts,
+            text=f"Found {len(chunks)} sources. Generating quick answer...",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Stage 3: quick answer (best-effort, may be empty)
+    quick = ""
+    if quick_enabled:
+        quick = await generate_quick_answer(text, chunks)
+        if quick:
+            try:
+                fallback, blocks = _render_streaming_answer(
+                    quick=quick,
+                    detailed="_Generating detailed answer..._",
+                    chunks=None,
+                    streaming=False,
+                )
+                await async_call(
+                    client.chat_update,
+                    channel=channel,
+                    ts=thinking_ts,
+                    text=fallback,
+                    blocks=blocks,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+    # Stage 4: stream the detailed answer
+    buffer = ""
+    last_update = 0.0
+    received_any = False
+
+    try:
+        async for fragment in generate_answer_stream(text, chunks, conversation_history):
+            if not fragment:
+                continue
+            buffer += fragment
+            received_any = True
+            now = asyncio.get_event_loop().time()
+            if now - last_update >= update_interval:
+                fallback, blocks = _render_streaming_answer(
+                    quick=quick, detailed=buffer, chunks=None, streaming=True
+                )
+                try:
+                    await async_call(
+                        client.chat_update,
+                        channel=channel,
+                        ts=thinking_ts,
+                        text=fallback,
+                        blocks=blocks,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"Streaming chat.update failed: {e}")
+                last_update = now
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Streaming generation failed: {e}", exc_info=True)
+        if not received_any:
+            # Fall back to non-streaming generate so the user still gets an answer
+            buffer = await generate_answer(text, chunks, conversation_history)
+
+    # Stage 5: final update with sources, no streaming indicator
+    if not buffer.strip():
+        buffer = "I couldn't generate an answer at this time. Please try again later."
+
+    fallback, blocks = _render_streaming_answer(
+        quick=quick, detailed=buffer, chunks=chunks, streaming=False
+    )
+    try:
+        await async_call(
+            client.chat_update,
+            channel=channel,
+            ts=thinking_ts,
+            text=fallback,
+            blocks=blocks,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Final chat.update failed: {e}", exc_info=True)
+        # Last resort: post answer as new message
+        try:
+            await async_call(
+                client.chat_postMessage,
+                channel=channel,
+                thread_ts=thinking_ts,
+                text=fallback,
+                blocks=blocks,
+            )
+        except Exception as e2:  # noqa: BLE001
+            logger.error(f"Fallback post also failed: {e2}", exc_info=True)
+
+    return buffer.strip()
+
+
 async def _handle_question(event: dict, say: Any, client: Any) -> None:
     """Handle a question from a user."""
     import asyncio
@@ -495,8 +692,13 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
         username = user_id
 
     # Send "thinking" message
+    initial_thinking_text = (
+        "Got it, checking knowledge base..."
+        if settings.SLACK_STREAMING_ENABLED
+        else "Thinking..."
+    )
     try:
-        thinking_msg = await async_call(say, "Thinking...", thread_ts=thread_ts)
+        thinking_msg = await async_call(say, initial_thinking_text, thread_ts=thread_ts)
         logger.info(f"Posted 'Thinking...' message ts={thinking_msg.get('ts', 'unknown')}")
     except Exception as e:
         logger.error(f"Failed to post 'Thinking...' message: {e}", exc_info=True)
@@ -506,7 +708,7 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
                 client.chat_postMessage,
                 channel=channel,
                 thread_ts=thread_ts,
-                text="Thinking...",
+                text=initial_thinking_text,
             )
             logger.info(f"Posted 'Thinking...' via fallback, ts={thinking_msg.get('ts', 'unknown')}")
         except Exception as e2:
@@ -515,128 +717,114 @@ async def _handle_question(event: dict, say: Any, client: Any) -> None:
 
     thinking_ts = thinking_msg.get("ts")
 
-    # Start a background progress ticker that updates the message every 7 seconds
-    progress_messages = [
-        "Searching the knowledge base...",
-        "Waking up the agents...",
-        "Scanning the knowledge graph...",
-        "Exploring related topics...",
-        "Gathering relevant documents...",
-        "Cross-referencing sources...",
-        "Reading through the results...",
-        "Connecting the dots...",
-        "Composing a comprehensive answer...",
-        "Almost there, polishing the response...",
-        "Putting the finishing touches...",
-    ]
-    progress_stop = asyncio.Event()
+    # Get conversation history for this thread (used by both code paths)
+    conversation_history = _get_conversation_history(thread_ts)
 
-    async def _progress_ticker() -> None:
-        """Update the thinking message with rotating status every 7 seconds."""
-        if not thinking_ts:
-            return
-        for msg in progress_messages:
-            if progress_stop.is_set():
+    # Search for relevant chunks (always needed, regardless of streaming mode)
+    chunks = await _search_chunks(text)
+    logger.info(f"Search returned {len(chunks)} chunks")
+
+    streaming_mode = settings.SLACK_STREAMING_ENABLED and bool(thinking_ts)
+
+    if streaming_mode:
+        # Streaming flow: status -> quick answer -> stream tokens -> final
+        answer = await _stream_answer_to_slack(
+            client=client,
+            channel=channel,
+            thinking_ts=thinking_ts,
+            text=text,
+            chunks=chunks,
+            conversation_history=conversation_history,
+            async_call=async_call,
+        )
+        logger.info(f"Streaming flow finished: {len(answer)} chars")
+    else:
+        # Legacy non-streaming flow: rotating status + single chat.update at end
+        progress_messages = [
+            "Searching the knowledge base...",
+            "Waking up the agents...",
+            "Scanning the knowledge graph...",
+            "Exploring related topics...",
+            "Gathering relevant documents...",
+            "Cross-referencing sources...",
+            "Reading through the results...",
+            "Connecting the dots...",
+            "Composing a comprehensive answer...",
+            "Almost there, polishing the response...",
+            "Putting the finishing touches...",
+        ]
+        progress_stop = asyncio.Event()
+
+        async def _progress_ticker() -> None:
+            """Update the thinking message with rotating status every 7 seconds."""
+            if not thinking_ts:
                 return
-            try:
-                await async_call(
-                    client.chat_update,
-                    channel=channel,
-                    ts=thinking_ts,
-                    text=msg,
-                )
-            except Exception:
-                pass
-            try:
-                await asyncio.wait_for(progress_stop.wait(), timeout=7.0)
-                return  # Stop signal received
-            except asyncio.TimeoutError:
-                pass  # Time to show next message
+            for msg in progress_messages:
+                if progress_stop.is_set():
+                    return
+                try:
+                    await async_call(
+                        client.chat_update,
+                        channel=channel,
+                        ts=thinking_ts,
+                        text=msg,
+                    )
+                except Exception:
+                    pass
+                try:
+                    await asyncio.wait_for(progress_stop.wait(), timeout=7.0)
+                    return
+                except asyncio.TimeoutError:
+                    pass
 
-    ticker_task = asyncio.ensure_future(_progress_ticker())
-
-    try:
-        # Get conversation history for this thread
-        conversation_history = _get_conversation_history(thread_ts)
-
-        # Search for relevant chunks
-        chunks = await _search_chunks(text)
-        logger.info(f"Search returned {len(chunks)} chunks")
-
-        # Generate answer with conversation context (don't block on access recording)
-        answer = await _generate_answer(text, chunks, conversation_history)
-        logger.info(f"Generated answer: {len(answer)} chars")
-    finally:
-        progress_stop.set()
-        await ticker_task
+        ticker_task = asyncio.ensure_future(_progress_ticker())
+        try:
+            answer = await _generate_answer(text, chunks, conversation_history)
+            logger.info(f"Generated answer: {len(answer)} chars")
+        finally:
+            progress_stop.set()
+            await ticker_task
 
     # Store this exchange in conversation history
     _add_to_conversation(thread_ts, "user", text)
     _add_to_conversation(thread_ts, "assistant", answer)
 
-    # Build response blocks (split long answers to stay within Slack's 3000 char block limit)
-    blocks = _split_text_into_blocks(answer)
+    if not streaming_mode:
+        # Legacy non-streaming flow needs to render blocks and call chat.update.
+        # In streaming mode this was already done by _stream_answer_to_slack.
+        blocks = _split_text_into_blocks(answer)
+        sources_block = _build_sources_block(chunks)
+        if sources_block:
+            blocks.append(sources_block)
 
-    # Add source references (skip empty titles, deduplicate)
-    if chunks:
-        source_lines = []
-        seen_titles = set()
-        for chunk in chunks:
-            title = chunk.page_title
-            if not title or not title.strip():
-                continue
-            if title in seen_titles:
-                continue
-            seen_titles.add(title)
-            # For Quick Facts, show who provided and who approved
-            if chunk.doc_type == "quick_fact":
-                reviewer = chunk.metadata.get("reviewed_by", "")
-                if reviewer:
-                    source_lines.append(f"• {title} _(approved by {reviewer})_")
-                else:
-                    source_lines.append(f"• {title}")
-            else:
-                source_lines.append(f"• {title}")
-            if len(source_lines) >= 3:
-                break
-        if source_lines:
-            source_text = "*Sources:*\n" + "\n".join(source_lines)
-            blocks.append({
-                "type": "context",
-                "elements": [{"type": "mrkdwn", "text": source_text}]
-            })
+        fallback_text = answer[:4000] if len(answer) > 4000 else answer
 
-    # Truncate fallback text for Slack's message limit (40k chars)
-    fallback_text = answer[:4000] if len(answer) > 4000 else answer
+        if not thinking_ts:
+            logger.error("No timestamp in thinking message response, cannot update")
+            return
 
-    if not thinking_ts:
-        logger.error("No timestamp in thinking message response, cannot update")
-        return
-
-    # Update thinking message with answer
-    try:
-        response = await async_call(
-            client.chat_update,
-            channel=channel,
-            ts=thinking_ts,
-            text=fallback_text,
-            blocks=blocks,
-        )
-        logger.info("Updated message with answer")
-    except Exception as e:
-        logger.error("Failed to update message", exc_info=True)
-        # Fallback: post answer as a new message so the user still gets a response
         try:
-            await async_call(
-                client.chat_postMessage,
+            response = await async_call(
+                client.chat_update,
                 channel=channel,
-                thread_ts=thread_ts,
+                ts=thinking_ts,
                 text=fallback_text,
                 blocks=blocks,
             )
-            logger.info("Posted answer as new message (fallback)")
-        except Exception as e2:
-            logger.error("Failed to post fallback message", exc_info=True)
+            logger.info("Updated message with answer")
+        except Exception as e:
+            logger.error("Failed to update message", exc_info=True)
+            try:
+                await async_call(
+                    client.chat_postMessage,
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    text=fallback_text,
+                    blocks=blocks,
+                )
+                logger.info("Posted answer as new message (fallback)")
+            except Exception as e2:
+                logger.error("Failed to post fallback message", exc_info=True)
 
     # Always add feedback buttons (even for "no results" responses)
     try:
