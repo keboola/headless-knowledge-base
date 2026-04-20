@@ -11,7 +11,8 @@ zone       = "us-central1-a"
 environment = "prod"
 
 # Domain Configuration (Load Balancer & SSL)
-base_domain       = "keboola.com"
+base_domain       = "keboola.systems"
+staging_domain    = "keboola.systems"
 iap_support_email = "support@keboola.com"
 
 # Confluence Configuration

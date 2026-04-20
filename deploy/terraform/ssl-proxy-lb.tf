@@ -18,7 +18,7 @@ resource "google_compute_managed_ssl_certificate" "db_cert" {
 
   managed {
     domains = [
-      "neo4j.internal.${var.base_domain}",
+      "neo4j.${var.base_domain}",
       "neo4j.staging.${var.staging_domain}"
     ]
   }
